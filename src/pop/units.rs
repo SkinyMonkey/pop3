@@ -19,6 +19,12 @@ pub struct UnitRaw {
     fd: [u8; 40],
 }
 
+impl UnitRaw {
+    pub fn tribe_index(&self) -> u8 { self.tribe_index }
+    pub fn loc_x(&self) -> u16 { self.loc_x }
+    pub fn loc_y(&self) -> u16 { self.loc_y }
+}
+
 impl BinDeserializer for UnitRaw {
     fn from_reader<R: Read>(reader: &mut R) -> Option<Self> {
         from_reader::<UnitRaw, {size_of::<UnitRaw>()}, R>(reader)

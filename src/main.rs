@@ -227,6 +227,80 @@ fn make_landscape_model(device: &wgpu::Device, landscape_mesh: &LandscapeMeshS) 
     model_main
 }
 
+fn spawn_tribe_colors() -> Vec<Vector3<u8>> {
+    vec![
+        Vector3 { x: 51, y: 128, z: 255 },  // Tribe 0: Blue
+        Vector3 { x: 255, y: 51, z: 51 },    // Tribe 1: Red
+        Vector3 { x: 255, y: 230, z: 51 },   // Tribe 2: Yellow
+        Vector3 { x: 51, y: 230, z: 77 },    // Tribe 3: Green
+    ]
+}
+
+/// Extract spawn cell coordinates from level data.
+/// Returns (cell_x, cell_y, tribe_index) for each reincarnation site (unit_class == 2).
+fn extract_spawn_cells(level_res: &LevelRes) -> Vec<(f32, f32, u8)> {
+    let mut found = [false; 4];
+    let mut cells = Vec::new();
+    let n = level_res.landscape.land_size() as f32;
+    for unit in &level_res.units {
+        let tribe = unit.tribe_index() as usize;
+        if unit.unit_class == 2 && tribe < 4 && !found[tribe] {
+            found[tribe] = true;
+            // Bevy convention: cell_x from loc_x, cell_z from loc_y
+            let bevy_x = ((unit.loc_x() >> 8) / 2) as f32 + 0.5;
+            let bevy_z = ((unit.loc_y() >> 8) / 2) as f32 + 0.5;
+            // Faithful grid: x = bevy_z, y = (N-1) - bevy_x
+            // Because faithful loads height[file_col][file_row] then flips first index,
+            // so grid_x maps to file_row (=bevy_z) and grid_y maps to 127-file_col (=127-bevy_x).
+            let cell_x = bevy_z;
+            let cell_y = (n - 1.0) - bevy_x;
+            cells.push((cell_x, cell_y, unit.tribe_index()));
+        }
+    }
+    cells.sort_by_key(|(_, _, t)| *t);
+    cells
+}
+
+/// Build spawn marker triangles at grid positions adjusted for the current landscape shift.
+/// Applies the same curvature displacement as the landscape shader so markers sit on the terrain.
+fn build_spawn_model(device: &wgpu::Device, cells: &[(f32, f32, u8)],
+                     landscape: &LandscapeMesh<128>, curvature_scale: f32) -> ModelEnvelop<DefaultModel> {
+    let mut model: DefaultModel = MeshModel::new();
+    let step = landscape.step();
+    let height_scale = landscape.height_scale();
+    let w = landscape.width() as f32;
+    let shift = landscape.get_shift_vector();
+    let size = step * 4.0;
+
+    // Camera focus = grid center (same as build_landscape_params)
+    let center = (w - 1.0) * step / 2.0;
+
+    for &(cell_x, cell_y, _) in cells {
+        // Visual grid position: where this cell appears given the current shift
+        let vis_x = ((cell_x - shift.x as f32) % w + w) % w;
+        let vis_y = ((cell_y - shift.y as f32) % w + w) % w;
+        let gx = vis_x * step;
+        let gy = vis_y * step;
+
+        // Sample height at the original cell position
+        let ix = (cell_x as usize).min(127);
+        let iy = (cell_y as usize).min(127);
+        let h = landscape.height_at(ix, iy) as f32 * height_scale;
+
+        // Apply same curvature as landscape vertex shader
+        let dx = gx - center;
+        let dy = gy - center;
+        let curvature_offset = (dx * dx + dy * dy) * curvature_scale;
+        let z = h - curvature_offset + 0.05;
+
+        model.push_vertex(Vector3::new(gx, gy - size, z));
+        model.push_vertex(Vector3::new(gx - size, gy + size, z));
+        model.push_vertex(Vector3::new(gx + size, gy + size, z));
+    }
+    let m = vec![(RenderType::Triangles, model)];
+    ModelEnvelop::<DefaultModel>::new(device, m)
+}
+
 /// Create the bind group layout shared by all landscape shaders (group 0):
 /// binding 0: mvp (mat4x4), binding 1: model_transform (mat4x4), binding 2: LandscapeParams
 fn create_landscape_group0_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -367,6 +441,12 @@ struct App {
     model_select: Option<ModelEnvelop<DefaultModel>>,
     select_frag: i32,
 
+    // Spawn markers
+    spawn_pipeline: Option<wgpu::RenderPipeline>,
+    spawn_group1_bind_group: Option<wgpu::BindGroup>,
+    model_spawn: Option<ModelEnvelop<DefaultModel>>,
+    spawn_cells: Vec<(f32, f32, u8)>,  // (cell_x, cell_y, tribe_index)
+
     // Shared uniform buffers
     mvp_buffer: Option<GpuBuffer>,
     model_transform_buffer: Option<GpuBuffer>,
@@ -420,6 +500,10 @@ impl App {
             objects_group1_bind_group: None,
             model_select: None,
             select_frag: -1,
+            spawn_pipeline: None,
+            spawn_group1_bind_group: None,
+            model_spawn: None,
+            spawn_cells: Vec::new(),
             mvp_buffer: None,
             model_transform_buffer: None,
             landscape_params_buffer: None,
@@ -472,23 +556,36 @@ impl App {
 
         self.landscape_mesh.set_heights(&level_res.landscape.height);
 
-        let gpu = self.gpu.as_ref().unwrap();
+        {
+            let gpu = self.gpu.as_ref().unwrap();
 
-        // Update heights buffer
-        let landscape = level_res.landscape.make_shores();
-        let heights_vec = landscape.to_vec();
-        let heights_bytes: &[u8] = bytemuck::cast_slice(&heights_vec);
-        let heights_buffer = GpuBuffer::new_storage(&gpu.device, heights_bytes, "heights_buffer");
-        self.heights_buffer = Some(heights_buffer);
+            // Update heights buffer
+            let landscape = level_res.landscape.make_shores();
+            let heights_vec = landscape.to_vec();
+            let heights_bytes: &[u8] = bytemuck::cast_slice(&heights_vec);
+            let heights_buffer = GpuBuffer::new_storage(&gpu.device, heights_bytes, "heights_buffer");
+            self.heights_buffer = Some(heights_buffer);
 
-        // Update watdisp buffer
-        let watdisp_vec: Vec<u32> = level_res.params.watdisp.iter().map(|v| *v as u32).collect();
-        let watdisp_bytes: &[u8] = bytemuck::cast_slice(&watdisp_vec);
-        let watdisp_buffer = GpuBuffer::new_storage(&gpu.device, watdisp_bytes, "watdisp_buffer");
-        self.watdisp_buffer = Some(watdisp_buffer);
+            // Update watdisp buffer
+            let watdisp_vec: Vec<u32> = level_res.params.watdisp.iter().map(|v| *v as u32).collect();
+            let watdisp_bytes: &[u8] = bytemuck::cast_slice(&watdisp_vec);
+            let watdisp_buffer = GpuBuffer::new_storage(&gpu.device, watdisp_bytes, "watdisp_buffer");
+            self.watdisp_buffer = Some(watdisp_buffer);
+        }
 
         // Rebuild all landscape variants
         self.rebuild_landscape_variants(&level_res);
+
+        // Rebuild spawn markers
+        self.spawn_cells = extract_spawn_cells(&level_res);
+        self.rebuild_spawn_model();
+    }
+
+    fn rebuild_spawn_model(&mut self) {
+        if let Some(ref gpu) = self.gpu {
+            let cs = if self.curvature_enabled { self.curvature_scale } else { 0.0 };
+            self.model_spawn = Some(build_spawn_model(&gpu.device, &self.spawn_cells, &self.landscape_mesh, cs));
+        }
     }
 
     fn rebuild_landscape_variants(&mut self, level_res: &LevelRes) {
@@ -757,6 +854,16 @@ impl App {
                 }
             }
 
+            // Draw spawn markers
+            if let Some(ref spawn_pipeline) = self.spawn_pipeline {
+                render_pass.set_pipeline(spawn_pipeline);
+                render_pass.set_bind_group(0, self.objects_group0_bind_group.as_ref().unwrap(), &[]);
+                render_pass.set_bind_group(1, self.spawn_group1_bind_group.as_ref().unwrap(), &[]);
+                if let Some(ref model_spawn) = self.model_spawn {
+                    model_spawn.draw(&mut render_pass);
+                }
+            }
+
             // Draw selection lines
             if let Some(ref select_pipeline) = self.select_pipeline {
                 render_pass.set_pipeline(select_pipeline);
@@ -912,6 +1019,43 @@ impl ApplicationHandler for App {
             ModelEnvelop::<DefaultModel>::new(device, m)
         };
 
+        // Spawn markers pipeline (TriangleList topology, same shader as objects)
+        let spawn_shader_source = include_str!("../shaders/objects.wgsl");
+        let spawn_vertex_layouts = DefaultModel::vertex_buffer_layouts();
+        let spawn_pipeline = create_pipeline(
+            device, spawn_shader_source, &spawn_vertex_layouts,
+            &[&objects_group0_layout, &objects_group1_layout],
+            gpu.surface_format(), true,
+            wgpu::PrimitiveTopology::TriangleList,
+            "spawn_pipeline",
+        );
+
+        // Spawn colors bind group
+        let spawn_colors = spawn_tribe_colors();
+        let spawn_params = ObjectParams { selected_frag: -1, num_colors: spawn_colors.len() as i32 };
+        let spawn_params_buffer = GpuBuffer::new_uniform_init(device, bytemuck::bytes_of(&spawn_params), "spawn_params_buffer");
+        let spawn_color_data: Vec<[u32; 4]> = spawn_colors.iter().map(|c| {
+            [c.x as u32, c.y as u32, c.z as u32, 0u32]
+        }).collect();
+        let spawn_color_bytes: &[u8] = bytemuck::cast_slice(&spawn_color_data);
+        let spawn_color_buffer = GpuBuffer::new_storage(device, spawn_color_bytes, "spawn_color_buffer");
+
+        let spawn_group1_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("spawn_group1_bg"),
+            layout: &objects_group1_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: spawn_params_buffer.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: spawn_color_buffer.buffer.as_entire_binding() },
+            ],
+        });
+
+        // Empty spawn model (will be populated when level loads)
+        let model_spawn = {
+            let model: DefaultModel = MeshModel::new();
+            let m = vec![(RenderType::Triangles, model)];
+            ModelEnvelop::<DefaultModel>::new(device, m)
+        };
+
         // Store everything
         self.heights_buffer = Some(heights_buffer);
         self.watdisp_buffer = Some(watdisp_buffer);
@@ -924,6 +1068,9 @@ impl ApplicationHandler for App {
         self.objects_group0_bind_group = Some(objects_group0_bind_group);
         self.objects_group1_bind_group = Some(objects_group1_bind_group);
         self.select_pipeline = Some(select_pipeline);
+        self.spawn_pipeline = Some(spawn_pipeline);
+        self.spawn_group1_bind_group = Some(spawn_group1_bind_group);
+        self.model_spawn = Some(model_spawn);
         self.model_main = Some(model_main);
         self.model_select = Some(model_select);
 
@@ -934,6 +1081,10 @@ impl ApplicationHandler for App {
         let level_type2 = self.config.landtype.as_deref();
         let level_res2 = LevelRes::new(&base2, self.level_num, level_type2);
         self.rebuild_landscape_variants(&level_res2);
+
+        // Build spawn markers for initial level
+        self.spawn_cells = extract_spawn_cells(&level_res2);
+        self.rebuild_spawn_model();
 
         self.do_render = true;
     }
@@ -1030,17 +1181,24 @@ impl ApplicationHandler for App {
                             KeyCode::KeyC => {
                                 self.curvature_enabled = !self.curvature_enabled;
                                 log::info!("curvature {}", if self.curvature_enabled { "on" } else { "off" });
+                                self.rebuild_spawn_model();
                             },
                             KeyCode::BracketRight => {
                                 self.curvature_scale *= 1.2;
                                 log::info!("curvature_scale = {:.6}", self.curvature_scale);
+                                self.rebuild_spawn_model();
                             },
                             KeyCode::BracketLeft => {
                                 self.curvature_scale *= 0.8;
                                 log::info!("curvature_scale = {:.6}", self.curvature_scale);
+                                self.rebuild_spawn_model();
                             },
                             _ => {
+                                let prev_shift = self.landscape_mesh.get_shift_vector();
                                 self.mode.process_key(key, &mut self.camera, &mut self.landscape_mesh);
+                                if self.landscape_mesh.get_shift_vector() != prev_shift {
+                                    self.rebuild_spawn_model();
+                                }
                                 if self.mode == ActionMode::FreeCamera {
                                     println!("camera: angle_x={} angle_y={} angle_z={} pos=({:.2}, {:.2}, {:.2})",
                                         self.camera.angle_x, self.camera.angle_y, self.camera.angle_z,

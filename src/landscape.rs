@@ -110,6 +110,10 @@ impl<const N: usize> LandscapeMesh<N> {
         self.heights = *heights;
     }
 
+    pub fn height_at(&self, x: usize, y: usize) -> u16 {
+        self.heights[y % N][x % N]
+    }
+
     pub fn step(&self) -> f32 {
         self.step
     }
