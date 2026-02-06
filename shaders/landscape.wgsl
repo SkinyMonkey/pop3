@@ -12,6 +12,9 @@ struct LandscapeParams {
     selected_color: vec4<f32>,
     sunlight: vec4<f32>,
     wat_offset: i32,
+    curvature_scale: f32,
+    camera_focus: vec2<f32>,
+    viewport_radius: f32,
 };
 
 struct Transforms {
@@ -50,6 +53,7 @@ struct VertexOutput {
     @location(1) height_out: f32,
     @location(2) brightness: f32,
     @location(3) @interpolate(flat) primitive_id: u32,
+    @location(4) viewport_fade: f32,
 };
 
 fn wat_height(x: u32, y: u32) -> u32 {
@@ -81,7 +85,27 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     }
 
     let coordf = vec3<f32>(coord3d.x, coord3d.y, f32(height) * params.height_scale);
-    let coord = transforms.m_transform * transforms1.m_transform1 * vec4<f32>(coordf, 1.0);
+
+    // Curvature: pull Z down by distance² from camera focus (planet illusion)
+    let dx = coordf.x - params.camera_focus.x;
+    let dy = coordf.y - params.camera_focus.y;
+    let dist_sq = dx * dx + dy * dy;
+    let curvature_offset = dist_sq * params.curvature_scale;
+    let curved = vec3<f32>(coordf.x, coordf.y, coordf.z - curvature_offset);
+
+    // Viewport fade: smooth circular falloff at edges
+    let dist = sqrt(dist_sq);
+    let fade_start = params.viewport_radius * 0.85;
+    let fade_end = params.viewport_radius;
+    var vp_fade = 1.0;
+    if (dist > fade_end) {
+        vp_fade = 0.0;
+    } else if (dist > fade_start) {
+        vp_fade = 1.0 - (dist - fade_start) / (fade_end - fade_start);
+    }
+    out.viewport_fade = vp_fade;
+
+    let coord = transforms.m_transform * transforms1.m_transform1 * vec4<f32>(curved, 1.0);
     out.position = coord;
     out.coord3d_out = vec3<f32>(coord3d.xy, coordf.z);
 
@@ -178,6 +202,10 @@ fn land_tex(coord: vec3<f32>, height_in: f32, brightness: f32) -> vec3<f32> {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    if (in.viewport_fade < 0.01) {
+        discard;
+    }
+
     let prim_id = i32(in.primitive_id);
 
     if (params.selected_frag > 0 && params.selected_frag == prim_id) {
@@ -190,5 +218,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         in.coord3d_out.z,
     );
     let c = land_tex(coordi, in.height_out, in.brightness);
-    return vec4<f32>(c, 0.0);
+    return vec4<f32>(c * in.viewport_fade, 0.0);
 }

@@ -236,7 +236,19 @@ impl ApplicationHandler for App {
             let params = GlobeTextureParams::from_level(&paths);
             (paths, params)
         };
-        let (width, height, bl320_tex) = make_bl320_texture_rgba(&level_paths.bl320, &params.palette);
+        let (width, height, mut bl320_tex) = make_bl320_texture_rgba(&level_paths.bl320, &params.palette);
+
+        // Mark transparent pixels (palette index 0) with alpha=255 so the shader
+        // can discard them via `if (color.w > 0.0) { discard; }`.
+        // Palette entry 0 is the key/transparent color: its RGB = (pal[0], pal[1], pal[2]).
+        let key_r = params.palette[0];
+        let key_g = params.palette[1];
+        let key_b = params.palette[2];
+        for pixel in bl320_tex.chunks_exact_mut(4) {
+            if pixel[0] == key_r && pixel[1] == key_g && pixel[2] == key_b && pixel[3] == 0 {
+                pixel[3] = 255;
+            }
+        }
 
         let bl320_gpu_tex = GpuTexture::new_2d(
             device, &gpu.queue,

@@ -44,7 +44,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (in.tex_id < 0 || in.tex_id > 255) {
-        return vec4<f32>(1.0, 1.0, 0.0, 0.0);
+        return vec4<f32>(0.6, 0.6, 0.6, 1.0);
     }
 
     let row = in.tex_id / 8;

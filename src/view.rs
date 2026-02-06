@@ -98,7 +98,7 @@ impl MVP {
     }
 
     pub fn eye() -> Vector3<f32> {
-        Vector3{x: 0.0, y: 0.0, z: 4.0}
+        Vector3{x: 0.0, y: 0.0, z: 1.5}
     }
 }
 

@@ -46,6 +46,11 @@ type LandscapeMeshS = LandscapeMesh<128>;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum ActionMode {
+    /// Torus view: fixed camera, world rotates (matches original game).
+    /// Left/Right = rotate world, Up/Down = tilt view, W/S = zoom.
+    TorusView,
+    /// Free camera: move anywhere in 3D, prints camera state on every keypress.
+    FreeCamera,
     GlobalMoveXY,
     GlobalMoveXZ,
     GlobalRotateXZ,
@@ -54,9 +59,45 @@ enum ActionMode {
 }
 
 impl ActionMode {
-    fn process_key(&mut self, key: KeyCode, camera: &mut Camera, cam: &mut Vector3<f32>) -> bool {
+    fn process_key(&mut self, key: KeyCode, camera: &mut Camera, landscape_mesh: &mut LandscapeMeshS) -> bool {
         let prev_self = *self;
         match self {
+            Self::TorusView =>
+                match key {
+                    // World rotation (camera stays fixed, world spins)
+                    KeyCode::ArrowLeft => { camera.angle_z -= 5; },
+                    KeyCode::ArrowRight => { camera.angle_z += 5; },
+                    // Tilt (pitch) the view
+                    KeyCode::ArrowUp => { camera.angle_x = (camera.angle_x + 5).min(-30); },
+                    KeyCode::ArrowDown => { camera.angle_x = (camera.angle_x - 5).max(-90); },
+                    // Scroll the world (toroidal panning)
+                    KeyCode::KeyW => { landscape_mesh.shift_y(1); },
+                    KeyCode::KeyS => { landscape_mesh.shift_y(-1); },
+                    KeyCode::KeyA => { landscape_mesh.shift_x(-1); },
+                    KeyCode::KeyD => { landscape_mesh.shift_x(1); },
+                    KeyCode::KeyP => { *self = Self::FreeCamera; },
+                    _ => (),
+                },
+            Self::FreeCamera =>
+                match key {
+                    // Rotation
+                    KeyCode::ArrowUp => { camera.angle_x += 5; },
+                    KeyCode::ArrowDown => { camera.angle_x -= 5; },
+                    KeyCode::ArrowLeft => { camera.angle_z -= 5; },
+                    KeyCode::ArrowRight => { camera.angle_z += 5; },
+                    // Position
+                    KeyCode::KeyW => { camera.pos.y += 0.1; },
+                    KeyCode::KeyS => { camera.pos.y -= 0.1; },
+                    KeyCode::KeyA => { camera.pos.x -= 0.1; },
+                    KeyCode::KeyD => { camera.pos.x += 0.1; },
+                    KeyCode::KeyE => { camera.pos.z += 0.1; },
+                    KeyCode::KeyF => { camera.pos.z -= 0.1; },
+                    // Y rotation
+                    KeyCode::KeyI => { camera.angle_y += 5; },
+                    KeyCode::KeyO => { camera.angle_y -= 5; },
+                    KeyCode::KeyP => { *self = Self::GlobalRotateXZ; },
+                    _ => (),
+                },
             Self::GlobalRotateXZ =>
                 match key {
                     KeyCode::ArrowUp => { camera.angle_x += 5; },
@@ -95,11 +136,11 @@ impl ActionMode {
                 },
             Self::GlobalMoveRot =>
                 match key {
-                    KeyCode::ArrowUp => { cam.z = -1.5; },
-                    KeyCode::ArrowDown => { cam.z = 1.5; },
+                    KeyCode::ArrowUp => { camera.pos.z += 0.1; },
+                    KeyCode::ArrowDown => { camera.pos.z -= 0.1; },
                     KeyCode::ArrowLeft => { camera.angle_z -= 5; },
                     KeyCode::ArrowRight => { camera.angle_z += 5; },
-                    KeyCode::KeyP => { *self = Self::GlobalRotateXZ; },
+                    KeyCode::KeyP => { *self = Self::TorusView; },
                     _ => (),
                 },
         }
@@ -124,7 +165,10 @@ struct LandscapeUniformData {
     selected_color: [f32; 4],
     sunlight: [f32; 4],
     wat_offset: i32,
-    _pad: [i32; 3],
+    curvature_scale: f32,
+    camera_focus: [f32; 2],
+    viewport_radius: f32,
+    _pad2: [f32; 3],
 }
 
 /// A landscape program variant with its own pipeline and group-1 bind group.
@@ -338,6 +382,8 @@ struct App {
     camera: Camera,
     screen: Screen,
     mode: ActionMode,
+    curvature_scale: f32,
+    curvature_enabled: bool,
     do_render: bool,
     mouse_pos: Point2<f32>,
     level_num: u8,
@@ -351,8 +397,9 @@ struct App {
 impl App {
     fn new(config: AppConfig) -> Self {
         let mut camera = Camera::new();
-        camera.angle_x = -75;
-        camera.angle_z = 60;
+        camera.angle_x = -55;
+        camera.angle_z = 65;
+        camera.pos = Vector3 { x: -0.40, y: -3.70, z: 0.0 };
 
         let sunlight = {
             let (x, y) = config.light.unwrap_or((0x93, 0x93));
@@ -382,7 +429,9 @@ impl App {
             landscape_mesh,
             camera,
             screen: Screen { width: 800, height: 600 },
-            mode: ActionMode::GlobalMoveRot,
+            mode: ActionMode::TorusView,
+            curvature_scale: 0.0512,
+            curvature_enabled: true,
             do_render: true,
             mouse_pos: Point2::<f32>::new(0.0, 0.0),
             level_num: config.level.unwrap_or(1),
@@ -403,7 +452,16 @@ impl App {
             selected_color: [1.0, 0.0, 0.0, 0.0],
             sunlight: [self.sunlight.x, self.sunlight.y, self.sunlight.z, self.sunlight.w],
             wat_offset: self.wat_offset,
-            _pad: [0; 3],
+            curvature_scale: if self.curvature_enabled { self.curvature_scale } else { 0.0 },
+            camera_focus: {
+                let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+                [center, center]
+            },
+            viewport_radius: {
+                let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+                center * 0.9
+            },
+            _pad2: [0.0; 3],
         }
     }
 
@@ -969,14 +1027,24 @@ impl ApplicationHandler for App {
                             KeyCode::KeyZ => {
                                 self.wat_offset += 1;
                             },
+                            KeyCode::KeyC => {
+                                self.curvature_enabled = !self.curvature_enabled;
+                                log::info!("curvature {}", if self.curvature_enabled { "on" } else { "off" });
+                            },
+                            KeyCode::BracketRight => {
+                                self.curvature_scale *= 1.2;
+                                log::info!("curvature_scale = {:.6}", self.curvature_scale);
+                            },
+                            KeyCode::BracketLeft => {
+                                self.curvature_scale *= 0.8;
+                                log::info!("curvature_scale = {:.6}", self.curvature_scale);
+                            },
                             _ => {
-                                let mut pos: Vector3<f32> = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
-                                self.mode.process_key(key, &mut self.camera, &mut pos);
-                                if pos.z != 0.0 {
-                                    let (mut v1, mut v2) = camera_dir_to_scene(&self.screen, &self.camera);
-                                    v1.z = 0.0;
-                                    v2.z = 0.0;
-                                    self.camera.pos += pos.z * (v2 - v1);
+                                self.mode.process_key(key, &mut self.camera, &mut self.landscape_mesh);
+                                if self.mode == ActionMode::FreeCamera {
+                                    println!("camera: angle_x={} angle_y={} angle_z={} pos=({:.2}, {:.2}, {:.2})",
+                                        self.camera.angle_x, self.camera.angle_y, self.camera.angle_z,
+                                        self.camera.pos.x, self.camera.pos.y, self.camera.pos.z);
                                 }
                             },
                         }
