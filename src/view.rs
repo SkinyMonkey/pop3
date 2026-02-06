@@ -1,4 +1,4 @@
-use cgmath::{Point2, Point3, Vector3, Matrix4, ortho, perspective, Rad, Deg, SquareMatrix, PerspectiveFov, Angle};
+use cgmath::{Point2, Point3, Vector3, Matrix4, perspective, Rad, Deg, SquareMatrix, PerspectiveFov, Angle};
 
 pub struct Camera {
     pub angle_x: i16,
@@ -16,7 +16,6 @@ pub struct MVP {
     pub transform: Matrix4<f32>,
     pub view: Matrix4<f32>,
     pub projection: Matrix4<f32>,
-    pub is_ortho: bool,
     pub eye: Vector3<f32>,
 }
 
@@ -33,80 +32,41 @@ impl Default for Camera {
 }
 
 impl MVP {
-    pub fn new(screen: &Screen, camera: &Camera) -> MVP {
-        Self::with_zoom(screen, camera, 1.0)
+    pub fn new(screen: &Screen, camera: &Camera, focus: Vector3<f32>) -> MVP {
+        Self::with_zoom(screen, camera, 1.0, focus)
     }
 
-    pub fn with_zoom(screen: &Screen, camera: &Camera, zoom: f32) -> MVP {
-        let is_ortho = false;
-        let angle_x = camera.angle_x as f32;
-        let angle_y = camera.angle_y as f32;
-        let angle_z = camera.angle_z as f32;
-        let pos = camera.pos;
+    pub fn with_zoom(screen: &Screen, camera: &Camera, zoom: f32, focus: Vector3<f32>) -> MVP {
+        let az = Rad::from(Deg(camera.angle_z as f32));
+        let ax = Rad::from(Deg(camera.angle_x as f32));
+        let radius = 1.5 / zoom;
 
-        let rot_move = Vector3{x: 0.0, y: -1.4, z: 0.0} - pos;
-        let rot_move_r = -rot_move;
+        // Orbit camera position around focus point
+        let eye_pos = Point3::new(
+            focus.x + radius * Rad::cos(ax) * Rad::sin(az),
+            focus.y + radius * Rad::cos(ax) * Rad::cos(az),
+            focus.z - radius * Rad::sin(ax),
+        );
+        let target = Point3::new(focus.x, focus.y, focus.z);
 
-        let rot_transform = Matrix4::from_translation(rot_move)
-                          * Matrix4::from_angle_z(Rad::from(Deg(angle_z)))
-                          * Matrix4::from_translation(rot_move_r);
+        // World geometry stays static — no rotation transform
+        let transform = Matrix4::identity();
 
-        let transform = Matrix4::from_angle_x(Rad::from(Deg(angle_x)))
-                      * Matrix4::from_angle_y(Rad::from(Deg(angle_y)))
-                      * Matrix4::from_translation(pos)
-                      * rot_transform;
+        // Z is up in world space
+        let view = Matrix4::look_at_rh(eye_pos, target, Vector3::new(0.0, 0.0, 1.0));
 
-        let eye = Self::eye_at(zoom);
-        let view: Matrix4<f32> = Matrix4::look_at_rh(Point3 { x: eye.x, y: eye.y, z: eye.z }
-                                      , Point3 { x: 0.0, y: 0.0, z: 0.0 }
-                                      , Vector3 { x: 0.0, y: 1.0, z: 0.0 });
-
-        let projection: Matrix4<f32> = {
+        let projection = {
             let asp = screen.width as f32 / screen.height as f32;
-            if is_ortho {
-                let w = 1.0 * asp;
-                let h = 1.0;
-                ortho(-w, w, -h, h, 0.1, 30.0)
-            } else {
-                perspective( Rad(1.0), asp, 0.1, 10000.0 )
-            }
+            perspective(Rad(1.0), asp, 0.1, 10000.0)
         };
 
-        MVP{transform, view, projection, is_ortho, eye}
+        let eye = Vector3::new(eye_pos.x, eye_pos.y, eye_pos.z);
+        MVP { transform, view, projection, eye }
     }
 
-    pub fn trans(camera: &Camera) -> Matrix4<f32> {
-        Matrix4::from_translation(camera.pos)
-    }
-
-    pub fn rm_x(camera: &Camera, pos: &mut Vector3<f32>) {
-        let angle_x = camera.angle_x as f32;
-        let mat = Matrix4::from_angle_x( Rad::from(Deg(angle_x)) ).invert().unwrap();
-        *pos = (mat * pos.extend(1.0)).truncate()
-    }
-
-    pub fn trans1(camera: &Camera) -> Matrix4<f32> {
-        let pos = camera.pos;
-        let angle_x = camera.angle_x as f32;
-        let angle_y = camera.angle_y as f32;
-        let angle_z = camera.angle_z as f32;
-        Matrix4::from_angle_x( Rad::from(Deg(angle_x)) )
-                        * Matrix4::from_angle_y( Rad::from(Deg(angle_y)) )
-                        * Matrix4::from_angle_z( Rad::from(Deg(angle_z)) )
-                        * Matrix4::from_translation( pos )
-    }
-
-    pub fn make_fov(screen: &Screen) -> PerspectiveFov<f32> {
+    fn make_fov(screen: &Screen) -> PerspectiveFov<f32> {
         let aspect = screen.width as f32 / screen.height as f32;
         PerspectiveFov{fovy: Rad(1.0), aspect, near: 1.0, far: 10000.0}
-    }
-
-    pub fn eye() -> Vector3<f32> {
-        Self::eye_at(1.0)
-    }
-
-    pub fn eye_at(zoom: f32) -> Vector3<f32> {
-        Vector3{x: 0.0, y: 0.0, z: 1.5 / zoom}
     }
 }
 
@@ -119,12 +79,8 @@ impl MVP {
  * (0;0) (w;0)
  * (0;h) (w;h)
  */
-pub fn screen_to_scene(screen: &Screen, camera: &Camera, pos_screen: &Point2<f32>) -> (Vector3<f32>, Vector3<f32>) {
-    screen_to_scene_zoom(screen, camera, pos_screen, 1.0)
-}
-
-pub fn screen_to_scene_zoom(screen: &Screen, camera: &Camera, pos_screen: &Point2<f32>, zoom: f32) -> (Vector3<f32>, Vector3<f32>) {
-    let mvp = MVP::with_zoom(screen, camera, zoom);
+pub fn screen_to_scene_zoom(screen: &Screen, camera: &Camera, pos_screen: &Point2<f32>, zoom: f32, focus: Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) {
+    let mvp = MVP::with_zoom(screen, camera, zoom, focus);
     let asp = screen.width as f32 / screen.height as f32;
     let x: f32 = {
         let w = screen.width as f32;
@@ -135,52 +91,26 @@ pub fn screen_to_scene_zoom(screen: &Screen, camera: &Camera, pos_screen: &Point
         2.0*(h / 2.0 - pos_screen.y as f32) / h
     };
 
-    if mvp.is_ortho {
-        let vec_screen_s: Vector3<f32> = Vector3 { x, y, z: 10.0 };
-        let vec_screen_e: Vector3<f32> = Vector3 { x, y, z: -10000.0 };
-        let mvp_m = mvp.view * mvp.transform;
-        let mvp_t = mvp_m.invert().unwrap();
-        let v1 = (mvp_t * vec_screen_s.extend(1.0)).truncate();
-        let v2 = (mvp_t * vec_screen_e.extend(1.0)).truncate();
-        (v1, v2)
-    } else {
-        let vec_screen_s: Vector3<f32> = mvp.eye;
-        let vec_screen_e: Vector3<f32> = {
-            let per_fov = MVP::make_fov(screen);
-            let x_norm = x / asp;
-            let y_norm = y;
-            let z = 10000.0;
-            let far_ymax = z * Rad::tan(Rad(1.0) / 2.0);
-            let far_xmax = far_ymax * per_fov.aspect;
-            let x_far = far_xmax * x_norm;
-            let y_far = far_ymax * y_norm;
-            Vector3{x: x_far, y: y_far, z: -z}
-        };
-        let v1 = {
-            let mvp_m = /*mvp.view * */mvp.transform;
-            let mvp_t = mvp_m.invert().unwrap();
-            (mvp_t * vec_screen_s.extend(1.0)).truncate()
-        };
-        let v2 = {
-            let mvp_t1 = (mvp.view * mvp.transform).invert().unwrap();
-            (mvp_t1 * vec_screen_e.extend(1.0)).truncate()
-        };
-        (v1, v2)
-    }
-}
-
-pub fn camera_dir_to_scene(screen: &Screen, camera: &Camera) -> (Vector3<f32>, Vector3<f32>) {
-    let mvp = MVP::new(screen, camera);
+    let vec_screen_s: Vector3<f32> = mvp.eye;
+    let vec_screen_e: Vector3<f32> = {
+        let per_fov = MVP::make_fov(screen);
+        let x_norm = x / asp;
+        let y_norm = y;
+        let z = 10000.0;
+        let far_ymax = z * Rad::tan(Rad(1.0) / 2.0);
+        let far_xmax = far_ymax * per_fov.aspect;
+        let x_far = far_xmax * x_norm;
+        let y_far = far_ymax * y_norm;
+        Vector3{x: x_far, y: y_far, z: -z}
+    };
     let v1 = {
-        let eye = mvp.eye;
         let mvp_m = mvp.transform;
         let mvp_t = mvp_m.invert().unwrap();
-        (mvp_t * eye.extend(1.0)).truncate()
+        (mvp_t * vec_screen_s.extend(1.0)).truncate()
     };
     let v2 = {
-        let pos_end: Vector3<f32> = Vector3{x: 0.0, y: 0.0, z: -0.1};
-        let mvp_t = (mvp.view * mvp.transform).invert().unwrap();
-        (mvp_t * pos_end.extend(1.0)).truncate()
+        let mvp_t1 = (mvp.view * mvp.transform).invert().unwrap();
+        (mvp_t1 * vec_screen_e.extend(1.0)).truncate()
     };
     (v1, v2)
 }

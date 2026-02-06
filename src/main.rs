@@ -59,10 +59,10 @@ fn process_key(key: KeyCode, camera: &mut Camera, landscape_mesh: &mut Landscape
         // Scroll the world (toroidal panning, screen-relative)
         KeyCode::KeyW | KeyCode::KeyA | KeyCode::KeyS | KeyCode::KeyD => {
             let (dx, dy) = match key {
-                KeyCode::KeyW => (0.0f32, -1.0f32),
-                KeyCode::KeyS => (0.0, 1.0),
-                KeyCode::KeyA => (1.0, 0.0),
-                KeyCode::KeyD => (-1.0, 0.0),
+                KeyCode::KeyW => (0.0f32, 1.0f32),
+                KeyCode::KeyS => (0.0, -1.0),
+                KeyCode::KeyA => (-1.0, 0.0),
+                KeyCode::KeyD => (1.0, 0.0),
                 _ => unreachable!(),
             };
             // Rotate screen direction by angle_z to get grid direction
@@ -1224,7 +1224,9 @@ impl App {
         let gpu = self.gpu.as_ref().unwrap();
 
         // Update uniforms
-        let mvp = MVP::with_zoom(&self.screen, &self.camera, self.zoom);
+        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+        let focus = Vector3::new(center, center, 0.0);
+        let mvp = MVP::with_zoom(&self.screen, &self.camera, self.zoom, focus);
         let mvp_m = mvp.projection * mvp.view * mvp.transform;
         let mvp_raw: TransformRaw = mvp_m.into();
         self.mvp_buffer.as_ref().unwrap().update(&gpu.queue, 0, bytemuck::bytes_of(&mvp_raw));
@@ -1716,7 +1718,9 @@ impl ApplicationHandler for App {
             },
             WindowEvent::MouseInput { state, .. } => {
                 if state == ElementState::Pressed {
-                    let (v1, v2) = screen_to_scene_zoom(&self.screen, &self.camera, &self.mouse_pos, self.zoom);
+                    let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+                    let focus = Vector3::new(center, center, 0.0);
+                    let (v1, v2) = screen_to_scene_zoom(&self.screen, &self.camera, &self.mouse_pos, self.zoom, focus);
                     if let Some(ref mut model_select) = self.model_select {
                         if let Some(m) = model_select.get(0) {
                             m.model.set_vertex(0, v1);
@@ -1756,10 +1760,11 @@ impl ApplicationHandler for App {
                                 return;
                             },
                             KeyCode::KeyR => {
-                                self.camera.angle_x = 0;
+                                self.camera.angle_x = -55;
                                 self.camera.angle_y = 0;
                                 self.camera.angle_z = 0;
                                 self.camera.pos = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
+                                self.rebuild_spawn_model();
                             },
                             KeyCode::KeyT => {
                                 self.camera.angle_x = -90;

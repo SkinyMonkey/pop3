@@ -156,7 +156,7 @@ impl App {
         let pop_obj = self.pop_obj.as_ref().unwrap();
 
         // Update MVP
-        let mvp = MVP::new(&self.screen, &self.camera);
+        let mvp = MVP::new(&self.screen, &self.camera, Vector3::new(0.0, 0.0, 0.0));
         let mvp_m = mvp.projection * mvp.view * mvp.transform;
         let mvp_raw: TransformRaw = mvp_m.into();
         mvp_buffer.update(&gpu.queue, 0, bytemuck::bytes_of(&mvp_raw));
