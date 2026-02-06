@@ -48,121 +48,31 @@ fn obj_colors() -> Vec<Vector3<u8>> {
 
 type LandscapeMeshS = LandscapeMesh<128>;
 
-#[derive(Debug, PartialEq, Clone, Copy)]
-enum ActionMode {
-    /// Torus view: fixed camera, world rotates (matches original game).
-    /// Left/Right = rotate world, Up/Down = tilt view, W/S = zoom.
-    TorusView,
-    /// Free camera: move anywhere in 3D, prints camera state on every keypress.
-    FreeCamera,
-    GlobalMoveXY,
-    GlobalMoveXZ,
-    GlobalRotateXZ,
-    GlobalRotateXY,
-    GlobalMoveRot,
-}
-
-impl ActionMode {
-    fn process_key(&mut self, key: KeyCode, camera: &mut Camera, landscape_mesh: &mut LandscapeMeshS) -> bool {
-        let prev_self = *self;
-        match self {
-            Self::TorusView =>
-                match key {
-                    // World rotation (orbit camera around scene center)
-                    KeyCode::KeyQ => { camera.angle_z -= 5; },
-                    KeyCode::KeyE => { camera.angle_z += 5; },
-                    // Tilt (pitch) the view
-                    KeyCode::ArrowUp => { camera.angle_x = (camera.angle_x + 5).min(-30); },
-                    KeyCode::ArrowDown => { camera.angle_x = (camera.angle_x - 5).max(-90); },
-                    // Scroll the world (toroidal panning, screen-relative)
-                    KeyCode::KeyW | KeyCode::KeyA | KeyCode::KeyS | KeyCode::KeyD => {
-                        let (dx, dy) = match key {
-                            KeyCode::KeyW => (0.0f32, -1.0f32),
-                            KeyCode::KeyS => (0.0, 1.0),
-                            KeyCode::KeyA => (1.0, 0.0),
-                            KeyCode::KeyD => (-1.0, 0.0),
-                            _ => unreachable!(),
-                        };
-                        // Rotate screen direction by angle_z to get grid direction
-                        let az = (camera.angle_z as f32).to_radians();
-                        let gx = dx * az.cos() - dy * az.sin();
-                        let gy = dx * az.sin() + dy * az.cos();
-                        landscape_mesh.shift_x(gx.round() as i32);
-                        landscape_mesh.shift_y(gy.round() as i32);
-                    },
-                    KeyCode::KeyP => { *self = Self::FreeCamera; },
-                    _ => (),
-                },
-            Self::FreeCamera =>
-                match key {
-                    // Rotation
-                    KeyCode::ArrowUp => { camera.angle_x += 5; },
-                    KeyCode::ArrowDown => { camera.angle_x -= 5; },
-                    KeyCode::ArrowLeft => { camera.angle_z -= 5; },
-                    KeyCode::ArrowRight => { camera.angle_z += 5; },
-                    // Position
-                    KeyCode::KeyW => { camera.pos.y += 0.1; },
-                    KeyCode::KeyS => { camera.pos.y -= 0.1; },
-                    KeyCode::KeyA => { camera.pos.x -= 0.1; },
-                    KeyCode::KeyD => { camera.pos.x += 0.1; },
-                    KeyCode::KeyE => { camera.pos.z += 0.1; },
-                    KeyCode::KeyF => { camera.pos.z -= 0.1; },
-                    // Y rotation
-                    KeyCode::KeyI => { camera.angle_y += 5; },
-                    KeyCode::KeyO => { camera.angle_y -= 5; },
-                    KeyCode::KeyP => { *self = Self::GlobalRotateXZ; },
-                    _ => (),
-                },
-            Self::GlobalRotateXZ =>
-                match key {
-                    KeyCode::ArrowUp => { camera.angle_x += 5; },
-                    KeyCode::ArrowDown => { camera.angle_x -= 5; },
-                    KeyCode::ArrowLeft => { camera.angle_z += 5; },
-                    KeyCode::ArrowRight => { camera.angle_z -= 5; },
-                    KeyCode::KeyP => { *self = Self::GlobalRotateXY; },
-                    _ => (),
-                },
-            Self::GlobalRotateXY =>
-                match key {
-                    KeyCode::ArrowUp => { camera.angle_x += 5; },
-                    KeyCode::ArrowDown => { camera.angle_x -= 5; },
-                    KeyCode::ArrowLeft => { camera.angle_y += 5; },
-                    KeyCode::ArrowRight => { camera.angle_y -= 5; },
-                    KeyCode::KeyP => { *self = Self::GlobalMoveXY; },
-                    _ => (),
-                },
-            Self::GlobalMoveXY =>
-                match key {
-                    KeyCode::ArrowUp => { camera.pos.x += 0.1; },
-                    KeyCode::ArrowDown => { camera.pos.x -= 0.1; },
-                    KeyCode::ArrowLeft => { camera.pos.y += 0.1; },
-                    KeyCode::ArrowRight => { camera.pos.y -= 0.1; },
-                    KeyCode::KeyP => { *self = Self::GlobalMoveXZ; },
-                    _ => (),
-                },
-            Self::GlobalMoveXZ =>
-                match key {
-                    KeyCode::ArrowUp => { camera.pos.z += 0.1; },
-                    KeyCode::ArrowDown => { camera.pos.z -= 0.1; },
-                    KeyCode::ArrowLeft => { camera.pos.z += 0.1; },
-                    KeyCode::ArrowRight => { camera.pos.z -= 0.1; },
-                    KeyCode::KeyP => { *self = Self::GlobalMoveRot; },
-                    _ => (),
-                },
-            Self::GlobalMoveRot =>
-                match key {
-                    KeyCode::ArrowUp => { camera.pos.z += 0.1; },
-                    KeyCode::ArrowDown => { camera.pos.z -= 0.1; },
-                    KeyCode::ArrowLeft => { camera.angle_z -= 5; },
-                    KeyCode::ArrowRight => { camera.angle_z += 5; },
-                    KeyCode::KeyP => { *self = Self::TorusView; },
-                    _ => (),
-                },
-        }
-        if *self != prev_self {
-            println!("{:?}", self);
-        }
-        true
+fn process_key(key: KeyCode, camera: &mut Camera, landscape_mesh: &mut LandscapeMeshS) {
+    match key {
+        // World rotation (orbit camera around scene center)
+        KeyCode::KeyQ => { camera.angle_z -= 5; },
+        KeyCode::KeyE => { camera.angle_z += 5; },
+        // Tilt (pitch) the view
+        KeyCode::ArrowUp => { camera.angle_x = (camera.angle_x + 5).min(-30); },
+        KeyCode::ArrowDown => { camera.angle_x = (camera.angle_x - 5).max(-90); },
+        // Scroll the world (toroidal panning, screen-relative)
+        KeyCode::KeyW | KeyCode::KeyA | KeyCode::KeyS | KeyCode::KeyD => {
+            let (dx, dy) = match key {
+                KeyCode::KeyW => (0.0f32, -1.0f32),
+                KeyCode::KeyS => (0.0, 1.0),
+                KeyCode::KeyA => (1.0, 0.0),
+                KeyCode::KeyD => (-1.0, 0.0),
+                _ => unreachable!(),
+            };
+            // Rotate screen direction by angle_z to get grid direction
+            let az = (camera.angle_z as f32).to_radians();
+            let gx = dx * az.cos() - dy * az.sin();
+            let gy = dx * az.sin() + dy * az.cos();
+            landscape_mesh.shift_x(gx.round() as i32);
+            landscape_mesh.shift_y(gy.round() as i32);
+        },
+        _ => (),
     }
 }
 
@@ -753,42 +663,19 @@ fn build_overlay_text(text: &str, x0: f32, y0: f32, scale: f32) -> Vec<OverlayVe
     vertices
 }
 
-impl ActionMode {
-    fn help_text(&self) -> &'static str {
-        match self {
-            Self::TorusView => concat!(
-                "[TorusView]\n",
-                "Q/E:    Rotate\n",
-                "Up/Dn:  Tilt\n",
-                "WASD:   Pan terrain\n",
-                "Space:  Center on blue\n",
-                "B/V:    Next/Prev level\n",
-                "N/M:    Next/Prev shader\n",
-                "C:      Toggle curvature\n",
-                "[/]:    Curvature +/-\n",
-                "Scroll: Zoom\n",
-                "Esc:    Quit\n",
-                "P:      Next mode",
-            ),
-            Self::FreeCamera => concat!(
-                "[FreeCamera]\n",
-                "Arrows: Rotate X/Z\n",
-                "WASD:   Move X/Y\n",
-                "E/F:    Move Z\n",
-                "I/O:    Rotate Y\n",
-                "Scroll: Zoom\n",
-                "Q:      Quit\n",
-                "P:      Next mode",
-            ),
-            _ => concat!(
-                "[Debug Mode]\n",
-                "Arrows: Adjust\n",
-                "Scroll: Zoom\n",
-                "Q:      Quit\n",
-                "P:      Next mode",
-            ),
-        }
-    }
+fn help_text() -> &'static str {
+    concat!(
+        "Q/E:    Rotate\n",
+        "Up/Dn:  Tilt\n",
+        "WASD:   Pan terrain\n",
+        "Space:  Center on blue\n",
+        "B/V:    Next/Prev level\n",
+        "N/M:    Next/Prev shader\n",
+        "C:      Toggle curvature\n",
+        "[/]:    Curvature +/-\n",
+        "Scroll: Zoom\n",
+        "Esc:    Quit",
+    )
 }
 
 /******************************************************************************/
@@ -962,7 +849,6 @@ struct App {
     landscape_mesh: LandscapeMeshS,
     camera: Camera,
     screen: Screen,
-    mode: ActionMode,
     curvature_scale: f32,
     curvature_enabled: bool,
     zoom: f32,
@@ -1023,7 +909,6 @@ impl App {
             landscape_mesh,
             camera,
             screen: Screen { width: 800, height: 600 },
-            mode: ActionMode::TorusView,
             curvature_scale: 0.0512,
             curvature_enabled: true,
             zoom: 1.0,
@@ -1133,7 +1018,7 @@ impl App {
 
     fn rebuild_overlay(&mut self) {
         if let Some(ref gpu) = self.gpu {
-            let text = self.mode.help_text();
+            let text = help_text();
             let verts = build_overlay_text(text, 10.0, 10.0, 16.0);
             self.overlay_vertex_count = verts.len() as u32;
             let data: &[u8] = bytemuck::cast_slice(&verts);
@@ -1943,20 +1828,11 @@ impl ApplicationHandler for App {
                                 let prev_shift = self.landscape_mesh.get_shift_vector();
                                 let prev_angle_z = self.camera.angle_z;
                                 let prev_angle_x = self.camera.angle_x;
-                                let prev_mode = self.mode;
-                                self.mode.process_key(key, &mut self.camera, &mut self.landscape_mesh);
+                                process_key(key, &mut self.camera, &mut self.landscape_mesh);
                                 let new_shift = self.landscape_mesh.get_shift_vector();
                                 let shift_changed = new_shift != prev_shift;
                                 if shift_changed || self.camera.angle_z != prev_angle_z || self.camera.angle_x != prev_angle_x {
                                     self.rebuild_spawn_model();
-                                }
-                                if self.mode != prev_mode {
-                                    self.rebuild_overlay();
-                                }
-                                if self.mode == ActionMode::FreeCamera {
-                                    println!("camera: angle_x={} angle_y={} angle_z={} pos=({:.2}, {:.2}, {:.2})",
-                                        self.camera.angle_x, self.camera.angle_y, self.camera.angle_z,
-                                        self.camera.pos.x, self.camera.pos.y, self.camera.pos.z);
                                 }
                             },
                         }
