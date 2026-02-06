@@ -34,6 +34,10 @@ impl Default for Camera {
 
 impl MVP {
     pub fn new(screen: &Screen, camera: &Camera) -> MVP {
+        Self::with_zoom(screen, camera, 1.0)
+    }
+
+    pub fn with_zoom(screen: &Screen, camera: &Camera, zoom: f32) -> MVP {
         let is_ortho = false;
         let angle_x = camera.angle_x as f32;
         let angle_y = camera.angle_y as f32;
@@ -52,7 +56,7 @@ impl MVP {
                       * Matrix4::from_translation(pos)
                       * rot_transform;
 
-        let eye = Self::eye();
+        let eye = Self::eye_at(zoom);
         let view: Matrix4<f32> = Matrix4::look_at_rh(Point3 { x: eye.x, y: eye.y, z: eye.z }
                                       , Point3 { x: 0.0, y: 0.0, z: 0.0 }
                                       , Vector3 { x: 0.0, y: 1.0, z: 0.0 });
@@ -98,7 +102,11 @@ impl MVP {
     }
 
     pub fn eye() -> Vector3<f32> {
-        Vector3{x: 0.0, y: 0.0, z: 1.5}
+        Self::eye_at(1.0)
+    }
+
+    pub fn eye_at(zoom: f32) -> Vector3<f32> {
+        Vector3{x: 0.0, y: 0.0, z: 1.5 / zoom}
     }
 }
 
@@ -112,7 +120,11 @@ impl MVP {
  * (0;h) (w;h)
  */
 pub fn screen_to_scene(screen: &Screen, camera: &Camera, pos_screen: &Point2<f32>) -> (Vector3<f32>, Vector3<f32>) {
-    let mvp = MVP::new(screen, camera);
+    screen_to_scene_zoom(screen, camera, pos_screen, 1.0)
+}
+
+pub fn screen_to_scene_zoom(screen: &Screen, camera: &Camera, pos_screen: &Point2<f32>, zoom: f32) -> (Vector3<f32>, Vector3<f32>) {
+    let mvp = MVP::with_zoom(screen, camera, zoom);
     let asp = screen.width as f32 / screen.height as f32;
     let x: f32 = {
         let w = screen.width as f32;

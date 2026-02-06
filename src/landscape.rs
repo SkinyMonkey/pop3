@@ -132,6 +132,11 @@ impl<const N: usize> LandscapeMesh<N> {
         self.shift_y
     }
 
+    pub fn set_shift(&mut self, sx: usize, sy: usize) {
+        self.shift_x = sx % N;
+        self.shift_y = sy % N;
+    }
+
     pub fn get_shift_vector(&self) -> Vector4<i32> {
         Vector4::new(self.shift_x as i32, self.shift_y as i32, 0, 0)
     }
