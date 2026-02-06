@@ -11,12 +11,10 @@ pub mod geometry {
     pub mod ico_sphere;
     pub mod cube;
 }
-pub mod opengl {
-    pub mod gl;
-    pub mod program;
+pub mod gpu {
+    pub mod context;
+    pub mod pipeline;
     pub mod buffer;
-    pub mod vertex;
-    pub mod uniform;
     pub mod texture;
 }
 pub mod pop;

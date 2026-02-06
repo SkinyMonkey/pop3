@@ -1,13 +1,9 @@
 use std::vec::Vec;
 
 use cgmath::Vector3;
-use gl46::*;
 
 use crate::model::{FromUsize, MeshModel};
-use crate::envelop::{GlModel, GlModelBatch, EModel};
-
-use crate::opengl::vertex::GlVertexAttr;
-use crate::opengl::buffer::GlBufferStatic;
+use crate::envelop::GpuModel;
 
 /******************************************************************************/
 
@@ -24,72 +20,49 @@ impl FromUsize for u16 {
 
 /******************************************************************************/
 
-impl GlModel for DefaultModel {
-    type BatchType = DefaultBatch;
-
-    fn vertex_attributes(&self) -> Vec<GlVertexAttr> {
-        vec![GlVertexAttr::new(0, 3, GL_FLOAT, 0)]
+impl GpuModel for DefaultModel {
+    fn vertex_buffer_layouts() -> Vec<wgpu::VertexBufferLayout<'static>> {
+        vec![wgpu::VertexBufferLayout {
+            array_stride: 12,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x3,
+                offset: 0,
+                shader_location: 0,
+            }],
+        }]
     }
 
-    fn vertex_size(&self) -> usize {
-        std::mem::size_of::<f32>() * 3
-    }
-    
-    fn vertex_num(&self) -> usize {
-        self.vertices.len()
-    }
-
-    fn vertex_buffer_size(&self) -> usize {
-        self.vertices.len() * self.vertex_size()
+    fn vertex_data(&self) -> Vec<u8> {
+        let floats: Vec<f32> = self
+            .vertices
+            .iter()
+            .flat_map(|v| [v.x, v.y, v.z])
+            .collect();
+        bytemuck::cast_slice(&floats).to_vec()
     }
 
-    fn index_num(&self) -> usize {
-        self.indices.len()
+    fn index_data(&self) -> Option<Vec<u8>> {
+        if self.indices.is_empty() {
+            None
+        } else {
+            Some(bytemuck::cast_slice(&self.indices).to_vec())
+        }
     }
 
-    fn index_buffer_size(&self) -> usize {
-        self.indices.len() * std::mem::size_of::<u16>()
+    fn index_format() -> wgpu::IndexFormat {
+        wgpu::IndexFormat::Uint16
     }
 
-    fn index_gl_type(&self) -> GLenum {
-        GL_UNSIGNED_SHORT
+    fn vertex_count(&self) -> u32 {
+        self.vertices.len() as u32
+    }
+
+    fn index_count(&self) -> u32 {
+        self.indices.len() as u32
     }
 
     fn is_indexed(&self) -> bool {
         !self.indices.is_empty()
-    }
-
-    fn add_to_buffer(&self, offset: usize, _total_vertices: usize, buffer: &mut GlBufferStatic) -> usize {
-        if self.vertices.is_empty() {
-            return 0;
-        }
-        let slice = self.vertices.as_slice();
-        buffer.update(offset * self.vertex_size(), slice).unwrap();
-        self.vertex_buffer_size()
-    }
-
-    fn add_to_buffer_elem(&self, offset: usize, buffer: &mut GlBufferStatic) -> usize {
-        if self.indices.is_empty() {
-            return 0;
-        }
-        let slice = self.indices.as_slice();
-        buffer.update(offset, slice).unwrap();
-        self.index_buffer_size()
-    }
-}
-
-pub struct DefaultBatch;
-
-impl GlModelBatch<EModel<DefaultModel>> for DefaultBatch {
-    fn vertex_attributes(_models: &[EModel<DefaultModel>]) -> Vec<GlVertexAttr> {
-        vec![GlVertexAttr::new(0, 3, GL_FLOAT, 0)]
-    }
-
-    fn vertex_buffer_size(models: &[EModel<DefaultModel>]) -> usize {
-        models.iter().rfold(0, |x, e| x + e.model.vertex_buffer_size())
-    }
-
-    fn index_buffer_size(models: &[EModel<DefaultModel>]) -> usize {
-        models.iter().rfold(0, |x, e| x + e.model.index_buffer_size())
     }
 }

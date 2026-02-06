@@ -1,17 +1,13 @@
-use std::rc::Rc;
-use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use glutin::event::{Event, WindowEvent, ElementState};
-use glutin::event_loop::{ControlFlow, EventLoop};
-use glutin::window::WindowBuilder;
-use glutin::ContextBuilder;
-use glutin::event::KeyboardInput as KI;
-use glutin::event::VirtualKeyCode as VKC;
+use winit::application::ApplicationHandler;
+use winit::event::{ElementState, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::window::{Window, WindowAttributes};
 
 use clap::{Arg, ArgAction, Command};
-
-use gl46::*;
 
 use cgmath::{Point2, Vector3, Vector4, Matrix4, SquareMatrix};
 
@@ -22,13 +18,13 @@ use faithful::view::*;
 use faithful::intersect::intersect_iter;
 
 use faithful::landscape::{LandscapeMesh, LandscapeModel};
-use faithful::pop::level:: LevelRes;
+use faithful::pop::level::LevelRes;
 use faithful::pop::landscape::{make_texture_land, draw_texture_u8};
 
-use faithful::opengl::gl::{GlCtx, new_gl_ctx};
-use faithful::opengl::program::*;
-use faithful::opengl::uniform::{GlUniform1, GlUniform1Cell, GlShaderStorage};
-use faithful::opengl::texture::*;
+use faithful::gpu::context::GpuContext;
+use faithful::gpu::pipeline::create_pipeline;
+use faithful::gpu::buffer::GpuBuffer;
+use faithful::gpu::texture::GpuTexture;
 use faithful::envelop::*;
 
 /******************************************************************************/
@@ -58,102 +54,52 @@ enum ActionMode {
 }
 
 impl ActionMode {
-    fn process_key(&mut self, key: VKC, camera: &mut Camera, cam: &mut Vector3<f32>) -> bool {
+    fn process_key(&mut self, key: KeyCode, camera: &mut Camera, cam: &mut Vector3<f32>) -> bool {
         let prev_self = *self;
         match self {
             Self::GlobalRotateXZ =>
                 match key {
-                    VKC::Up => {
-                        camera.angle_x += 5;
-                    },
-                    VKC::Down => {
-                        camera.angle_x -= 5;
-                    },
-                    VKC::Left => {
-                        camera.angle_z += 5;
-                    },
-                    VKC::Right => {
-                        camera.angle_z -= 5;
-                    },
-                    VKC::P => {
-                        *self = Self::GlobalRotateXY;
-                    },
+                    KeyCode::ArrowUp => { camera.angle_x += 5; },
+                    KeyCode::ArrowDown => { camera.angle_x -= 5; },
+                    KeyCode::ArrowLeft => { camera.angle_z += 5; },
+                    KeyCode::ArrowRight => { camera.angle_z -= 5; },
+                    KeyCode::KeyP => { *self = Self::GlobalRotateXY; },
                     _ => (),
                 },
             Self::GlobalRotateXY =>
                 match key {
-                    VKC::Up => {
-                        camera.angle_x += 5;
-                    },
-                    VKC::Down => {
-                        camera.angle_x -= 5;
-                    },
-                    VKC::Left => {
-                        camera.angle_y += 5;
-                    },
-                    VKC::Right => {
-                        camera.angle_y -= 5;
-                    },
-                    VKC::P => {
-                        *self = Self::GlobalMoveXY;
-                    },
+                    KeyCode::ArrowUp => { camera.angle_x += 5; },
+                    KeyCode::ArrowDown => { camera.angle_x -= 5; },
+                    KeyCode::ArrowLeft => { camera.angle_y += 5; },
+                    KeyCode::ArrowRight => { camera.angle_y -= 5; },
+                    KeyCode::KeyP => { *self = Self::GlobalMoveXY; },
                     _ => (),
                 },
             Self::GlobalMoveXY =>
                 match key {
-                    VKC::Up => {
-                        camera.pos.x += 0.1;
-                    },
-                    VKC::Down => {
-                        camera.pos.x -= 0.1;
-                    },
-                    VKC::Left => {
-                        camera.pos.y += 0.1;
-                    },
-                    VKC::Right => {
-                        camera.pos.y -= 0.1;
-                    },
-                    VKC::P => {
-                        *self = Self::GlobalMoveXZ;
-                    },
+                    KeyCode::ArrowUp => { camera.pos.x += 0.1; },
+                    KeyCode::ArrowDown => { camera.pos.x -= 0.1; },
+                    KeyCode::ArrowLeft => { camera.pos.y += 0.1; },
+                    KeyCode::ArrowRight => { camera.pos.y -= 0.1; },
+                    KeyCode::KeyP => { *self = Self::GlobalMoveXZ; },
                     _ => (),
                 },
             Self::GlobalMoveXZ =>
                 match key {
-                    VKC::Up => {
-                        camera.pos.z += 0.1;
-                    },
-                    VKC::Down => {
-                        camera.pos.z -= 0.1;
-                    },
-                    VKC::Left => {
-                        camera.pos.z += 0.1;
-                    },
-                    VKC::Right => {
-                        camera.pos.z -= 0.1;
-                    },
-                    VKC::P => {
-                        *self = Self::GlobalMoveRot;
-                    },
+                    KeyCode::ArrowUp => { camera.pos.z += 0.1; },
+                    KeyCode::ArrowDown => { camera.pos.z -= 0.1; },
+                    KeyCode::ArrowLeft => { camera.pos.z += 0.1; },
+                    KeyCode::ArrowRight => { camera.pos.z -= 0.1; },
+                    KeyCode::KeyP => { *self = Self::GlobalMoveRot; },
                     _ => (),
                 },
             Self::GlobalMoveRot =>
                 match key {
-                    VKC::Up => {
-                        cam.z = -1.5;
-                    },
-                    VKC::Down => {
-                        cam.z = 1.5;
-                    },
-                    VKC::Left => {
-                        camera.angle_z -= 5;
-                    },
-                    VKC::Right => {
-                        camera.angle_z += 5;
-                    },
-                    VKC::P => {
-                        *self = Self::GlobalRotateXZ;
-                    },
+                    KeyCode::ArrowUp => { cam.z = -1.5; },
+                    KeyCode::ArrowDown => { cam.z = 1.5; },
+                    KeyCode::ArrowLeft => { camera.angle_z -= 5; },
+                    KeyCode::ArrowRight => { camera.angle_z += 5; },
+                    KeyCode::KeyP => { *self = Self::GlobalRotateXZ; },
                     _ => (),
                 },
         }
@@ -164,338 +110,71 @@ impl ActionMode {
     }
 }
 
-struct Scene {
-    model_main: ModelEnvelop<LandscapeModel>,
-    model_select: ModelEnvelop<DefaultModel>,
-    select_frag: i32,
+/******************************************************************************/
+
+/// Packed landscape uniform data matching the WGSL LandscapeParams struct.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct LandscapeUniformData {
+    level_shift: [i32; 4],
+    height_scale: f32,
+    step: f32,
+    width: i32,
+    selected_frag: i32,
+    selected_color: [f32; 4],
+    sunlight: [f32; 4],
+    wat_offset: i32,
+    _pad: [i32; 3],
 }
 
-#[allow(dead_code)]
-struct LevelAssets {
-    tex_palette: GlTexture,
-    tex_disp: GlTexture,
-    tex_bigf: GlTexture,
-    tex_sla: GlTexture,
-}
-
-impl LevelAssets {
-    fn new(gl: &GlCtx, level_res: &LevelRes) -> Self {
-        let tex_palette = {
-            let params = TextureParams{target: GL_TEXTURE_1D, internal_format: GL_RGBA8UI, format: GL_RGBA_INTEGER, data_type: GL_UNSIGNED_BYTE, nearest: true};
-            let uniform = Some(1);
-            let width = level_res.landscape.land_size();
-            GlTexture::new_1d(gl, uniform, &params, width, level_res.params.palette.as_slice())
-        }.unwrap();
-
-        let tex_disp = {
-            let uniform = Some(2);
-            let width = level_res.params.disp0.len();
-            GlTexture::new_buffered(gl, uniform, GL_R8I, width, level_res.params.disp0.as_slice())
-        }.unwrap();
-
-        let tex_bigf = {
-            let uniform = Some(3);
-            let width = level_res.params.bigf0.len();
-            GlTexture::new_buffered(gl, uniform, GL_R8UI, width, level_res.params.bigf0.as_slice())
-        }.unwrap();
-
-        let tex_sla = {
-            let uniform = Some(4);
-            let width = level_res.params.static_landscape_array.len() * std::mem::size_of::<u16>();
-            GlTexture::new_buffered(gl, uniform, GL_R16UI, width, level_res.params.static_landscape_array.as_slice())
-        }.unwrap();
-
-        LevelAssets{tex_palette, tex_disp, tex_bigf, tex_sla}
-    }
-
-    pub fn update(&mut self, level_res: &LevelRes) {
-        self.tex_palette.set_data(level_res.params.palette.as_slice());
-        self.tex_disp.set_data(level_res.params.disp0.as_slice());
-        self.tex_bigf.set_data(level_res.params.bigf0.as_slice());
-    }
-}
-
-struct LevelUniforms {
-    mvp: GlUniform1Cell<Matrix4::<f32>>,
-    mvp_model: GlUniform1Cell<Matrix4::<f32>>,
-    land_width: GlUniform1Cell<i32>,
-    land_step: GlUniform1Cell<f32>,
-    selected: GlUniform1Cell<i32>,
-    selected_color: GlUniform1Cell<Vector4::<f32>>,
-    level_shift: GlUniform1Cell<Vector4::<i32>>,
-    height_scale: GlUniform1Cell<f32>,
-    sunlight: GlUniform1Cell<Vector4::<f32>>,
-    wat_offset: GlUniform1Cell<i32>,
-}
-
-trait LandscapeProgram {
-    fn gl_program(&self) -> &GlProgram;
-    fn update(&mut self, level_res: &LevelRes);
+/// A landscape program variant with its own pipeline and group-1 bind group.
+struct LandscapeVariant {
+    pipeline: wgpu::RenderPipeline,
+    bind_group_1: wgpu::BindGroup,
 }
 
 struct LandscapeProgramContainer {
-    programs: Vec<Rc<RefCell<dyn LandscapeProgram>>>,
+    variants: Vec<LandscapeVariant>,
     index: usize,
 }
 
 impl LandscapeProgramContainer {
     fn new() -> Self {
-        Self{ programs: Vec::new(), index: 0 }
+        Self { variants: Vec::new(), index: 0 }
     }
 
-    fn add_program(&mut self, program: Rc<RefCell<dyn LandscapeProgram>>) {
-        self.programs.push(program);
+    fn add(&mut self, variant: LandscapeVariant) {
+        self.variants.push(variant);
     }
 
     fn next(&mut self) {
-        self.index = (self.index + 1) % self.programs.len();
+        if !self.variants.is_empty() {
+            self.index = (self.index + 1) % self.variants.len();
+        }
     }
 
     fn prev(&mut self) {
-        if self.programs.is_empty() {
-            return;
-        }
+        if self.variants.is_empty() { return; }
         self.index = if self.index == 0 {
-            self.programs.len() - 1
+            self.variants.len() - 1
         } else {
-            (self.index - 1) % self.programs.len()
+            self.index - 1
         };
     }
 
-    fn update_programs(&mut self, level_res: &LevelRes) {
-        for program in self.programs.iter_mut() {
-            program.borrow_mut().update(level_res);
-        }
-    }
-
-    fn get_program(&self) -> Option<Rc<RefCell<dyn LandscapeProgram>>> {
-        self.programs.get(self.index).cloned()
+    fn current(&self) -> Option<&LandscapeVariant> {
+        self.variants.get(self.index)
     }
 }
 
-struct MainLandscapeProgram {
-    program: GlProgram,
-    textures: LevelAssets,
-}
+/******************************************************************************/
 
-impl MainLandscapeProgram {
-    fn new(gl: &GlCtx, level_res: &LevelRes, uniforms: &LevelUniforms) -> Self {
-        let mut program = {
-            let mut program = GlProgram::new(gl);
-            let loader = GlShaderLoaderBinary {};
-            GlShader::attach_from_file("vert", Path::new("shaders/landscape.vert.spv"), &mut program, &loader, GL_VERTEX_SHADER);
-            GlShader::attach_from_file("frag", Path::new("shaders/landscape.frag.spv"), &mut program, &loader, GL_FRAGMENT_SHADER);
-            program
-        };
-        program.use_program();
-        let assets = LevelAssets::new(gl, level_res);
-        program.set_uniform(0, uniforms.mvp.clone());
-        program.set_uniform(1, uniforms.mvp_model.clone());
-        program.set_uniform(2, uniforms.level_shift.clone());
-        program.set_uniform(3, uniforms.height_scale.clone());
-        program.set_uniform(4, uniforms.selected_color.clone());
-        program.set_uniform(6, uniforms.selected.clone());
-        program.set_uniform(7, uniforms.land_step.clone());
-        program.set_uniform(8, uniforms.land_width.clone());
-        program.set_uniform(21, uniforms.sunlight.clone());
-        program.set_uniform(23, uniforms.wat_offset.clone());
-
-        let program_info = program.get_info().unwrap();
-        log::debug!("Program info {}", program_info);
-        let program_log = program.get_log().unwrap();
-        log::debug!("Program log: {}", program_log);
-
-        MainLandscapeProgram{program, textures: assets}
-    }
-
-    fn new_rc_ref(gl: &GlCtx, level_res: &LevelRes, uniforms: &LevelUniforms) -> Rc<RefCell<dyn LandscapeProgram>> {
-        Rc::new(RefCell::new(Self::new(gl, level_res, uniforms)))
-    }
-}
-
-impl LandscapeProgram for MainLandscapeProgram {
-    fn gl_program(&self) -> &GlProgram {
-        &self.program
-    }
-
-    fn update(&mut self, level_res: &LevelRes) {
-        self.textures.update(level_res);
-    }
-}
-
-struct CpuLandscapeProgram {
-    program: GlProgram,
-    texture: GlTexture,
-    tex_palette: GlTexture,
-}
-
-impl CpuLandscapeProgram {
-    fn new(gl: &GlCtx, level_res: &LevelRes, landscape: &[u8], uniforms: &LevelUniforms) -> Self {
-        let mut program = {
-            let mut program = GlProgram::new(gl);
-            let loader = GlShaderLoaderBinary {};
-            GlShader::attach_from_file("vert", Path::new("shaders/landscape.vert.spv"), &mut program, &loader, GL_VERTEX_SHADER);
-            GlShader::attach_from_file("frag", Path::new("shaders/landscape_cpu.frag.spv"), &mut program, &loader, GL_FRAGMENT_SHADER);
-            program
-        };
-
-        program.use_program();
-
-        let texture = {
-            let params = TextureParams{target: GL_TEXTURE_2D, internal_format: GL_R8UI, format: GL_RED_INTEGER, data_type: GL_UNSIGNED_BYTE, nearest: true};
-            let uniform = Some(0);
-            let size = level_res.landscape.land_size() * 32;
-            let width = size;
-            let height = size;
-            let texture = landscape;
-            GlTexture::new_2d(gl, uniform, &params, width, height, texture)
-        }.unwrap();
-
-        let tex_palette = {
-            let params = TextureParams{target: GL_TEXTURE_1D, internal_format: GL_RGBA8UI, format: GL_RGBA_INTEGER, data_type: GL_UNSIGNED_BYTE, nearest: true};
-            let uniform = Some(1);
-            let width = level_res.landscape.land_size();
-            GlTexture::new_1d(gl, uniform, &params, width, level_res.params.palette.as_slice())
-        }.unwrap();
-
-        program.set_uniform(0, uniforms.mvp.clone());
-        program.set_uniform(1, uniforms.mvp_model.clone());
-        program.set_uniform(2, uniforms.level_shift.clone());
-        program.set_uniform(3, uniforms.height_scale.clone());
-        program.set_uniform(4, uniforms.selected_color.clone());
-        program.set_uniform(6, uniforms.selected.clone());
-        program.set_uniform(7, uniforms.land_step.clone());
-        program.set_uniform(8, uniforms.land_width.clone());
-
-        CpuLandscapeProgram{program, texture, tex_palette}
-    }
-
-    fn new_rc_ref(gl: &GlCtx, level_res: &LevelRes, uniforms: &LevelUniforms) -> Rc<RefCell<dyn LandscapeProgram>> {
-        let land_texture = make_texture_land(level_res, None);
-        Rc::new(RefCell::new(Self::new(gl, level_res, &land_texture, uniforms)))
-    }
-}
-
-impl LandscapeProgram for CpuLandscapeProgram {
-    fn gl_program(&self) -> &GlProgram {
-        &self.program
-    }
-
-    fn update(&mut self, level_res: &LevelRes) {
-        let land_texture = make_texture_land(level_res, None);
-        self.texture.set_data(&land_texture);
-        self.tex_palette.set_data(level_res.params.palette.as_slice());
-    }
-}
-
-struct CpuFullLandscapeProgram {
-    program: GlProgram,
-    texture: GlTexture,
-}
-
-impl CpuFullLandscapeProgram {
-    fn new(gl: &GlCtx, level_res: &LevelRes, landscape: &[u8], uniforms: &LevelUniforms) -> Self {
-        let mut program = {
-            let mut program = GlProgram::new(gl);
-            let loader = GlShaderLoaderBinary {};
-            GlShader::attach_from_file("vert", Path::new("shaders/landscape.vert.spv"), &mut program, &loader, GL_VERTEX_SHADER);
-            GlShader::attach_from_file("frag", Path::new("shaders/landscape_full.frag.spv"), &mut program, &loader, GL_FRAGMENT_SHADER);
-            program
-        };
-
-        program.use_program();
-
-        let texture = {
-            let params = TextureParams{target: GL_TEXTURE_2D, internal_format: GL_RGB32F, format: GL_RGB, data_type: GL_UNSIGNED_BYTE, nearest: false};
-            let uniform = Some(6);
-            let size = level_res.landscape.land_size() * 32;
-            let width = size;
-            let height = size;
-            let texture = draw_texture_u8(&level_res.params.palette, width, landscape);
-            GlTexture::new_2d(gl, uniform, &params, width, height, &texture)
-        }.unwrap();
-
-        program.set_uniform(0, uniforms.mvp.clone());
-        program.set_uniform(1, uniforms.mvp_model.clone());
-        program.set_uniform(2, uniforms.level_shift.clone());
-        program.set_uniform(3, uniforms.height_scale.clone());
-        program.set_uniform(4, uniforms.selected_color.clone());
-        program.set_uniform(6, uniforms.selected.clone());
-        program.set_uniform(7, uniforms.land_step.clone());
-        program.set_uniform(8, uniforms.land_width.clone());
-
-        CpuFullLandscapeProgram{program, texture}
-    }
-
-    fn new_rc_ref(gl: &GlCtx, level_res: &LevelRes, uniforms: &LevelUniforms) -> Rc<RefCell<dyn LandscapeProgram>> {
-        let land_texture = make_texture_land(level_res, None);
-        Rc::new(RefCell::new(Self::new(gl, level_res, &land_texture, uniforms)))
-    }
-}
-
-impl LandscapeProgram for CpuFullLandscapeProgram {
-    fn gl_program(&self) -> &GlProgram {
-        &self.program
-    }
-
-    fn update(&mut self, level_res: &LevelRes) {
-        let land_texture = make_texture_land(level_res, None);
-        let size = level_res.landscape.land_size() * 32;
-        let texture = draw_texture_u8(&level_res.params.palette, size, &land_texture);
-        self.texture.set_data(&texture);
-    }
-}
-
-struct GradLandscapeProgram {
-    program: GlProgram,
-}
-
-impl GradLandscapeProgram {
-    fn new(gl: &GlCtx, uniforms: &LevelUniforms) -> Self {
-        let mut program = {
-            let mut program = GlProgram::new(gl);
-            let loader = GlShaderLoaderBinary {};
-            GlShader::attach_from_file("vert", Path::new("shaders/landscape.vert.spv"), &mut program, &loader, GL_VERTEX_SHADER);
-            GlShader::attach_from_file("frag", Path::new("shaders/landscape_grad.frag.spv"), &mut program, &loader, GL_FRAGMENT_SHADER);
-            program
-        };
-
-        program.use_program();
-
-        program.set_uniform(0, uniforms.mvp.clone());
-        program.set_uniform(1, uniforms.mvp_model.clone());
-        program.set_uniform(2, uniforms.level_shift.clone());
-        program.set_uniform(3, uniforms.height_scale.clone());
-        program.set_uniform(4, uniforms.selected_color.clone());
-        program.set_uniform(6, uniforms.selected.clone());
-        program.set_uniform(7, uniforms.land_step.clone());
-        program.set_uniform(8, uniforms.land_width.clone());
-
-        GradLandscapeProgram{program}
-    }
-
-    fn new_rc_ref(gl: &GlCtx, uniforms: &LevelUniforms) -> Rc<RefCell<dyn LandscapeProgram>> {
-        Rc::new(RefCell::new(Self::new(gl, uniforms)))
-    }
-}
-
-impl LandscapeProgram for GradLandscapeProgram {
-    fn gl_program(&self) -> &GlProgram {
-        &self.program
-    }
-
-    fn update(&mut self, _level_res: &LevelRes) {
-    }
-}
-
-fn make_landscape_mode(gl: &GlCtx, uniforms: &LevelUniforms, landscape_mesh: &LandscapeMeshS) -> ModelEnvelop<LandscapeModel> {
-    let mut model_main = {
-        let mut model: LandscapeModel = MeshModel::new();
-        landscape_mesh.to_model(&mut model);
-        log::debug!("Landscape mesh - vertices={:?}, indices={:?}"
-                    , model.vertex_num(), model.index_num());
-        ModelEnvelop::<LandscapeModel>::new(gl, &uniforms.mvp_model, vec![(RenderType::Triangles, model)])
-    };
+fn make_landscape_model(device: &wgpu::Device, landscape_mesh: &LandscapeMeshS) -> ModelEnvelop<LandscapeModel> {
+    let mut model: LandscapeModel = MeshModel::new();
+    landscape_mesh.to_model(&mut model);
+    log::debug!("Landscape mesh - vertices={:?}, indices={:?}", model.vertices.len(), model.indices.len());
+    let m = vec![(RenderType::Triangles, model)];
+    let mut model_main = ModelEnvelop::<LandscapeModel>::new(device, m);
     if let Some(m) = model_main.get(0) {
         m.location.x = -2.0;
         m.location.y = -2.0;
@@ -504,42 +183,118 @@ fn make_landscape_mode(gl: &GlCtx, uniforms: &LevelUniforms, landscape_mesh: &La
     model_main
 }
 
-fn update_level(base: &Path, level_num: u8, landscape_mesh: &mut LandscapeMeshS, program_container: &mut LandscapeProgramContainer, heights_buffer: &mut GlShaderStorage) -> RefCell<LevelRes> {
-    let level_res = {
-        let level_type = None;
-        LevelRes::new(base, level_num, level_type)
-    };
-    landscape_mesh.set_heights(&level_res.landscape.height);
-    heights_buffer.update(0, {
-        let landscape = level_res.landscape.make_shores();
-        &landscape.to_vec()
-    }).unwrap();
-    program_container.update_programs(&level_res);
-    RefCell::new(level_res)
+/// Create the bind group layout shared by all landscape shaders (group 0):
+/// binding 0: mvp (mat4x4), binding 1: model_transform (mat4x4), binding 2: LandscapeParams
+fn create_landscape_group0_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("landscape_group0_layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+    })
 }
 
-fn render(gl: &GlCtx, program_landscape: &GlProgram, program_select: &GlProgram, scene: &Scene) {
-    unsafe {
-        gl.Enable(GL_DEPTH_TEST);
-        gl.Clear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
-        gl.ClearColor(0.0, 0.0, 0.0, 0.0);
-        gl.LineWidth(3.0);
-    }
-    program_landscape.use_program();
-    scene.model_main.draw(1);
-    program_select.use_program();
-    scene.model_select.draw(1);
+/// Create the objects shader bind group layout (group 0): mvp + model_transform (2 bindings)
+fn create_objects_group0_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("objects_group0_layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+    })
 }
 
-fn parse_light(s: &str) -> Option<(i16, i16)> {
-    let parts: Vec<&str> = s.split(';').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let a = &parts[0];
-    let b = &parts[1];
-    Some((a.parse().unwrap(), b.parse().unwrap()))
+/// Create the objects shader group 1 layout: params uniform + color storage buffer
+fn create_objects_group1_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("objects_group1_layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+    })
 }
+
+fn make_storage_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+/******************************************************************************/
 
 struct AppConfig {
     base: Option<PathBuf>,
@@ -549,6 +304,708 @@ struct AppConfig {
     cpu_full: bool,
     debug: bool,
     light: Option<(i16, i16)>,
+}
+
+struct App {
+    window: Option<Arc<Window>>,
+    gpu: Option<GpuContext>,
+
+    // Landscape
+    program_container: LandscapeProgramContainer,
+    landscape_group0_layout: Option<wgpu::BindGroupLayout>,
+    landscape_group0_bind_group: Option<wgpu::BindGroup>,
+    model_main: Option<ModelEnvelop<LandscapeModel>>,
+
+    // Selection lines
+    select_pipeline: Option<wgpu::RenderPipeline>,
+    objects_group0_bind_group: Option<wgpu::BindGroup>,
+    objects_group1_bind_group: Option<wgpu::BindGroup>,
+    model_select: Option<ModelEnvelop<DefaultModel>>,
+    select_frag: i32,
+
+    // Shared uniform buffers
+    mvp_buffer: Option<GpuBuffer>,
+    model_transform_buffer: Option<GpuBuffer>,
+    landscape_params_buffer: Option<GpuBuffer>,
+    select_params_buffer: Option<GpuBuffer>,
+
+    // Storage buffers (level-dependent)
+    heights_buffer: Option<GpuBuffer>,
+    watdisp_buffer: Option<GpuBuffer>,
+
+    // State
+    landscape_mesh: LandscapeMeshS,
+    camera: Camera,
+    screen: Screen,
+    mode: ActionMode,
+    do_render: bool,
+    mouse_pos: Point2<f32>,
+    level_num: u8,
+    sunlight: Vector4<f32>,
+    wat_offset: i32,
+
+    // Config
+    config: AppConfig,
+}
+
+impl App {
+    fn new(config: AppConfig) -> Self {
+        let mut camera = Camera::new();
+        camera.angle_x = -75;
+        camera.angle_z = 60;
+
+        let sunlight = {
+            let (x, y) = config.light.unwrap_or((0x93, 0x93));
+            Vector4::<f32>::new(x as f32, y as f32, 0x93 as f32, 0.0)
+        };
+
+        let landscape_mesh = LandscapeMesh::new(1.0 / 16.0, (1.0 / 16.0) * 4.0 / 1024.0);
+
+        App {
+            window: None,
+            gpu: None,
+            program_container: LandscapeProgramContainer::new(),
+            landscape_group0_layout: None,
+            landscape_group0_bind_group: None,
+            model_main: None,
+            select_pipeline: None,
+            objects_group0_bind_group: None,
+            objects_group1_bind_group: None,
+            model_select: None,
+            select_frag: -1,
+            mvp_buffer: None,
+            model_transform_buffer: None,
+            landscape_params_buffer: None,
+            select_params_buffer: None,
+            heights_buffer: None,
+            watdisp_buffer: None,
+            landscape_mesh,
+            camera,
+            screen: Screen { width: 800, height: 600 },
+            mode: ActionMode::GlobalMoveRot,
+            do_render: true,
+            mouse_pos: Point2::<f32>::new(0.0, 0.0),
+            level_num: config.level.unwrap_or(1),
+            sunlight,
+            wat_offset: -1,
+            config,
+        }
+    }
+
+    fn build_landscape_params(&self) -> LandscapeUniformData {
+        let shift = self.landscape_mesh.get_shift_vector();
+        LandscapeUniformData {
+            level_shift: [shift.x, shift.y, shift.z, shift.w],
+            height_scale: self.landscape_mesh.height_scale(),
+            step: self.landscape_mesh.step(),
+            width: self.landscape_mesh.width() as i32,
+            selected_frag: self.select_frag,
+            selected_color: [1.0, 0.0, 0.0, 0.0],
+            sunlight: [self.sunlight.x, self.sunlight.y, self.sunlight.z, self.sunlight.w],
+            wat_offset: self.wat_offset,
+            _pad: [0; 3],
+        }
+    }
+
+    fn update_level(&mut self) {
+        let base = self.config.base.clone().unwrap_or_else(|| Path::new("/opt/sandbox/pop").to_path_buf());
+        let level_type = self.config.landtype.as_deref();
+        let level_res = LevelRes::new(&base, self.level_num, level_type);
+
+        self.landscape_mesh.set_heights(&level_res.landscape.height);
+
+        let gpu = self.gpu.as_ref().unwrap();
+
+        // Update heights buffer
+        let landscape = level_res.landscape.make_shores();
+        let heights_vec = landscape.to_vec();
+        let heights_bytes: &[u8] = bytemuck::cast_slice(&heights_vec);
+        let heights_buffer = GpuBuffer::new_storage(&gpu.device, heights_bytes, "heights_buffer");
+        self.heights_buffer = Some(heights_buffer);
+
+        // Update watdisp buffer
+        let watdisp_vec: Vec<u32> = level_res.params.watdisp.iter().map(|v| *v as u32).collect();
+        let watdisp_bytes: &[u8] = bytemuck::cast_slice(&watdisp_vec);
+        let watdisp_buffer = GpuBuffer::new_storage(&gpu.device, watdisp_bytes, "watdisp_buffer");
+        self.watdisp_buffer = Some(watdisp_buffer);
+
+        // Rebuild all landscape variants
+        self.rebuild_landscape_variants(&level_res);
+    }
+
+    fn rebuild_landscape_variants(&mut self, level_res: &LevelRes) {
+        let gpu = self.gpu.as_ref().unwrap();
+        let device = &gpu.device;
+        let group0_layout = self.landscape_group0_layout.as_ref().unwrap();
+        let heights_buffer = self.heights_buffer.as_ref().unwrap();
+        let watdisp_buffer = self.watdisp_buffer.as_ref().unwrap();
+
+        let vertex_layouts = LandscapeModel::vertex_buffer_layouts();
+        let surface_format = gpu.surface_format();
+
+        self.program_container = LandscapeProgramContainer::new();
+
+        // CPU palette index variant
+        if self.config.cpu {
+            let land_texture = make_texture_land(level_res, None);
+            let size = (level_res.landscape.land_size() * 32) as u32;
+
+            let cpu_tex = GpuTexture::new_2d(
+                device, &gpu.queue, size, size,
+                wgpu::TextureFormat::R8Uint, &land_texture, "cpu_land_texture",
+            );
+
+            let palette_packed = pack_palette_rgba(&level_res.params.palette);
+            let palette_bytes: &[u8] = bytemuck::cast_slice(&palette_packed);
+            let palette_buf = GpuBuffer::new_storage(device, palette_bytes, "palette_buffer");
+
+            let group1_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("landscape_cpu_group1"),
+                entries: &[
+                    make_storage_entry(0), // heights
+                    make_storage_entry(1), // watdisp
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Uint,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    make_storage_entry(3), // palette
+                ],
+            });
+
+            let bind_group_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("landscape_cpu_bg1"),
+                layout: &group1_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: heights_buffer.buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: watdisp_buffer.buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&cpu_tex.view) },
+                    wgpu::BindGroupEntry { binding: 3, resource: palette_buf.buffer.as_entire_binding() },
+                ],
+            });
+
+            let shader_source = include_str!("../shaders/landscape_cpu.wgsl");
+            let pipeline = create_pipeline(device, shader_source, &vertex_layouts, &[group0_layout, &group1_layout], surface_format, true, wgpu::PrimitiveTopology::TriangleList, "landscape_cpu");
+            self.program_container.add(LandscapeVariant { pipeline, bind_group_1 });
+        }
+
+        // CPU full texture variant
+        if self.config.cpu_full {
+            let land_texture = make_texture_land(level_res, None);
+            let size = (level_res.landscape.land_size() * 32) as u32;
+            let full_tex_data = draw_texture_u8(&level_res.params.palette, size as usize, &land_texture);
+
+            // draw_texture_u8 returns RGB data; need RGBA for wgpu
+            let rgba_data = rgb_to_rgba(&full_tex_data);
+            let full_tex = GpuTexture::new_2d(
+                device, &gpu.queue, size, size,
+                wgpu::TextureFormat::Rgba8Unorm, &rgba_data, "cpu_full_land_texture",
+            );
+            let sampler = GpuTexture::create_sampler(device, false);
+
+            let group1_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("landscape_full_group1"),
+                entries: &[
+                    make_storage_entry(0), // heights
+                    make_storage_entry(1), // watdisp
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+
+            let bind_group_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("landscape_full_bg1"),
+                layout: &group1_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: heights_buffer.buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: watdisp_buffer.buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&full_tex.view) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&sampler) },
+                ],
+            });
+
+            let shader_source = include_str!("../shaders/landscape_full.wgsl");
+            let pipeline = create_pipeline(device, shader_source, &vertex_layouts, &[group0_layout, &group1_layout], surface_format, true, wgpu::PrimitiveTopology::TriangleList, "landscape_full");
+            self.program_container.add(LandscapeVariant { pipeline, bind_group_1 });
+        }
+
+        // Main GPU landscape
+        {
+            let palette_packed = pack_palette_rgba(&level_res.params.palette);
+            let palette_bytes: &[u8] = bytemuck::cast_slice(&palette_packed);
+            let palette_buf = GpuBuffer::new_storage(device, palette_bytes, "main_palette_buffer");
+
+            let disp_vec: Vec<i32> = level_res.params.disp0.iter().map(|v| *v as i32).collect();
+            let disp_bytes: &[u8] = bytemuck::cast_slice(&disp_vec);
+            let disp_buf = GpuBuffer::new_storage(device, disp_bytes, "disp_buffer");
+
+            let bigf_vec: Vec<u32> = level_res.params.bigf0.iter().map(|v| *v as u32).collect();
+            let bigf_bytes: &[u8] = bytemuck::cast_slice(&bigf_vec);
+            let bigf_buf = GpuBuffer::new_storage(device, bigf_bytes, "bigf_buffer");
+
+            let sla_vec: Vec<u32> = level_res.params.static_landscape_array.iter().map(|v| *v as u32).collect();
+            let sla_bytes: &[u8] = bytemuck::cast_slice(&sla_vec);
+            let sla_buf = GpuBuffer::new_storage(device, sla_bytes, "sla_buffer");
+
+            let group1_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("landscape_main_group1"),
+                entries: &[
+                    make_storage_entry(0), // heights
+                    make_storage_entry(1), // watdisp
+                    make_storage_entry(2), // palette
+                    make_storage_entry(3), // disp
+                    make_storage_entry(4), // bigf
+                    make_storage_entry(5), // sla
+                ],
+            });
+
+            let bind_group_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("landscape_main_bg1"),
+                layout: &group1_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: heights_buffer.buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: watdisp_buffer.buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: palette_buf.buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: disp_buf.buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 4, resource: bigf_buf.buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 5, resource: sla_buf.buffer.as_entire_binding() },
+                ],
+            });
+
+            let shader_source = include_str!("../shaders/landscape.wgsl");
+            let pipeline = create_pipeline(device, shader_source, &vertex_layouts, &[group0_layout, &group1_layout], surface_format, true, wgpu::PrimitiveTopology::TriangleList, "landscape_main");
+            self.program_container.add(LandscapeVariant { pipeline, bind_group_1 });
+        }
+
+        // Gradient variant
+        {
+            let group1_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("landscape_grad_group1"),
+                entries: &[
+                    make_storage_entry(0), // heights
+                    make_storage_entry(1), // watdisp
+                ],
+            });
+
+            let bind_group_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("landscape_grad_bg1"),
+                layout: &group1_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: heights_buffer.buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: watdisp_buffer.buffer.as_entire_binding() },
+                ],
+            });
+
+            let shader_source = include_str!("../shaders/landscape_grad.wgsl");
+            let pipeline = create_pipeline(device, shader_source, &vertex_layouts, &[group0_layout, &group1_layout], surface_format, true, wgpu::PrimitiveTopology::TriangleList, "landscape_grad");
+            self.program_container.add(LandscapeVariant { pipeline, bind_group_1 });
+        }
+    }
+
+    fn render(&mut self) {
+        let gpu = self.gpu.as_ref().unwrap();
+
+        // Update uniforms
+        let mvp = MVP::new(&self.screen, &self.camera);
+        let mvp_m = mvp.projection * mvp.view * mvp.transform;
+        let mvp_raw: TransformRaw = mvp_m.into();
+        self.mvp_buffer.as_ref().unwrap().update(&gpu.queue, 0, bytemuck::bytes_of(&mvp_raw));
+
+        // Update model transform
+        if let Some(ref model_main) = self.model_main {
+            model_main.write_transform(&gpu.queue, &self.model_transform_buffer.as_ref().unwrap().buffer, 0);
+        }
+
+        // Update landscape params
+        let params = self.build_landscape_params();
+        self.landscape_params_buffer.as_ref().unwrap().update(&gpu.queue, 0, bytemuck::bytes_of(&params));
+
+        // Update selection uniform
+        #[repr(C)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+        struct ObjectParams { selected_frag: i32, num_colors: i32 }
+        let obj_params = ObjectParams { selected_frag: self.select_frag, num_colors: obj_colors().len() as i32 };
+        self.select_params_buffer.as_ref().unwrap().update(&gpu.queue, 0, bytemuck::bytes_of(&obj_params));
+
+        // Update select model vertex data
+        if let Some(ref model_select) = self.model_select {
+            model_select.write_transform(&gpu.queue, &self.model_transform_buffer.as_ref().unwrap().buffer, 0);
+        }
+
+        let output = match gpu.surface.get_current_texture() {
+            Ok(t) => t,
+            Err(wgpu::SurfaceError::Lost) => return,
+            Err(wgpu::SurfaceError::OutOfMemory) => panic!("Out of GPU memory"),
+            Err(e) => {
+                log::error!("Surface error: {:?}", e);
+                return;
+            }
+        };
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("render_encoder"),
+        });
+
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("render_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &gpu.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+
+            // Draw landscape
+            if let Some(variant) = self.program_container.current() {
+                render_pass.set_pipeline(&variant.pipeline);
+                render_pass.set_bind_group(0, self.landscape_group0_bind_group.as_ref().unwrap(), &[]);
+                render_pass.set_bind_group(1, &variant.bind_group_1, &[]);
+                if let Some(ref model_main) = self.model_main {
+                    model_main.draw(&mut render_pass);
+                }
+            }
+
+            // Draw selection lines
+            if let Some(ref select_pipeline) = self.select_pipeline {
+                render_pass.set_pipeline(select_pipeline);
+                render_pass.set_bind_group(0, self.objects_group0_bind_group.as_ref().unwrap(), &[]);
+                render_pass.set_bind_group(1, self.objects_group1_bind_group.as_ref().unwrap(), &[]);
+                if let Some(ref model_select) = self.model_select {
+                    model_select.draw(&mut render_pass);
+                }
+            }
+        }
+
+        gpu.queue.submit(std::iter::once(encoder.finish()));
+        output.present();
+    }
+}
+
+/// Pack palette from RGBA u8 slices into packed u32 for storage buffer.
+fn pack_palette_rgba(palette: &[u8]) -> Vec<u32> {
+    palette.chunks(4).map(|c| {
+        let r = c.get(0).copied().unwrap_or(0) as u32;
+        let g = c.get(1).copied().unwrap_or(0) as u32;
+        let b = c.get(2).copied().unwrap_or(0) as u32;
+        let a = c.get(3).copied().unwrap_or(0) as u32;
+        r | (g << 8) | (b << 16) | (a << 24)
+    }).collect()
+}
+
+/// Convert RGB byte data to RGBA byte data (adding alpha=255).
+fn rgb_to_rgba(rgb: &[u8]) -> Vec<u8> {
+    let pixel_count = rgb.len() / 3;
+    let mut rgba = Vec::with_capacity(pixel_count * 4);
+    for chunk in rgb.chunks(3) {
+        rgba.push(chunk[0]);
+        rgba.push(chunk[1]);
+        rgba.push(chunk[2]);
+        rgba.push(255);
+    }
+    rgba
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+
+        let window = Arc::new(
+            event_loop
+                .create_window(WindowAttributes::default().with_title("Faithful"))
+                .unwrap(),
+        );
+        self.window = Some(window.clone());
+
+        let gpu = pollster::block_on(GpuContext::new(window));
+        let device = &gpu.device;
+
+        let base = self.config.base.clone().unwrap_or_else(|| Path::new("/opt/sandbox/pop").to_path_buf());
+        let level_type = self.config.landtype.as_deref();
+        let level_res = LevelRes::new(&base, self.level_num, level_type);
+
+        self.landscape_mesh.set_heights(&level_res.landscape.height);
+
+        // Heights storage buffer
+        let landscape = level_res.landscape.make_shores();
+        let heights_vec = landscape.to_vec();
+        let heights_bytes: &[u8] = bytemuck::cast_slice(&heights_vec);
+        let heights_buffer = GpuBuffer::new_storage(device, heights_bytes, "heights_buffer");
+
+        // Watdisp storage buffer
+        let watdisp_vec: Vec<u32> = level_res.params.watdisp.iter().map(|v| *v as u32).collect();
+        let watdisp_bytes: &[u8] = bytemuck::cast_slice(&watdisp_vec);
+        let watdisp_buffer = GpuBuffer::new_storage(device, watdisp_bytes, "watdisp_buffer");
+
+        // Shared uniform buffers
+        let mvp_buffer = GpuBuffer::new_uniform(device, 64, "mvp_buffer");
+        let model_transform_buffer = GpuBuffer::new_uniform(device, 64, "model_transform_buffer");
+        let landscape_params_buffer = GpuBuffer::new_uniform_init(
+            device,
+            bytemuck::bytes_of(&self.build_landscape_params()),
+            "landscape_params_buffer",
+        );
+
+        // Landscape group 0 layout and bind group
+        let landscape_group0_layout = create_landscape_group0_layout(device);
+        let landscape_group0_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("landscape_group0_bg"),
+            layout: &landscape_group0_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: mvp_buffer.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: model_transform_buffer.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: landscape_params_buffer.buffer.as_entire_binding() },
+            ],
+        });
+
+        // Objects (selection lines) setup
+        let objects_group0_layout = create_objects_group0_layout(device);
+        let objects_group0_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("objects_group0_bg"),
+            layout: &objects_group0_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: mvp_buffer.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: model_transform_buffer.buffer.as_entire_binding() },
+            ],
+        });
+
+        // Objects group 1: params uniform + color storage
+        let objects_group1_layout = create_objects_group1_layout(device);
+
+        #[repr(C)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+        struct ObjectParams { selected_frag: i32, num_colors: i32 }
+
+        let colors = obj_colors();
+        let obj_params = ObjectParams { selected_frag: self.select_frag, num_colors: colors.len() as i32 };
+        let select_params_buffer = GpuBuffer::new_uniform_init(device, bytemuck::bytes_of(&obj_params), "select_params_buffer");
+
+        // Pack colors as vec4<u32> (RGBA, each channel widened to u32)
+        let color_data: Vec<[u32; 4]> = colors.iter().map(|c| {
+            [c.x as u32, c.y as u32, c.z as u32, 0u32]
+        }).collect();
+        let color_bytes: &[u8] = bytemuck::cast_slice(&color_data);
+        let color_buffer = GpuBuffer::new_storage(device, color_bytes, "obj_color_buffer");
+
+        let objects_group1_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("objects_group1_bg"),
+            layout: &objects_group1_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: select_params_buffer.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: color_buffer.buffer.as_entire_binding() },
+            ],
+        });
+
+        // Selection lines pipeline (LineList topology)
+        let select_shader_source = include_str!("../shaders/objects.wgsl");
+        let select_vertex_layouts = DefaultModel::vertex_buffer_layouts();
+        let select_pipeline = create_pipeline(
+            device, select_shader_source, &select_vertex_layouts,
+            &[&objects_group0_layout, &objects_group1_layout],
+            gpu.surface_format(), true,
+            wgpu::PrimitiveTopology::LineList,
+            "objects_pipeline",
+        );
+
+        // Landscape model
+        let model_main = make_landscape_model(device, &self.landscape_mesh);
+
+        // Selection model (2 vertices for a ray line)
+        let model_select = {
+            let mut model: DefaultModel = MeshModel::new();
+            model.push_vertex(Vector3::new(0.0, 0.0, 0.0));
+            model.push_vertex(Vector3::new(0.0, 0.0, 0.0));
+            let m = vec![(RenderType::Lines, model)];
+            ModelEnvelop::<DefaultModel>::new(device, m)
+        };
+
+        // Store everything
+        self.heights_buffer = Some(heights_buffer);
+        self.watdisp_buffer = Some(watdisp_buffer);
+        self.mvp_buffer = Some(mvp_buffer);
+        self.model_transform_buffer = Some(model_transform_buffer);
+        self.landscape_params_buffer = Some(landscape_params_buffer);
+        self.select_params_buffer = Some(select_params_buffer);
+        self.landscape_group0_layout = Some(landscape_group0_layout);
+        self.landscape_group0_bind_group = Some(landscape_group0_bind_group);
+        self.objects_group0_bind_group = Some(objects_group0_bind_group);
+        self.objects_group1_bind_group = Some(objects_group1_bind_group);
+        self.select_pipeline = Some(select_pipeline);
+        self.model_main = Some(model_main);
+        self.model_select = Some(model_select);
+
+        self.gpu = Some(gpu);
+
+        // Build landscape variants (needs self.gpu, heights_buffer, etc.)
+        let base2 = self.config.base.clone().unwrap_or_else(|| Path::new("/opt/sandbox/pop").to_path_buf());
+        let level_type2 = self.config.landtype.as_deref();
+        let level_res2 = LevelRes::new(&base2, self.level_num, level_type2);
+        self.rebuild_landscape_variants(&level_res2);
+
+        self.do_render = true;
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: winit::window::WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::Resized(physical_size) => {
+                self.screen.width = physical_size.width;
+                self.screen.height = physical_size.height;
+                if let Some(gpu) = self.gpu.as_mut() {
+                    gpu.resize(physical_size);
+                }
+                self.do_render = true;
+            },
+            WindowEvent::CursorMoved { position, .. } => {
+                self.mouse_pos = Point2::<f32>::new(position.x as f32, position.y as f32);
+            },
+            WindowEvent::MouseInput { state, .. } => {
+                if state == ElementState::Pressed {
+                    let (v1, v2) = screen_to_scene(&self.screen, &self.camera, &self.mouse_pos);
+                    if let Some(ref mut model_select) = self.model_select {
+                        if let Some(m) = model_select.get(0) {
+                            m.model.set_vertex(0, v1);
+                            m.model.set_vertex(1, v2);
+                        }
+                        model_select.update_model_buffers(&self.gpu.as_ref().unwrap().device, 0);
+                    }
+
+                    let mvp_transform = self.model_main.as_mut()
+                        .and_then(|mm| mm.get(0))
+                        .map(|m| m.transform())
+                        .unwrap_or(Matrix4::identity());
+                    let iter = self.landscape_mesh.iter();
+                    match intersect_iter(iter, &mvp_transform, v1, v2) {
+                        Some((n, _)) => self.select_frag = n as i32,
+                        None => self.select_frag = -1,
+                    }
+                    self.do_render = true;
+                }
+            },
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::KeyboardInput { event, .. } => {
+                if event.state == ElementState::Pressed {
+                    if let PhysicalKey::Code(key) = event.physical_key {
+                        match key {
+                            KeyCode::KeyQ => {
+                                event_loop.exit();
+                                return;
+                            },
+                            KeyCode::KeyR => {
+                                self.camera.angle_x = 0;
+                                self.camera.angle_y = 0;
+                                self.camera.angle_z = 0;
+                                self.camera.pos = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
+                            },
+                            KeyCode::KeyT => {
+                                self.camera.angle_x = -90;
+                            },
+                            KeyCode::KeyN => {
+                                self.program_container.next();
+                            },
+                            KeyCode::KeyM => {
+                                self.program_container.prev();
+                            },
+                            KeyCode::KeyB => {
+                                self.level_num = (self.level_num + 1) % 26;
+                                if self.level_num == 0 { self.level_num = 1; }
+                                self.update_level();
+                            },
+                            KeyCode::KeyV => {
+                                self.level_num = if self.level_num == 1 { 25 } else { self.level_num - 1 };
+                                self.update_level();
+                            },
+                            KeyCode::KeyL => {
+                                self.landscape_mesh.shift_y(1);
+                            },
+                            KeyCode::KeyH => {
+                                self.landscape_mesh.shift_y(-1);
+                            },
+                            KeyCode::KeyJ => {
+                                self.landscape_mesh.shift_x(1);
+                            },
+                            KeyCode::KeyK => {
+                                self.landscape_mesh.shift_x(-1);
+                            },
+                            KeyCode::KeyY => {
+                                self.sunlight.x -= 1.0;
+                                self.sunlight.y -= 1.0;
+                                log::debug!("sunlight = {:?}", self.sunlight);
+                            },
+                            KeyCode::KeyZ => {
+                                self.wat_offset += 1;
+                            },
+                            _ => {
+                                let mut pos: Vector3<f32> = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
+                                self.mode.process_key(key, &mut self.camera, &mut pos);
+                                if pos.z != 0.0 {
+                                    let (mut v1, mut v2) = camera_dir_to_scene(&self.screen, &self.camera);
+                                    v1.z = 0.0;
+                                    v2.z = 0.0;
+                                    self.camera.pos += pos.z * (v2 - v1);
+                                }
+                            },
+                        }
+                        self.do_render = true;
+                    }
+                }
+            },
+            WindowEvent::RedrawRequested => {
+                if self.do_render && self.gpu.is_some() {
+                    self.render();
+                    self.do_render = false;
+                }
+            },
+            _ => (),
+        }
+        if self.do_render {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+    }
+}
+
+/******************************************************************************/
+
+fn parse_light(s: &str) -> Option<(i16, i16)> {
+    let parts: Vec<&str> = s.split(';').collect();
+    if parts.len() != 2 { return None; }
+    Some((parts[0].parse().ok()?, parts[1].parse().ok()?))
 }
 
 fn cli() -> Command {
@@ -589,298 +1046,30 @@ fn cli() -> Command {
             .help("Enable debug printing"),
     ];
     Command::new("faithful")
-        .about("POP3 opengl renderer")
+        .about("POP3 wgpu renderer")
         .args(&args)
 }
 
-fn get_config() -> AppConfig {
+fn main() {
     let matches = cli().get_matches();
 
-    let base = matches.get_one("base").cloned();
-    let level = matches.get_one("level").copied();
-    let landtype = matches.get_one("landtype").cloned();
-    let cpu = matches.get_flag("cpu");
-    let cpu_full = matches.get_flag("cpu-full");
-    let debug = matches.get_flag("debug");
-    let light = matches.get_one::<String>("light").and_then(|s| parse_light(s));
-
-    AppConfig{base, level, landtype, cpu, cpu_full, debug, light}
-}
-
-fn init_logger(app_config: &AppConfig) {
-    let log_level: &str = if app_config.debug {
-        "debug"
-    } else {
-        "info"
+    let config = AppConfig {
+        base: matches.get_one("base").cloned(),
+        level: matches.get_one("level").copied(),
+        landtype: matches.get_one("landtype").cloned(),
+        cpu: matches.get_flag("cpu"),
+        cpu_full: matches.get_flag("cpu-full"),
+        debug: matches.get_flag("debug"),
+        light: matches.get_one::<String>("light").and_then(|s| parse_light(s)),
     };
+
+    let log_level: &str = if config.debug { "debug" } else { "info" };
     let env = env_logger::Env::default()
         .filter_or("F_LOG_LEVEL", log_level)
         .write_style_or("F_LOG_STYLE", "always");
     env_logger::init_from_env(env);
-}
 
-fn main() {
-    let app_config = get_config();
-
-    init_logger(&app_config);
-
-    let el = EventLoop::new();
-    let wb = WindowBuilder::new().with_title("Faithful");
-
-    let windowed_context = ContextBuilder::new().build_windowed(wb, &el).unwrap();
-    let windowed_context = unsafe { windowed_context.make_current().unwrap() };
-
-    log::debug!("Pixel format of the window's GL context: {:?}", windowed_context.get_pixel_format());
-    let mut level_num = app_config.level.unwrap_or(1);
-    let base = app_config.base.unwrap_or_else(|| Path::new("/opt/sandbox/pop").to_path_buf());
-
-    let level_res = {
-        let level_type = app_config.landtype.as_deref();
-        RefCell::new(LevelRes::new(&base, level_num, level_type))
-    };
-
-    let mut landscape_mesh: LandscapeMeshS = {
-        //note(): in original game landscape tile has proportions 256 * 256 * 1024
-        let mut landscape_mesh = LandscapeMesh::new(1.0/16.0, (1.0/16.0) * 4.0 / 1024.0);
-        let lr = &level_res.borrow_mut();
-        landscape_mesh.set_heights(&lr.landscape.height);
-        landscape_mesh
-    };
-
-    //GL
-    let gl = new_gl_ctx(windowed_context.context());
-
-    let uniforms = LevelUniforms {
-        mvp: GlUniform1::new_rc(Matrix4::<f32>::identity()),
-        mvp_model: GlUniform1::new_rc(Matrix4::<f32>::identity()),
-        land_step: GlUniform1::new_rc(landscape_mesh.step()),
-        land_width: GlUniform1::new_rc(landscape_mesh.width() as i32),
-        selected: GlUniform1::new_rc(0),
-        selected_color: GlUniform1::new_rc(Vector4::<f32>::new(1.0, 0.0, 0.0, 0.0)),
-        level_shift: GlUniform1::new_rc(landscape_mesh.get_shift_vector()),
-        height_scale: GlUniform1::new_rc(landscape_mesh.height_scale()),
-        sunlight: GlUniform1::new_rc({
-            let (x, y) = app_config.light.unwrap_or((0x93, 0x93));
-            Vector4::<f32>::new(x as f32, y as f32, 0x93 as f32, 0.0)
-        }),
-        wat_offset: GlUniform1::new_rc(-1),
-    };
-
-    let mut heights_buffer = {
-        let mut heights_buffer = GlShaderStorage::new(&gl, 4 * 128 * 128, 9).unwrap();
-        let landscape = level_res.borrow_mut().landscape.make_shores();
-        let vec = landscape.to_vec();
-        heights_buffer.update(0, &vec).unwrap();
-        heights_buffer
-    };
-
-    let _watdisp_buffer = {
-        let mut watdisp_buffer = GlShaderStorage::new(&gl, 4 * 256 * 256, 22).unwrap();
-        let vec = level_res.borrow_mut().params.watdisp.iter().map(|v| *v as u32).collect::<Vec<u32>>();
-        watdisp_buffer.update(0, &vec).unwrap();
-        watdisp_buffer
-    };
-
-    //
-    let mut program_select = {
-        let mut program = GlProgram::new(&gl);
-        let loader = GlShaderLoaderBinary {};
-        GlShader::attach_from_file("vert", Path::new("shaders/objects.vert.spv"), &mut program, &loader, GL_VERTEX_SHADER);
-        GlShader::attach_from_file("frag", Path::new("shaders/objects.frag.spv"), &mut program, &loader, GL_FRAGMENT_SHADER);
-        program
-    };
-    program_select.use_program();
-    let _obj_palette = {
-        let params = TextureParams{target: GL_TEXTURE_1D, internal_format: GL_RGB8UI, format: GL_RGB_INTEGER, data_type: GL_UNSIGNED_BYTE, nearest: true};
-        let uniform = Some(0);
-        let color_textures = obj_colors();
-        let width = color_textures.len();
-        GlTexture::new_1d(&gl, uniform, &params, width, color_textures.as_slice())
-    }.unwrap();
-
-    program_select.set_uniform(0, uniforms.mvp.clone());
-    program_select.set_uniform(1, uniforms.mvp_model.clone());
-    program_select.set_uniform(2, uniforms.selected.clone());
-    //
-
-    let mut program_container = LandscapeProgramContainer::new();
-    if app_config.cpu {
-        program_container.add_program(CpuLandscapeProgram::new_rc_ref(&gl, &level_res.borrow_mut(), &uniforms));
-    }
-
-    if app_config.cpu_full {
-        program_container.add_program(CpuFullLandscapeProgram::new_rc_ref(&gl, &level_res.borrow_mut(), &uniforms));
-    }
-    program_container.add_program(MainLandscapeProgram::new_rc_ref(&gl, &level_res.borrow_mut(), &uniforms));
-    program_container.add_program(GradLandscapeProgram::new_rc_ref(&gl, &uniforms));
-
-
-    let model_main = make_landscape_mode(&gl, &uniforms, &landscape_mesh);
-
-    let model_select = {
-        let mut model: DefaultModel = MeshModel::new();
-        model.push_vertex(Vector3::new(0.0, 0.0, 0.0));
-        model.push_vertex(Vector3::new(0.0, 0.0, 0.0));
-        let m = vec![(RenderType::Lines, model)];
-        ModelEnvelop::<DefaultModel>::new(&gl, &uniforms.mvp_model, m)
-    };
-
-    let mut scene = Scene {
-        model_main,
-        model_select,
-        select_frag: -1,
-    };
-
-    let mut camera = Camera::new();
-    camera.angle_x = -75;
-    camera.angle_z = 60;
-    let mut screen = Screen {width: 800, height: 600};
-
-    let mut do_render = true;
-    let mut mouse_pos = Point2::<f32>::new(0.0, 0.0);
-    let mut mode = ActionMode::GlobalMoveRot;
-    el.run(move |event, _, control_flow| {
-        log::trace!("{:?}", event);
-        *control_flow = ControlFlow::Wait;
-
-        match event {
-            Event::LoopDestroyed => (),
-            Event::WindowEvent { event, .. } => match event {
-                WindowEvent::CursorMoved { position, .. } => {
-                    mouse_pos = Point2::<f32>::new(position.x as f32, position.y as f32);
-                },
-                WindowEvent::MouseInput { state, .. } => {
-                    if state == ElementState::Pressed {
-                        let (v1, v2) = screen_to_scene(&screen, &camera, &mouse_pos);
-                        if let Some(m) = scene.model_select.get(0) {
-                            m.model.set_vertex(0, v1);
-                            m.model.set_vertex(1, v2);
-                        }
-
-                        let mvp = scene.model_main.get(0).map(|m| m.transform()).unwrap();
-                        let iter = landscape_mesh.iter();
-                        match intersect_iter(iter, &mvp, v1, v2) {
-                            Some((n, _)) => scene.select_frag = n as i32,
-                            None => scene.select_frag = -1,
-                        }
-                        do_render = true;
-                    }
-                },
-                WindowEvent::Resized(physical_size) => {
-                    screen.width = physical_size.width;
-                    screen.height = physical_size.height;
-                    do_render = true;
-                    windowed_context.resize(physical_size);
-                },
-                WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
-                WindowEvent::KeyboardInput { input, .. } => match input {
-                    KI { state: ElementState::Pressed, virtual_keycode: Some(VKC::R), .. } => {
-                        camera.angle_x = 0;
-                        camera.angle_y = 0;
-                        camera.angle_z = 0;
-                        camera.pos = Vector3{x: 0.0, y: 0.0, z: 0.0};
-                        do_render = true;
-                    },
-                    KI { state: ElementState::Pressed, virtual_keycode: Some(VKC::T), .. } => {
-                        camera.angle_x = -90;
-                        do_render = true;
-                    },
-                    KI { state: ElementState::Pressed, virtual_keycode: Some(VKC::Q), .. } => {
-                        *control_flow = ControlFlow::Exit
-                    },
-                    KI { state: ElementState::Pressed, virtual_keycode: Some(VKC::N), .. } => {
-                        program_container.next();
-                        do_render = true;
-                    },
-                    KI { state: ElementState::Pressed, virtual_keycode: Some(VKC::M), .. } => {
-                        program_container.prev();
-                        do_render = true;
-                    },
-                    KI { state: ElementState::Pressed, virtual_keycode: Some(VKC::B), .. } => {
-                        level_num = (level_num + 1) % 26;
-                        if level_num == 0 {
-                            level_num = 1;
-                        }
-                        update_level(&base, level_num, &mut landscape_mesh, &mut program_container, &mut heights_buffer);
-                        do_render = true;
-                    },
-                    KI { state: ElementState::Pressed, virtual_keycode: Some(VKC::V), .. } => {
-                        level_num = if level_num == 1 { 25 } else { level_num - 1 };
-                        update_level(&base, level_num, &mut landscape_mesh, &mut program_container, &mut heights_buffer);
-                        do_render = true;
-                    },
-                    KI { state: ElementState::Pressed, virtual_keycode: Some(VKC::L), .. } => {
-                        landscape_mesh.shift_y(1);
-                        uniforms.level_shift.borrow_mut().set(landscape_mesh.get_shift_vector());
-                        do_render = true;
-                    },
-                    KI { state: ElementState::Pressed, virtual_keycode: Some(VKC::H), .. } => {
-                        landscape_mesh.shift_y(-1);
-                        uniforms.level_shift.borrow_mut().set(landscape_mesh.get_shift_vector());
-                        do_render = true;
-                    },
-                    KI { state: ElementState::Pressed, virtual_keycode: Some(VKC::J), .. } => {
-                        landscape_mesh.shift_x(1);
-                        uniforms.level_shift.borrow_mut().set(landscape_mesh.get_shift_vector());
-                        do_render = true;
-                    },
-                    KI { state: ElementState::Pressed, virtual_keycode: Some(VKC::K), .. } => {
-                        landscape_mesh.shift_x(-1);
-                        uniforms.level_shift.borrow_mut().set(landscape_mesh.get_shift_vector());
-                        do_render = true;
-                    },
-                    KI { state: ElementState::Pressed, virtual_keycode: Some(VKC::Y), .. } => {
-                        let mut sunlight = uniforms.sunlight.borrow_mut();
-                        let mut v = *sunlight.get();
-                        v.x -= 1.0;
-                        v.y -= 1.0;
-                        log::debug!("V = {:?}", v);
-                        sunlight.set(v);
-                        do_render = true;
-                    },
-                    KI { state: ElementState::Pressed, virtual_keycode: Some(VKC::Z), .. } => {
-                        do_render = true;
-                        let mut wat_offset = uniforms.wat_offset.borrow_mut();
-                        let mut v = *wat_offset.get();
-                        v += 1;
-                        wat_offset.set(v);
-                    },
-                    KI { state: ElementState::Pressed, virtual_keycode: Some(key), .. } => {
-                        let mut pos: Vector3<f32> = Vector3{x: 0.0, y: 0.0, z: 0.0};
-                        do_render = mode.process_key(key, &mut camera, &mut pos);
-                        if pos.z != 0.0 {
-                            let (mut v1, mut v2) = camera_dir_to_scene(&screen, &camera);
-                            v1.z = 0.0;
-                            v2.z = 0.0;
-                            camera.pos += pos.z * (v2 - v1);
-                            do_render = true;
-                        }
-                    },
-                    _ => (),
-                },
-                _ => (),
-            },
-            Event::RedrawRequested(_) => {
-                do_render = true;
-                windowed_context.swap_buffers().unwrap();
-            }
-            _ => (),
-        }
-        if do_render {
-            {
-                scene.model_select.update_model(0);
-                let mvp = MVP::new(&screen, &camera);
-                let mvp_m = mvp.projection * mvp.view * mvp.transform;
-                uniforms.mvp.borrow_mut().set(mvp_m);
-                uniforms.selected.borrow_mut().set(scene.select_frag);
-            }
-            if let Some(p) = program_container.get_program() {
-                render(&gl, p.borrow_mut().gl_program(), &program_select, &scene);
-            } else {
-                panic!("No program to render");
-            }
-            windowed_context.swap_buffers().unwrap();
-            do_render = false;
-        }
-    });
+    let event_loop = EventLoop::new().unwrap();
+    let mut app = App::new(config);
+    event_loop.run_app(&mut app).unwrap();
 }
