@@ -130,4 +130,4 @@ docs/               Documentation and reverse engineering notes
 
 ## Reverse engineering
 
-Reverse engineering notes for the original game binary are available in [docs/RE_NOTES.md](docs/RE_NOTES.md).
+Reverse engineering notes for the original game binary are available in [docs/specs/](docs/specs/index.md).

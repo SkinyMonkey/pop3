@@ -125,7 +125,7 @@ impl AnimationElement {
     }
 
     pub fn is_hidden(&self) -> bool {
-        self.flags == 0x4
+        false
     }
 
     pub fn is_common(&self) -> bool {
@@ -133,7 +133,7 @@ impl AnimationElement {
     }
 
     pub fn is_tribe_specific(&self) -> bool {
-        self.uvar5 == 0x1 && self.flags == 0x10
+        self.uvar5 == 1
     }
 
     pub fn is_type_specific(&self) -> bool {
@@ -156,7 +156,7 @@ impl AnimationElement {
         while vele_index != 0 {
             let vele_sprite = &vele[vele_index];
             sprites.push(AnimationElement{
-                sprite_index: vele_sprite.sprite_index as usize / 6,
+                sprite_index: (vele_sprite.sprite_index as usize / 6).saturating_sub(1),
                 coord_x: vele_sprite.coord_x,
                 coord_y: vele_sprite.coord_y,
                 tribe: (vele_sprite.flags >> 9) as u8,
