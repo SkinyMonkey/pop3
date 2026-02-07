@@ -3,6 +3,10 @@ use std::io::Read;
 use core::mem::size_of;
 use core::slice::Iter;
 
+use cgmath::{Vector2, Vector3};
+
+use crate::model::{MeshModel, VertexModel};
+use crate::tex_model::{TexModel, TexVertex};
 use crate::pop::types::{BinDeserializer, from_reader};
 use crate::pop::level::ObjectPaths;
 
@@ -200,6 +204,26 @@ impl Object3D {
         Self::create_objects(&objects, &faces, &points)
     }
 
+    /// Like `create_objects` but preserves file indices: returns `None` for
+    /// objects with no faces instead of dropping them.
+    pub fn create_objects_all(objects: &[ObjectRaw], faces: &[FaceRaw], points: &[PointRaw]) -> Vec<Option<Self>> {
+        objects.iter().map(|object| {
+            if object.facs_num > 0 {
+                Some(Self::create(object, faces, points))
+            } else {
+                None
+            }
+        }).collect()
+    }
+
+    pub fn from_file_all(base: &Path, bank_num: &str) -> Vec<Option<Self>> {
+        let paths = ObjectPaths::from_default_dir(base, bank_num);
+        let objects = ObjectRaw::from_file_vec(&paths.objs0_dat);
+        let points = PointRaw::from_file_vec(&paths.pnts0);
+        let faces = FaceRaw::from_file_vec(&paths.facs0);
+        Self::create_objects_all(&objects, &faces, &points)
+    }
+
     pub fn iter_face(&self) -> FaceIter<Iter<FaceRaw>> {
         FaceIter{iter: self.faces.iter(), points: &self.points}
     }
@@ -235,4 +259,31 @@ impl<'a, I> Iterator for FaceIter<'a, I> where I: Iterator<Item = &'a FaceRaw> {
             None => None,
         }
     }
+}
+
+/******************************************************************************/
+
+pub fn mk_tex_vertex(tex_index: i16, v: &Vertex) -> TexVertex {
+    TexVertex{coord: Vector3::new(v.x, v.y, v.z)
+             , uv: Vector2::new(v.u, v.v)
+             , tex_id: tex_index}
+}
+
+pub fn mk_pop_object(object: &Object3D) -> TexModel {
+    let mut model: TexModel = MeshModel::new();
+    for face in object.iter_face() {
+        if face.vertex_num == 3 {
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[0]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[1]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[2]));
+        } else {
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[0]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[1]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[2]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[2]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[3]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[0]));
+        }
+    }
+    model
 }

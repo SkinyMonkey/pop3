@@ -9,14 +9,13 @@ use winit::window::{Window, WindowAttributes};
 
 use clap::{Arg, ArgAction, Command};
 
-use cgmath::{Vector2, Vector3};
+use cgmath::Vector3;
 
-use faithful::model::{VertexModel, MeshModel};
-use faithful::tex_model::{TexModel, TexVertex};
+use faithful::tex_model::TexModel;
 use faithful::view::*;
 
 use faithful::pop::level::{LevelPaths, GlobeTextureParams};
-use faithful::pop::objects::{Object3D, Vertex};
+use faithful::pop::objects::{Object3D, mk_pop_object};
 use faithful::pop::bl320::make_bl320_texture_rgba;
 
 use faithful::gpu::context::GpuContext;
@@ -26,33 +25,6 @@ use faithful::gpu::texture::GpuTexture;
 use faithful::envelop::*;
 
 /******************************************************************************/
-
-fn mk_tex_vertex(tex_index: i16, v: &Vertex) -> TexVertex {
-    TexVertex{coord: Vector3::new(v.x, v.y, v.z)
-             , uv: Vector2::new(v.u, v.v)
-             , tex_id: tex_index}
-}
-
-fn mk_pop_object(object: &Object3D) -> TexModel {
-    let mut model: TexModel = MeshModel::new();
-    for face in object.iter_face() {
-        if face.vertex_num == 3 {
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[0]));
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[1]));
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[2]));
-        } else {
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[0]));
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[1]));
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[2]));
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[2]));
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[3]));
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[0]));
-        }
-    }
-    log::debug!("POP object mesh - vertices={:?}, indices={:?}"
-                , model.vertices.len(), model.indices.len());
-    model
-}
 
 fn mk_pop_envelope(device: &wgpu::Device, object: &Object3D) -> ModelEnvelop<TexModel> {
     let model = mk_pop_object(object);

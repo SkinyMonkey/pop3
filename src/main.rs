@@ -27,7 +27,9 @@ use faithful::intersect::intersect_iter;
 
 use faithful::landscape::{LandscapeMesh, LandscapeModel};
 use faithful::pop::level::LevelRes;
-use faithful::pop::units::ModelType;
+use faithful::pop::units::{ModelType, building_obj_index};
+use faithful::pop::objects::{Object3D, mk_pop_object};
+use faithful::pop::bl320::make_bl320_texture_rgba;
 use faithful::pop::landscape::{make_texture_land, draw_texture_u8};
 
 use faithful::gpu::context::GpuContext;
@@ -482,6 +484,11 @@ fn build_object_markers(
     let up = Vector3::new(view.x.y, view.y.y, view.z.y);
 
     for obj in objects {
+        // Skip buildings — they are rendered as 3D meshes
+        if obj.model_type == ModelType::Building {
+            continue;
+        }
+
         let vis_x = ((obj.cell_x - shift.x as f32) % w + w) % w;
         let vis_y = ((obj.cell_y - shift.y as f32) % w + w) % w;
         let gx = vis_x * step;
@@ -497,7 +504,6 @@ fn build_object_markers(
         let z_base = gz - curvature_offset + 0.005;
 
         let (half_w, sprite_h) = match obj.model_type {
-            ModelType::Building => (step * 0.4, step * 0.3),
             ModelType::Person   => (step * 0.15, step * 0.4),
             ModelType::Scenery  => (step * 0.2, step * 0.25),
             _                   => (step * 0.2, step * 0.3),
@@ -523,6 +529,66 @@ fn build_object_markers(
     }
     let m = vec![(RenderType::Triangles, model)];
     ModelEnvelop::<ColorModel>::new(device, m)
+}
+
+fn build_building_meshes(
+    device: &wgpu::Device, objects: &[LevelObject], objects_3d: &[Option<Object3D>],
+    landscape: &LandscapeMesh<128>, curvature_scale: f32,
+) -> ModelEnvelop<TexModel> {
+    let mut combined: TexModel = MeshModel::new();
+    let step = landscape.step();
+    let height_scale = landscape.height_scale();
+    let w = landscape.width() as f32;
+    let shift = landscape.get_shift_vector();
+    let center = (w - 1.0) * step / 2.0;
+
+    for obj in objects {
+        if obj.model_type != ModelType::Building {
+            continue;
+        }
+        let obj3d = match building_obj_index(obj.subtype, obj.tribe_index) {
+            Some(i) if i < objects_3d.len() => match &objects_3d[i] {
+                Some(o) => o,
+                None => continue,
+            },
+            _ => continue,
+        };
+
+        let local_model = mk_pop_object(obj3d);
+        let scale = step * (obj3d.coord_scale() / 300.0) * 0.5;
+
+        let vis_x = ((obj.cell_x - shift.x as f32) % w + w) % w;
+        let vis_y = ((obj.cell_y - shift.y as f32) % w + w) % w;
+        let gx = vis_x * step;
+        let gy = vis_y * step;
+
+        let ix = (obj.cell_x as usize).min(127);
+        let iy = (obj.cell_y as usize).min(127);
+        let gz = landscape.height_at(ix, iy) as f32 * height_scale;
+
+        let dx = gx - center;
+        let dy = gy - center;
+        let curvature_offset = (dx * dx + dy * dy) * curvature_scale;
+        let z_base = gz - curvature_offset;
+
+        let base_idx = combined.vertices.len() as u16;
+        for v in &local_model.vertices {
+            combined.push_vertex(TexVertex {
+                coord: Vector3::new(
+                    gx + v.coord.x * scale,
+                    gy + v.coord.z * scale,
+                    z_base - v.coord.y * scale,
+                ),
+                uv: v.uv,
+                tex_id: v.tex_id,
+            });
+        }
+        for &idx16 in &local_model.indices {
+            combined.indices.push(base_idx + idx16);
+        }
+    }
+    let m = vec![(RenderType::Triangles, combined)];
+    ModelEnvelop::<TexModel>::new(device, m)
 }
 
 /******************************************************************************/
@@ -985,6 +1051,12 @@ struct App {
     level_objects: Vec<LevelObject>,
     show_objects: bool,
 
+    // 3D building meshes
+    objects_3d: Vec<Option<Object3D>>,
+    building_pipeline: Option<wgpu::RenderPipeline>,
+    building_bind_group_1: Option<wgpu::BindGroup>,
+    model_buildings: Option<ModelEnvelop<TexModel>>,
+
     // Overlay text
     overlay_pipeline: Option<wgpu::RenderPipeline>,
     overlay_bind_group: Option<wgpu::BindGroup>,
@@ -1079,6 +1151,10 @@ impl App {
             model_objects: None,
             level_objects: Vec::new(),
             show_objects: true,
+            objects_3d: Vec::new(),
+            building_pipeline: None,
+            building_bind_group_1: None,
+            model_buildings: None,
             overlay_pipeline: None,
             overlay_bind_group: None,
             overlay_vertex_buffer: None,
@@ -1359,6 +1435,10 @@ impl App {
             self.model_objects = Some(build_object_markers(
                 &gpu.device, &self.level_objects, &self.landscape_mesh, cs,
                 self.camera.angle_x, self.camera.angle_z,
+            ));
+            self.model_buildings = Some(build_building_meshes(
+                &gpu.device, &self.level_objects, &self.objects_3d,
+                &self.landscape_mesh, cs,
             ));
         }
     }
@@ -1660,7 +1740,21 @@ impl App {
                 }
             }
 
-            // Draw level object markers
+            // Draw 3D building meshes
+            if self.show_objects {
+                if let (Some(ref pipeline), Some(ref bg1)) =
+                    (&self.building_pipeline, &self.building_bind_group_1)
+                {
+                    render_pass.set_pipeline(pipeline);
+                    render_pass.set_bind_group(0, self.objects_group0_bind_group.as_ref().unwrap(), &[]);
+                    render_pass.set_bind_group(1, bg1, &[]);
+                    if let Some(ref model) = self.model_buildings {
+                        model.draw(&mut render_pass);
+                    }
+                }
+            }
+
+            // Draw level object markers (non-building objects)
             if self.show_objects {
                 if let Some(ref marker_pipeline) = self.objects_marker_pipeline {
                     render_pass.set_pipeline(marker_pipeline);
@@ -1927,6 +2021,52 @@ impl ApplicationHandler for App {
             None
         };
 
+        // Load 3D objects (bank "0") and BL320 texture atlas for building meshes
+        let objects_3d = Object3D::from_file_all(&base, "0");
+
+        let (bl320_w, bl320_h, mut bl320_data) = make_bl320_texture_rgba(
+            &level_res.paths.bl320, &level_res.params.palette);
+
+        // Mark transparent pixels (palette index 0) with alpha=255 so the shader
+        // can discard them via `if (color.w > 0.0) { discard; }`.
+        let key_r = level_res.params.palette[0];
+        let key_g = level_res.params.palette[1];
+        let key_b = level_res.params.palette[2];
+        for pixel in bl320_data.chunks_exact_mut(4) {
+            if pixel[0] == key_r && pixel[1] == key_g && pixel[2] == key_b && pixel[3] == 0 {
+                pixel[3] = 255;
+            }
+        }
+
+        let bl320_gpu_tex = GpuTexture::new_2d(
+            device, &gpu.queue,
+            bl320_w as u32, bl320_h as u32,
+            wgpu::TextureFormat::Rgba8Unorm,
+            &bl320_data,
+            "bl320_texture",
+        );
+        let bl320_sampler = GpuTexture::create_sampler(device, false);
+
+        let building_bind_group_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("building_bg1"),
+            layout: &sprite_group1_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&bl320_gpu_tex.view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&bl320_sampler) },
+            ],
+        });
+
+        // Building pipeline (reuses objects_tex.wgsl shader, TexModel vertex layout)
+        let building_shader_source = include_str!("../shaders/objects_tex.wgsl");
+        let building_vertex_layouts = TexModel::vertex_buffer_layouts();
+        let building_pipeline = create_pipeline(
+            device, building_shader_source, &building_vertex_layouts,
+            &[&objects_group0_layout, &sprite_group1_layout],
+            gpu.surface_format(), true,
+            wgpu::PrimitiveTopology::TriangleList,
+            "building_pipeline",
+        );
+
         // Empty spawn model (will be populated when level loads)
         let model_spawn = {
             let model: TexModel = MeshModel::new();
@@ -2048,6 +2188,9 @@ impl ApplicationHandler for App {
         self.sprite_texture = sprite_texture;
         self.shaman_atlas_info = shaman_atlas_info;
         self.objects_marker_pipeline = Some(objects_marker_pipeline);
+        self.objects_3d = objects_3d;
+        self.building_pipeline = Some(building_pipeline);
+        self.building_bind_group_1 = Some(building_bind_group_1);
         self.model_spawn = Some(model_spawn);
         self.model_main = Some(model_main);
         self.model_select = Some(model_select);

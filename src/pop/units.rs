@@ -89,3 +89,29 @@ impl BinDeserializer for TribeConfigRaw {
 }
 
 /******************************************************************************/
+
+/// Returns the OBJS object index for a completed building.
+/// tribe_index: 0-3 (Blue, Red, Yellow, Green)
+pub fn building_obj_index(subtype: u8, tribe_index: u8) -> Option<usize> {
+    let tribe = tribe_index.min(3) as usize;
+    match subtype {
+        1  => Some(107 + tribe * 3),     // Small Hut (variant 0)
+        2  => Some(108 + tribe * 3),     // Medium Hut (variant 0)
+        3  => Some(109 + tribe * 3),     // Large Hut (variant 0)
+        4  => Some(79 + tribe),          // Drum Tower
+        5  => Some(95 + tribe),          // Temple
+        6  => Some(91 + tribe),          // Spy Training
+        7  => Some(103 + tribe),         // Warrior Training
+        8  => Some(99 + tribe),          // FW Training
+        9  => Some(0),                   // Boat Hut (Airship)
+        11 => Some(6),                   // Boat Hut (Boat)
+        13 => Some(83 + tribe),          // Guard Tower
+        15 => Some(87 + tribe),          // Prison
+        17 => Some(7),                   // Wall
+        18 => Some(152),                 // Gate
+        19 => Some(156),                 // Vault of Knowledge
+        _  => None,
+    }
+}
+
+/******************************************************************************/
