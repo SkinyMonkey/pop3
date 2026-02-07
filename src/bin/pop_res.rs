@@ -7,21 +7,21 @@ use std::collections::HashSet;
 use image::{RgbImage, RgbaImage, Rgb, GrayImage, ImageFormat, ImageOutputFormat, ImageBuffer, DynamicImage};
 use clap::{arg, Arg, ArgAction, Command};
 
-use faithful::pop::level::{GlobeTextureParams, LevelPaths, LevelRes, ObjectPaths, read_pal};
-use faithful::pop::psfb::ContainerPSFB;
-use faithful::pop::landscape::common::{LandPos, LandscapeFull};
-use faithful::pop::landscape::minimap::texture_minimap;
-use faithful::pop::landscape::globe::texture_globe;
-use faithful::pop::landscape::land::texture_land;
-use faithful::pop::landscape::disp::texture_bigf0;
-use faithful::pop::landscape::water::texture_water;
-use faithful::pop::pls::decode;
-use faithful::pop::bl320::{read_bl320, read_bl160};
-use faithful::pop::types::{BinDeserializer, Image, AllocatorIter, ULCentreComposer, URCentreComposer, LayeredStorageSource, LayerComposer};
-use faithful::pop::types::{ImageInfo, ImageArea};
-use faithful::pop::types::{image_allocator_1d_horizontal, image_allocator_1d_vertical, image_allocator_2d};
-use faithful::pop::objects::{ObjectRaw, Shape, PointRaw, FaceRaw};
-use faithful::pop::animation::{AnimationsData, AnimationSequence, AnimationFrame};
+use pop3::pop::level::{GlobeTextureParams, LevelPaths, LevelRes, ObjectPaths, read_pal};
+use pop3::pop::psfb::ContainerPSFB;
+use pop3::pop::landscape::common::{LandPos, LandscapeFull};
+use pop3::pop::landscape::minimap::texture_minimap;
+use pop3::pop::landscape::globe::texture_globe;
+use pop3::pop::landscape::land::texture_land;
+use pop3::pop::landscape::disp::texture_bigf0;
+use pop3::pop::landscape::water::texture_water;
+use pop3::pop::pls::decode;
+use pop3::pop::bl320::{read_bl320, read_bl160};
+use pop3::pop::types::{BinDeserializer, Image, AllocatorIter, ULCentreComposer, URCentreComposer, LayeredStorageSource, LayerComposer};
+use pop3::pop::types::{ImageInfo, ImageArea};
+use pop3::pop::types::{image_allocator_1d_horizontal, image_allocator_1d_vertical, image_allocator_2d};
+use pop3::pop::objects::{ObjectRaw, Shape, PointRaw, FaceRaw};
+use pop3::pop::animation::{AnimationsData, AnimationSequence, AnimationFrame};
 
 /******************************************************************************/
 

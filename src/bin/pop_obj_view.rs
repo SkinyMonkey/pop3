@@ -11,19 +11,19 @@ use clap::{Arg, ArgAction, Command};
 
 use cgmath::Vector3;
 
-use faithful::model::MeshModel;
-use faithful::tex_model::TexModel;
-use faithful::view::*;
+use pop3::model::MeshModel;
+use pop3::tex_model::TexModel;
+use pop3::view::*;
 
-use faithful::pop::level::{LevelPaths, GlobeTextureParams};
-use faithful::pop::objects::{Object3D, mk_pop_object};
-use faithful::pop::bl320::make_bl320_texture_rgba;
+use pop3::pop::level::{LevelPaths, GlobeTextureParams};
+use pop3::pop::objects::{Object3D, mk_pop_object};
+use pop3::pop::bl320::make_bl320_texture_rgba;
 
-use faithful::gpu::context::GpuContext;
-use faithful::gpu::pipeline::create_pipeline;
-use faithful::gpu::buffer::GpuBuffer;
-use faithful::gpu::texture::GpuTexture;
-use faithful::envelop::*;
+use pop3::gpu::context::GpuContext;
+use pop3::gpu::pipeline::create_pipeline;
+use pop3::gpu::buffer::GpuBuffer;
+use pop3::gpu::texture::GpuTexture;
+use pop3::envelop::*;
 
 /******************************************************************************/
 

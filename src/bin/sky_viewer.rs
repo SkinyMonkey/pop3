@@ -19,10 +19,10 @@ use winit::window::{Window, WindowAttributes};
 
 use clap::{Arg, Command};
 
-use faithful::gpu::context::GpuContext;
-use faithful::gpu::pipeline::create_pipeline;
-use faithful::gpu::buffer::GpuBuffer;
-use faithful::gpu::texture::GpuTexture;
+use pop3::gpu::context::GpuContext;
+use pop3::gpu::pipeline::create_pipeline;
+use pop3::gpu::buffer::GpuBuffer;
+use pop3::gpu::texture::GpuTexture;
 
 /******************************************************************************/
 // Sky data

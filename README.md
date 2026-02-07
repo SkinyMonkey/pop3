@@ -1,115 +1,157 @@
-# Faithful
+# Pop3
 
-Faithful is a project dedicated to the game "Populous: The Beginning" (Pop3/PopTB). It tries to fulfill two goals:
- - To implement a modern renderer for Pop3
- - To implement utilities to convert Pop3 resources to modern formats
+Pop3 is an open-source project that aims to remake [Populous: The Beginning](https://en.wikipedia.org/wiki/Populous:_The_Beginning) using modern technologies, staying as close to the original as practically possible.
 
-The renderer stays as close to the original as practically possible, hence the project name "faithful".
+Built with [Rust](https://www.rust-lang.org/), using [wgpu](https://wgpu.rs/) for cross-platform GPU rendering (Metal/Vulkan/DX12), Pop3 is a standalone application but requires original game files as proof of ownership.
+
+We welcome contributions from anyone interested in preserving and improving this classic game.
+
+## Disclaimer
+
+Pop3 is a fan-made, open-source project. It is not affiliated with or endorsed by Bullfrog Productions or Electronic Arts. You will need a copy of the original Populous: The Beginning game files as proof of ownership. These can be obtained from [GOG.com](https://www.gog.com/) or original CDs. All trademarks and copyrights are the property of their respective owners.
+
+## Features
+
+- 3D landscape rendering with multiple texture modes (full GPU, CPU/GPU hybrid, full CPU)
+- Toroidal world wrapping with optional curvature distortion
+- Water animation and sunlight simulation
+- Panoramic sky rendering from original palette data
+- 3D building and tree rendering from original game meshes
+- Sprite-based unit rendering with 8-direction animation system
+- 25 levels supported
 
 ## Building
 
-Faithful is written in Rust. Build with:
+Requires the [Rust toolchain](https://rustup.rs/).
 
 ```bash
 cargo build --release
 ```
 
-### Dependencies
+Key dependencies: [wgpu](https://wgpu.rs/) (GPU rendering), [winit](https://github.com/rust-windowing/winit) (windowing), [cgmath](https://github.com/rustgd/cgmath) (math), [clap](https://github.com/clap-rs/clap) (CLI).
 
-- [wgpu](https://wgpu.rs/) for cross-platform GPU rendering (Metal/Vulkan/DX12)
-- [winit](https://github.com/rust-windowing/winit) for windowing
-- [cgmath](https://github.com/rustgd/cgmath) for math
-- [clap](https://github.com/clap-rs/clap) for CLI arguments
+## Usage
 
-## Executables
+All executables require `--base` pointing to your Populous: The Beginning game data directory.
 
-### faithful (main renderer)
+### pop3 — Main renderer
 
-A wgpu-based 3D renderer for viewing Populous levels. It reads original game files directly and renders them using modern graphics APIs.
+A wgpu-based 3D renderer for viewing Populous levels. Reads original game files and renders them using modern graphics APIs.
 
-#### Landscape rendering
-
-The landscape is a toroidal 128x128 grid with height mapping. There are 4 texture rendering modes (switchable at runtime):
-
- - **Full GPU** - texture generation entirely on GPU using original game resources
- - **CPU/GPU hybrid** - palette indices on CPU, colors on GPU
- - **Full CPU** - texture generated on CPU, sent to GPU
- - **Height gradient** - simple height-based coloring (no game resources needed)
-
-Additional landscape features:
- - Toroidal wrapping (seamless world edges)
- - Curvature distortion for a spherical planet effect (toggleable)
- - Water animation
- - Sunlight simulation
-
-#### Sky rendering
-
-Panoramic 512x512 sky background with horizontal scrolling. Each landscape type has its own sky variant, rendered using the game's original palette system.
-
-#### 3D object rendering
-
-Buildings are rendered as full 3D meshes loaded from original game object files:
- - Huts (Small/Medium/Large per tribe)
- - Guard Tower, Boat Hut, Balloon Hut
- - Spy Training, Temple, Firewarrior Training, Warrior Training
- - Vault of Knowledge
-
-Trees are rendered as 3D scenery objects (6 types including fruit tree variants).
-
-Other objects (units, creatures, vehicles) are shown as color-coded markers.
-
-#### Sprite rendering
-
- - Shaman spawn markers rendered as billboard sprites at reincarnation sites for all 4 tribes
- - 8-direction sprite system with proper mirroring (5 stored directions, 3 mirrored)
- - Sprite atlas system (5 rows x 8 columns for directions x animation frames)
- - Direction computed from camera angle and unit facing using the original game formula
-
-#### Camera
-
-Orbit camera with:
- - Q/E: rotate (yaw)
- - Up/Down arrows: tilt (pitch, -30 to -90 degrees)
- - WASD: pan terrain (screen-relative, toroidal scrolling)
- - Mouse wheel: zoom
- - Space: center on blue tribe's shaman spawn
- - C: toggle curvature, [ / ]: adjust curvature scale
-
-#### Level navigation
-
- - 25 levels supported
- - B/V: next/previous level
- - N/M: next/previous shader variant
- - O: toggle object markers
-
-#### CLI options
-
-```
---base PATH       Pop3 game directory path
---level N         Start with specific level (1-255)
---landtype TYPE   Override landscape type
---cpu             Enable CPU texture rendering mode
---cpu-full        Enable full CPU rendering
---light X;Y       Configure sunlight parameters
---debug           Enable debug logging
---script PATH     Replay key events from script file
+```bash
+cargo run --release -- --base /path/to/pop3 --level 1
 ```
 
-### pop_obj_view
+| Option | Description |
+|--------|-------------|
+| `--level N` | Start at level N (1-255) |
+| `--cpu` | CPU/GPU hybrid texture rendering |
+| `--cpu-full` | Full CPU texture rendering |
+| `--light X;Y` | Sunlight parameters |
+| `--debug` | Enable debug logging |
+| `--script PATH` | Replay key events from script file |
 
-Standalone 3D object viewer for inspecting individual game models.
+| Key | Action |
+|-----|--------|
+| WASD | Pan terrain |
+| Q / E | Rotate camera |
+| Up / Down | Tilt camera |
+| Mouse wheel | Zoom |
+| B / V | Next / Previous level |
+| N / M | Next / Previous shader |
+| Space | Center on shaman spawn |
+| C | Toggle curvature |
+| O | Toggle object markers |
+| Escape | Quit |
 
-### sprite_viewer
+### unit_viewer — Unit animation viewer
 
-Sprite viewer for browsing sprite atlases and animations.
+Browse unit animations from the VELE/VFRA/VSTART animation chain.
 
-### sky_viewer
+```bash
+cargo run --release --bin unit_viewer -- --base /path/to/pop3 --anim 15
+```
 
-Sky texture viewer for browsing sky variants across landscape types.
+| Option | Description |
+|--------|-------------|
+| `--anim N` | Start at animation index N (default: 15 = Brave Idle) |
+| `--tribe N` | Start with tribe N (0-3) |
 
-### pop_res
+| Key | Action |
+|-----|--------|
+| N / P | Next / Previous animation |
+| + / - | Jump 10 animations |
+| T | Cycle tribe (Blue/Red/Yellow/Green) |
+| U | Cycle unit features |
+| Space | Pause / Resume |
+| Up / Down | Animation speed |
+| Left / Right | Frame step (when paused) |
+| Q / E | Rotate |
+| Escape | Quit |
 
-2D resource viewer and level renderer. Outputs levels as BMP images. See the `scripts/` directory for usage examples.
+### sprite_viewer — Sprite animation viewer
+
+Browse sprite atlases and directional animations.
+
+```bash
+cargo run --release --bin sprite_viewer -- --base /path/to/pop3
+```
+
+| Key | Action |
+|-----|--------|
+| Tab / N / P | Switch character |
+| Space | Pause / Resume |
+| Up / Down | Animation speed |
+| Left / Right | Frame step (when paused) |
+| Q / E | Rotate |
+| Escape | Quit |
+
+### sky_viewer — Sky texture viewer
+
+Browse sky variants across landscape types.
+
+```bash
+cargo run --release --bin sky_viewer -- --base /path/to/pop3
+```
+
+| Key | Action |
+|-----|--------|
+| N / P or Left / Right | Next / Previous sky |
+| Q / E | Scroll horizontally |
+| Escape | Quit |
+
+### pop_obj_view — 3D object viewer
+
+Inspect individual game 3D models (buildings, trees, etc.).
+
+```bash
+cargo run --release --bin pop_obj_view -- --base /path/to/pop3 --obj_num 0
+```
+
+| Option | Description |
+|--------|-------------|
+| `--obj_num N` | Object index (0-based) |
+| `--landtype TYPE` | Override landscape type |
+
+| Key | Action |
+|-----|--------|
+| Arrow keys | Rotate object |
+| V / B | Previous / Next object |
+| N / M | Scale down / up |
+| R | Reset scale |
+| Escape | Quit |
+
+### pop_res — Resource extraction tool
+
+CLI tool for extracting and converting game resources to images.
+
+```bash
+cargo run --release --bin pop_res -- globe 1 --base /path/to/pop3
+```
+
+Available subcommands: `globe`, `land`, `minimap`, `water`, `bl320`, `bl160`, `bigf0`, `disp`, `palette`, `objects`, `units`, `anims`, `anims_draw`, `pls`, `psfb`.
+
+See `scripts/` for usage examples.
 
 ## Project structure
 
@@ -130,4 +172,17 @@ docs/               Documentation and reverse engineering notes
 
 ## Reverse engineering
 
-Reverse engineering notes for the original game binary are available in [docs/specs/](docs/specs/index.md).
+Reverse engineering notes for the original game binary are available in [docs/specs/](docs/specs/index.md). RE work is done using Ghidra with [ghidra-mcp](https://github.com/bethington/ghidra-mcp) for AI-assisted analysis.
+
+## Contributing
+
+We welcome contributions from the community to improve and expand Pop3.
+
+- Report bugs by opening [issues](https://github.com/SkinyMonkey/pop3/issues)
+- Submit feature requests and discuss potential improvements
+- Contribute code by creating pull requests
+- Help with reverse engineering the original game binary
+
+## License
+
+This project is licensed under the [GNU General Public License v3.0](LICENSE).

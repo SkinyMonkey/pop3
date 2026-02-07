@@ -14,29 +14,29 @@ use clap::{Arg, ArgAction, Command};
 
 use cgmath::{Point2, Point3, Vector2, Vector3, Vector4, Matrix4, SquareMatrix};
 
-use faithful::model::{VertexModel, MeshModel};
-use faithful::default_model::DefaultModel;
-use faithful::tex_model::{TexModel, TexVertex};
-use faithful::color_model::{ColorModel, ColorVertex};
-use faithful::view::*;
+use pop3::model::{VertexModel, MeshModel};
+use pop3::default_model::DefaultModel;
+use pop3::tex_model::{TexModel, TexVertex};
+use pop3::color_model::{ColorModel, ColorVertex};
+use pop3::view::*;
 
-use faithful::pop::psfb::ContainerPSFB;
-use faithful::pop::types::BinDeserializer;
+use pop3::pop::psfb::ContainerPSFB;
+use pop3::pop::types::BinDeserializer;
 
-use faithful::intersect::intersect_iter;
+use pop3::intersect::intersect_iter;
 
-use faithful::landscape::{LandscapeMesh, LandscapeModel};
-use faithful::pop::level::{LevelRes, ObjectPaths};
-use faithful::pop::units::{ModelType, object_3d_index};
-use faithful::pop::objects::{Object3D, Shape, mk_pop_object};
-use faithful::pop::bl320::make_bl320_texture_rgba;
-use faithful::pop::landscape::{make_texture_land, draw_texture_u8};
+use pop3::landscape::{LandscapeMesh, LandscapeModel};
+use pop3::pop::level::{LevelRes, ObjectPaths};
+use pop3::pop::units::{ModelType, object_3d_index};
+use pop3::pop::objects::{Object3D, Shape, mk_pop_object};
+use pop3::pop::bl320::make_bl320_texture_rgba;
+use pop3::pop::landscape::{make_texture_land, draw_texture_u8};
 
-use faithful::gpu::context::GpuContext;
-use faithful::gpu::pipeline::create_pipeline;
-use faithful::gpu::buffer::GpuBuffer;
-use faithful::gpu::texture::GpuTexture;
-use faithful::envelop::*;
+use pop3::gpu::context::GpuContext;
+use pop3::gpu::pipeline::create_pipeline;
+use pop3::gpu::buffer::GpuBuffer;
+use pop3::gpu::texture::GpuTexture;
+use pop3::envelop::*;
 
 /******************************************************************************/
 
@@ -1174,7 +1174,7 @@ impl App {
         let landscape_mesh = LandscapeMesh::new(1.0 / 16.0, (1.0 / 16.0) * 4.0 / 1024.0);
 
         let debug_log = BufWriter::new(
-            File::create("/tmp/faithful_debug.jsonl").expect("failed to create debug log"),
+            File::create("/tmp/pop3_debug.jsonl").expect("failed to create debug log"),
         );
 
         let script_commands: Vec<String> = config.script.as_ref()
@@ -2710,7 +2710,7 @@ fn cli() -> Command {
             .value_parser(clap::value_parser!(PathBuf))
             .help("Replay key events from a script file"),
     ];
-    Command::new("faithful")
+    Command::new("pop3")
         .about("POP3 wgpu renderer")
         .args(&args)
 }
