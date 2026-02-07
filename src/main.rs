@@ -17,6 +17,7 @@ use cgmath::{Point2, Point3, Vector2, Vector3, Vector4, Matrix4, SquareMatrix};
 use faithful::model::{VertexModel, MeshModel};
 use faithful::default_model::DefaultModel;
 use faithful::tex_model::{TexModel, TexVertex};
+use faithful::color_model::{ColorModel, ColorVertex};
 use faithful::view::*;
 
 use faithful::pop::psfb::ContainerPSFB;
@@ -26,6 +27,7 @@ use faithful::intersect::intersect_iter;
 
 use faithful::landscape::{LandscapeMesh, LandscapeModel};
 use faithful::pop::level::LevelRes;
+use faithful::pop::units::ModelType;
 use faithful::pop::landscape::{make_texture_land, draw_texture_u8};
 
 use faithful::gpu::context::GpuContext;
@@ -158,14 +160,14 @@ fn make_landscape_model(device: &wgpu::Device, landscape_mesh: &LandscapeMeshS) 
 }
 
 /// Extract spawn cell coordinates from level data.
-/// Returns (cell_x, cell_y, tribe_index) for each reincarnation site (unit_class == 2).
+/// Returns (cell_x, cell_y, tribe_index) for each tribe's first building (model == 2).
 fn extract_spawn_cells(level_res: &LevelRes) -> Vec<(f32, f32, u8)> {
     let mut found = [false; 4];
     let mut cells = Vec::new();
     let n = level_res.landscape.land_size() as f32;
     for unit in &level_res.units {
         let tribe = unit.tribe_index() as usize;
-        if unit.unit_class == 2 && tribe < 4 && !found[tribe] {
+        if unit.model == 2 && tribe < 4 && !found[tribe] {
             found[tribe] = true;
             // Bevy convention: cell_x from loc_x, cell_z from loc_y
             let bevy_x = ((unit.loc_x() >> 8) / 2) as f32 + 0.5;
@@ -385,6 +387,142 @@ fn build_spawn_model(device: &wgpu::Device, cells: &[(f32, f32, u8)],
     }
     let m = vec![(RenderType::Triangles, model)];
     ModelEnvelop::<TexModel>::new(device, m)
+}
+
+/******************************************************************************/
+// Level object markers
+
+struct LevelObject {
+    cell_x: f32,
+    cell_y: f32,
+    model_type: ModelType,
+    #[allow(dead_code)]
+    subtype: u8,
+    tribe_index: u8,
+}
+
+fn extract_level_objects(level_res: &LevelRes) -> Vec<LevelObject> {
+    let n = level_res.landscape.land_size() as f32;
+    let mut objects = Vec::new();
+    for unit in &level_res.units {
+        let model_type = match unit.model_type() {
+            Some(mt) if mt.is_visible() => mt,
+            _ => continue,
+        };
+        if unit.loc_x() == 0 && unit.loc_y() == 0 {
+            continue;
+        }
+        let bevy_x = ((unit.loc_x() >> 8) / 2) as f32 + 0.5;
+        let bevy_z = ((unit.loc_y() >> 8) / 2) as f32 + 0.5;
+        let cell_x = bevy_z;
+        let cell_y = (n - 1.0) - bevy_x;
+        objects.push(LevelObject {
+            cell_x,
+            cell_y,
+            model_type,
+            subtype: unit.subtype,
+            tribe_index: unit.tribe_index(),
+        });
+    }
+    objects
+}
+
+fn tribe_marker_color(tribe_index: u8) -> [f32; 3] {
+    match tribe_index {
+        0 => [0.2, 0.4, 1.0],   // Blue
+        1 => [1.0, 0.2, 0.2],   // Red
+        2 => [1.0, 1.0, 0.2],   // Yellow
+        3 => [0.2, 1.0, 0.2],   // Green
+        _ => [0.9, 0.9, 0.9],   // Unowned (tribe 255 = no owner)
+    }
+}
+
+fn object_marker_color(model_type: &ModelType, tribe_index: u8) -> [f32; 3] {
+    match model_type {
+        // Tribe-owned units: use tribe color
+        ModelType::Person | ModelType::Building | ModelType::Creature | ModelType::Vehicle
+            if tribe_index < 4 => tribe_marker_color(tribe_index),
+        // Unowned persons (wildmen): brown
+        ModelType::Person   => [0.6, 0.4, 0.2],
+        // Unowned buildings: dark orange
+        ModelType::Building => [0.7, 0.5, 0.1],
+        // Unowned creatures: magenta
+        ModelType::Creature => [0.8, 0.2, 0.8],
+        // Unowned vehicles: cyan
+        ModelType::Vehicle  => [0.2, 0.6, 0.8],
+        ModelType::Scenery  => [0.2, 0.5, 0.1],   // Dark green
+        ModelType::General  => [1.0, 0.5, 0.0],   // Orange
+        ModelType::Shape    => [0.5, 0.5, 0.5],   // Gray
+        _ => [1.0, 1.0, 1.0],
+    }
+}
+
+fn build_object_markers(
+    device: &wgpu::Device, objects: &[LevelObject],
+    landscape: &LandscapeMesh<128>, curvature_scale: f32,
+    angle_x: i16, angle_z: i16,
+) -> ModelEnvelop<ColorModel> {
+    let mut model: ColorModel = MeshModel::new();
+    let step = landscape.step();
+    let height_scale = landscape.height_scale();
+    let w = landscape.width() as f32;
+    let shift = landscape.get_shift_vector();
+    let center = (w - 1.0) * step / 2.0;
+
+    let az = (angle_z as f32).to_radians();
+    let ax = (angle_x as f32).to_radians();
+    let eye = Point3::new(
+        center + ax.cos() * az.sin(),
+        center + ax.cos() * az.cos(),
+        -ax.sin(),
+    );
+    let target = Point3::new(center, center, 0.0);
+    let view = Matrix4::look_at_rh(eye, target, Vector3::new(0.0, 0.0, 1.0));
+    let right = Vector3::new(view.x.x, view.y.x, view.z.x);
+    let up = Vector3::new(view.x.y, view.y.y, view.z.y);
+
+    for obj in objects {
+        let vis_x = ((obj.cell_x - shift.x as f32) % w + w) % w;
+        let vis_y = ((obj.cell_y - shift.y as f32) % w + w) % w;
+        let gx = vis_x * step;
+        let gy = vis_y * step;
+
+        let ix = (obj.cell_x as usize).min(127);
+        let iy = (obj.cell_y as usize).min(127);
+        let gz = landscape.height_at(ix, iy) as f32 * height_scale;
+
+        let dx = gx - center;
+        let dy = gy - center;
+        let curvature_offset = (dx * dx + dy * dy) * curvature_scale;
+        let z_base = gz - curvature_offset + 0.005;
+
+        let (half_w, sprite_h) = match obj.model_type {
+            ModelType::Building => (step * 0.4, step * 0.3),
+            ModelType::Person   => (step * 0.15, step * 0.4),
+            ModelType::Scenery  => (step * 0.2, step * 0.25),
+            _                   => (step * 0.2, step * 0.3),
+        };
+
+        let color_rgb = object_marker_color(&obj.model_type, obj.tribe_index);
+        let color = Vector3::new(color_rgb[0], color_rgb[1], color_rgb[2]);
+
+        let base_pos = Vector3::new(gx, gy, z_base);
+        let bl = base_pos - right * half_w;
+        let br = base_pos + right * half_w;
+        let tl = bl + up * sprite_h;
+        let tr = br + up * sprite_h;
+
+        let v = |p: Vector3<f32>| ColorVertex { coord: p, color };
+
+        model.push_vertex(v(bl));
+        model.push_vertex(v(br));
+        model.push_vertex(v(tr));
+        model.push_vertex(v(bl));
+        model.push_vertex(v(tr));
+        model.push_vertex(v(tl));
+    }
+    let m = vec![(RenderType::Triangles, model)];
+    ModelEnvelop::<ColorModel>::new(device, m)
 }
 
 /******************************************************************************/
@@ -683,6 +821,7 @@ fn help_text() -> &'static str {
         "N/M:    Next/Prev shader\n",
         "C:      Toggle curvature\n",
         "[/]:    Curvature +/-\n",
+        "O:      Toggle objects\n",
         "Scroll: Zoom\n",
         "Esc:    Quit",
     )
@@ -839,6 +978,13 @@ struct App {
     spawn_cells: Vec<(f32, f32, u8)>,  // (cell_x, cell_y, tribe_index)
     sprite_texture: Option<GpuTexture>,
     shaman_atlas_info: Option<ShamanAtlasInfo>,
+
+    // Level object markers
+    objects_marker_pipeline: Option<wgpu::RenderPipeline>,
+    model_objects: Option<ModelEnvelop<ColorModel>>,
+    level_objects: Vec<LevelObject>,
+    show_objects: bool,
+
     // Overlay text
     overlay_pipeline: Option<wgpu::RenderPipeline>,
     overlay_bind_group: Option<wgpu::BindGroup>,
@@ -929,6 +1075,10 @@ impl App {
             spawn_cells: Vec::new(),
             sprite_texture: None,
             shaman_atlas_info: None,
+            objects_marker_pipeline: None,
+            model_objects: None,
+            level_objects: Vec::new(),
+            show_objects: true,
             overlay_pipeline: None,
             overlay_bind_group: None,
             overlay_vertex_buffer: None,
@@ -1038,8 +1188,9 @@ impl App {
             }
         }
 
-        // Rebuild spawn markers
+        // Rebuild spawn markers and object markers
         self.spawn_cells = extract_spawn_cells(&level_res);
+        self.level_objects = extract_level_objects(&level_res);
         self.rebuild_spawn_model();
     }
 
@@ -1162,6 +1313,9 @@ impl App {
                 self.curvature_enabled = !self.curvature_enabled;
                 self.rebuild_spawn_model();
             },
+            KeyCode::KeyO => {
+                self.show_objects = !self.show_objects;
+            },
             KeyCode::BracketRight => {
                 self.curvature_scale *= 1.2;
                 self.rebuild_spawn_model();
@@ -1194,6 +1348,17 @@ impl App {
                 &gpu.device, &self.spawn_cells, &self.landscape_mesh, cs,
                 self.camera.angle_x, self.camera.angle_z,
                 self.shaman_atlas_info.as_ref(),
+            ));
+        }
+        self.rebuild_object_markers();
+    }
+
+    fn rebuild_object_markers(&mut self) {
+        if let Some(ref gpu) = self.gpu {
+            let cs = if self.curvature_enabled { self.curvature_scale } else { 0.0 };
+            self.model_objects = Some(build_object_markers(
+                &gpu.device, &self.level_objects, &self.landscape_mesh, cs,
+                self.camera.angle_x, self.camera.angle_z,
             ));
         }
     }
@@ -1495,6 +1660,17 @@ impl App {
                 }
             }
 
+            // Draw level object markers
+            if self.show_objects {
+                if let Some(ref marker_pipeline) = self.objects_marker_pipeline {
+                    render_pass.set_pipeline(marker_pipeline);
+                    render_pass.set_bind_group(0, self.objects_group0_bind_group.as_ref().unwrap(), &[]);
+                    if let Some(ref model_objects) = self.model_objects {
+                        model_objects.draw(&mut render_pass);
+                    }
+                }
+            }
+
             // Draw selection lines
             if let Some(ref select_pipeline) = self.select_pipeline {
                 render_pass.set_pipeline(select_pipeline);
@@ -1715,6 +1891,17 @@ impl ApplicationHandler for App {
             "shaman_sprite_pipeline",
         );
 
+        // Level objects marker pipeline (group 0 only, no group 1)
+        let objects_marker_shader = include_str!("../shaders/level_objects.wgsl");
+        let objects_marker_layouts = ColorModel::vertex_buffer_layouts();
+        let objects_marker_pipeline = create_pipeline(
+            device, objects_marker_shader, &objects_marker_layouts,
+            &[&objects_group0_layout],
+            gpu.surface_format(), true,
+            wgpu::PrimitiveTopology::TriangleList,
+            "level_objects_pipeline",
+        );
+
         // Load shaman sprite atlas (5 dirs × 8 frames, palette-converted to RGBA sRGB)
         let (sprite_texture, shaman_atlas_info) = match build_shaman_atlas(&base, &level_res.params.palette) {
             Some((w, h, data, info)) => {
@@ -1860,6 +2047,7 @@ impl ApplicationHandler for App {
         self.sprite_group1_layout = Some(sprite_group1_layout);
         self.sprite_texture = sprite_texture;
         self.shaman_atlas_info = shaman_atlas_info;
+        self.objects_marker_pipeline = Some(objects_marker_pipeline);
         self.model_spawn = Some(model_spawn);
         self.model_main = Some(model_main);
         self.model_select = Some(model_select);
@@ -1875,8 +2063,9 @@ impl ApplicationHandler for App {
         let level_res2 = LevelRes::new(&base2, self.level_num, level_type2);
         self.rebuild_landscape_variants(&level_res2);
 
-        // Build spawn markers for initial level
+        // Build spawn markers and object markers for initial level
         self.spawn_cells = extract_spawn_cells(&level_res2);
+        self.level_objects = extract_level_objects(&level_res2);
         self.rebuild_spawn_model();
 
         // Build initial overlay text
@@ -1994,6 +2183,10 @@ impl ApplicationHandler for App {
                                 self.curvature_enabled = !self.curvature_enabled;
                                 log::info!("curvature {}", if self.curvature_enabled { "on" } else { "off" });
                                 self.rebuild_spawn_model();
+                            },
+                            KeyCode::KeyO => {
+                                self.show_objects = !self.show_objects;
+                                log::info!("objects {}", if self.show_objects { "on" } else { "off" });
                             },
                             KeyCode::BracketRight => {
                                 self.curvature_scale *= 1.2;

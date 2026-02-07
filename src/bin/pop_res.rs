@@ -556,7 +556,7 @@ fn main() {
             let level_res = LevelRes::new(base_path, level_num, None);
             println!("Num units = {}", level_res.units.len());
             for unit in &level_res.units {
-                if unit.unit_class != 0 {
+                if unit.model != 0 {
                     println!("  {:?}", unit);
                 }
             }
