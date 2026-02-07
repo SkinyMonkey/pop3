@@ -16,6 +16,7 @@ pub struct LevelPaths {
     pub bl320: PathBuf,
     pub bl160: PathBuf,
     pub watdisp: PathBuf,
+    pub sky: PathBuf,
 }
 
 fn mk_based_path(base: &Path, s: String) -> PathBuf {
@@ -36,6 +37,7 @@ impl LevelPaths {
             bl320: mk_based_path(base, format!("BL320-{key_upper}.DAT")),
             bl160: mk_based_path(base, format!("BL160-{key_upper}.DAT")),
             watdisp: mk_based_path(base, "watdisp.dat".to_string()),
+            sky: mk_based_path(base, format!("sky0-{key}.dat")),
         }
     }
 
@@ -226,6 +228,59 @@ fn read_disp(path: &Path) -> Vec<i8> {
 
 pub fn read_pal(paths: &LevelPaths) -> Vec<u8> {
     read_bin(&paths.palette)
+}
+
+/// Build the 256-entry sky palette interpolation table per FUN_004dc3f0.
+///
+/// The game sorts 13 sky colors (pal[0x71..0x7E]) by perceived luminance,
+/// then builds a table mapping each brightness level 0..255 to the palette
+/// index of the closest sky color. This produces smooth gradients.
+pub fn build_sky_interp_table(pal: &[u8]) -> [u8; 256] {
+    let mut table = [0x70u8; 256];
+
+    struct Entry { pal_idx: u8, lum: u32 }
+    let mut entries: Vec<Entry> = Vec::with_capacity(13);
+    for i in 1..=13u8 {
+        let p = (0x70 + i) as usize * 4;
+        let r = pal[p] as u32;
+        let g = pal[p + 1] as u32;
+        let b = pal[p + 2] as u32;
+        entries.push(Entry { pal_idx: 0x70 + i, lum: r * 66 + g * 129 + b * 25 });
+    }
+
+    // Sort by luminance (ascending) — game uses selection sort, result is identical
+    entries.sort_by_key(|e| e.lum);
+
+    // Normalized luminance: (raw_lum >> 8), clamped to 255
+    let norm_lums: Vec<u8> = entries.iter()
+        .map(|e| (e.lum >> 8).min(255) as u8)
+        .collect();
+
+    let min_lum = *norm_lums.iter().min().unwrap() as i32;
+    let max_lum = *norm_lums.iter().max().unwrap() as i32;
+    let range = max_lum - min_lum;
+
+    // Build 256-entry table: linearly sweep [min_lum, max_lum],
+    // for each target find the sorted entry with closest luminance
+    let mut acc: i32 = 0;
+    for i in 0..256 {
+        let target = min_lum + (acc >> 8);
+
+        let mut best_idx = 0;
+        let mut best_dist = i32::MAX;
+        for (j, &lum) in norm_lums.iter().enumerate() {
+            let dist = (lum as i32 - target).abs();
+            if dist < best_dist {
+                best_dist = dist;
+                best_idx = j;
+            }
+        }
+
+        table[i] = entries[best_idx].pal_idx;
+        acc += range;
+    }
+
+    table
 }
 
 /******************************************************************************/

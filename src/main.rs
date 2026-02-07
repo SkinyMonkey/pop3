@@ -1093,6 +1093,11 @@ struct App {
     building_bind_group_1: Option<wgpu::BindGroup>,
     model_buildings: Option<ModelEnvelop<TexModel>>,
 
+    // Sky
+    sky_pipeline: Option<wgpu::RenderPipeline>,
+    sky_bind_group: Option<wgpu::BindGroup>,
+    sky_uniform_buffer: Option<GpuBuffer>,
+
     // Overlay text
     overlay_pipeline: Option<wgpu::RenderPipeline>,
     overlay_bind_group: Option<wgpu::BindGroup>,
@@ -1193,6 +1198,9 @@ impl App {
             building_pipeline: None,
             building_bind_group_1: None,
             model_buildings: None,
+            sky_pipeline: None,
+            sky_bind_group: None,
+            sky_uniform_buffer: None,
             overlay_pipeline: None,
             overlay_bind_group: None,
             overlay_vertex_buffer: None,
@@ -1715,6 +1723,13 @@ impl App {
         let obj_params = ObjectParams { selected_frag: self.select_frag, num_colors: obj_colors().len() as i32 };
         self.select_params_buffer.as_ref().unwrap().update(&gpu.queue, 0, bytemuck::bytes_of(&obj_params));
 
+        // Update sky yaw offset
+        if let Some(ref sky_buf) = self.sky_uniform_buffer {
+            // angle_z is in degrees; map to 0..1 range for UV offset
+            let yaw = (self.camera.angle_z as f32) / 360.0;
+            sky_buf.update(&gpu.queue, 0, bytemuck::bytes_of(&[yaw, 0.0f32, 0.0f32, 0.0f32]));
+        }
+
         // Update select model vertex data
         if let Some(ref model_select) = self.model_select {
             model_select.write_transform(&gpu.queue, &self.model_transform_buffer.as_ref().unwrap().buffer, 0);
@@ -1757,6 +1772,15 @@ impl App {
                 }),
                 ..Default::default()
             });
+
+            // Draw sky background
+            if let (Some(ref sky_pipe), Some(ref sky_bg)) =
+                (&self.sky_pipeline, &self.sky_bind_group)
+            {
+                render_pass.set_pipeline(sky_pipe);
+                render_pass.set_bind_group(0, sky_bg, &[]);
+                render_pass.draw(0..3, 0..1);
+            }
 
             // Draw landscape
             if let Some(variant) = self.program_container.current() {
@@ -2153,6 +2177,132 @@ impl ApplicationHandler for App {
             cache: None,
         });
 
+        // Sky texture and pipeline
+        let sky_data = std::fs::read(&level_res.paths.sky).ok();
+        let (sky_pipeline, sky_bind_group, sky_uniform_buffer) = if let Some(sky_raw) = sky_data {
+            // sky0-{key}.dat is 512x512 palette indices (262144 bytes).
+            // sky0-0.dat is 307200 bytes (600x512); just take first 512 rows.
+            let sky_size = 512usize;
+            let pixel_count = sky_size * sky_size;
+            let sky_indices = if sky_raw.len() >= pixel_count {
+                &sky_raw[..pixel_count]
+            } else {
+                &sky_raw[..]
+            };
+            let pal = &level_res.params.palette;
+            // Game adds 0x70 to every sky byte, then uses result as direct palette index
+            let mut sky_rgb = vec![0u8; sky_size * sky_size * 3];
+            for (i, &idx) in sky_indices.iter().enumerate() {
+                let pal_idx = idx.wrapping_add(0x70) as usize * 4;
+                sky_rgb[i * 3]     = pal[pal_idx];
+                sky_rgb[i * 3 + 1] = pal[pal_idx + 1];
+                sky_rgb[i * 3 + 2] = pal[pal_idx + 2];
+            }
+            let sky_rgba = rgb_to_rgba(&sky_rgb);
+            let sky_tex = GpuTexture::new_2d(
+                device, &gpu.queue,
+                sky_size as u32, sky_size as u32,
+                wgpu::TextureFormat::Rgba8Unorm,
+                &sky_rgba, "sky_texture",
+            );
+            let sky_sampler = GpuTexture::create_sampler(device, false);
+            let sky_uniform = GpuBuffer::new_uniform_init(
+                device, bytemuck::bytes_of(&[0.0f32; 4]), "sky_uniform",
+            );
+
+            let sky_bg_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("sky_bg_layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+
+            let sky_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("sky_bg"),
+                layout: &sky_bg_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: sky_uniform.buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&sky_tex.view) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sky_sampler) },
+                ],
+            });
+
+            let sky_shader_source = include_str!("../shaders/sky.wgsl");
+            let sky_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("sky_shader"),
+                source: wgpu::ShaderSource::Wgsl(sky_shader_source.into()),
+            });
+            let sky_pipe_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("sky_pipeline_layout"),
+                bind_group_layouts: &[&sky_bg_layout],
+                immediate_size: 0,
+            });
+            let sky_pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("sky_pipeline"),
+                layout: Some(&sky_pipe_layout),
+                vertex: wgpu::VertexState {
+                    module: &sky_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &sky_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: gpu.surface_format(),
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: false,
+                    depth_compare: wgpu::CompareFunction::Always,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+
+            (Some(sky_pipe), Some(sky_bg), Some(sky_uniform))
+        } else {
+            log::warn!("Sky texture not found: {:?}", level_res.paths.sky);
+            (None, None, None)
+        };
+
         // Empty spawn model (will be populated when level loads)
         let model_spawn = {
             let model: TexModel = MeshModel::new();
@@ -2277,6 +2427,9 @@ impl ApplicationHandler for App {
         self.objects_3d = objects_3d;
         self.building_pipeline = Some(building_pipeline);
         self.building_bind_group_1 = Some(building_bind_group_1);
+        self.sky_pipeline = sky_pipeline;
+        self.sky_bind_group = sky_bind_group;
+        self.sky_uniform_buffer = sky_uniform_buffer;
         self.model_spawn = Some(model_spawn);
         self.model_main = Some(model_main);
         self.model_select = Some(model_select);
