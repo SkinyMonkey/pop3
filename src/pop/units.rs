@@ -117,14 +117,26 @@ pub fn building_obj_index(subtype: u8, tribe_index: u8) -> Option<usize> {
     }
 }
 
+/// Returns the OBJS object index for a scenery object.
+/// Trees are at OBJS indices 13-18 (single models) and 60-71 (variant pairs).
+/// Subtypes 1-6 are tree types; each has a base index with position-based variants.
+pub fn scenery_obj_index(subtype: u8) -> Option<usize> {
+    match subtype {
+        1 => Some(13),  // Mass Tree
+        2 => Some(14),  // Special Tree 1
+        3 => Some(15),  // Special Tree 2
+        4 => Some(16),  // Mass Fruit Tree
+        5 => Some(17),  // Special Fruit Tree 1
+        6 => Some(18),  // Special Fruit Tree 2
+        _ => None,
+    }
+}
+
 /// Returns the OBJS object index for any model type + subtype combination.
-/// Currently only Building types are mapped.
-/// General/Scenery types (vault, stone heads, etc.) also have 3D meshes
-/// but their OBJS index depends on runtime state (discovery type from
-/// the parameter stack mechanism in the game engine).
 pub fn object_3d_index(model_type: &ModelType, subtype: u8, tribe_index: u8) -> Option<usize> {
     match model_type {
         ModelType::Building => building_obj_index(subtype, tribe_index),
+        ModelType::Scenery => scenery_obj_index(subtype),
         _ => None,
     }
 }

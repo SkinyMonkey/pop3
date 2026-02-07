@@ -1122,6 +1122,8 @@ struct App {
     level_num: u8,
     sunlight: Vector4<f32>,
     wat_offset: i32,
+    wat_interval: u32,
+    frame_count: u32,
 
     // Config
     config: AppConfig,
@@ -1213,6 +1215,8 @@ impl App {
             level_num: config.level.unwrap_or(1),
             sunlight,
             wat_offset: -1,
+            wat_interval: 5000,
+            frame_count: 0,
             config,
             debug_log,
             start_time: Instant::now(),
@@ -2401,9 +2405,6 @@ impl ApplicationHandler for App {
                                 self.sunlight.y -= 1.0;
                                 log::debug!("sunlight = {:?}", self.sunlight);
                             },
-                            KeyCode::KeyZ => {
-                                self.wat_offset += 1;
-                            },
                             KeyCode::KeyC => {
                                 self.curvature_enabled = !self.curvature_enabled;
                                 log::info!("curvature {}", if self.curvature_enabled { "on" } else { "off" });
@@ -2452,6 +2453,12 @@ impl ApplicationHandler for App {
                 }
             },
             WindowEvent::RedrawRequested => {
+                // Auto-animate water
+                self.frame_count = self.frame_count.wrapping_add(1);
+                if self.frame_count % self.wat_interval == 0 {
+                    self.wat_offset += 1;
+                    self.do_render = true;
+                }
                 if self.do_render && self.gpu.is_some() {
                     self.render();
                     self.do_render = false;
@@ -2466,10 +2473,8 @@ impl ApplicationHandler for App {
             },
             _ => (),
         }
-        if self.do_render {
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+        if let Some(window) = &self.window {
+            window.request_redraw();
         }
     }
 }
