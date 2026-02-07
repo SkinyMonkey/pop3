@@ -26,9 +26,9 @@ use faithful::pop::types::BinDeserializer;
 use faithful::intersect::intersect_iter;
 
 use faithful::landscape::{LandscapeMesh, LandscapeModel};
-use faithful::pop::level::LevelRes;
+use faithful::pop::level::{LevelRes, ObjectPaths};
 use faithful::pop::units::{ModelType, object_3d_index};
-use faithful::pop::objects::{Object3D, mk_pop_object};
+use faithful::pop::objects::{Object3D, Shape, mk_pop_object};
 use faithful::pop::bl320::make_bl320_texture_rgba;
 use faithful::pop::landscape::{make_texture_land, draw_texture_u8};
 
@@ -402,6 +402,7 @@ struct LevelObject {
     #[allow(dead_code)]
     subtype: u8,
     tribe_index: u8,
+    angle: u32,
 }
 
 fn extract_level_objects(level_res: &LevelRes) -> Vec<LevelObject> {
@@ -419,12 +420,16 @@ fn extract_level_objects(level_res: &LevelRes) -> Vec<LevelObject> {
         let bevy_z = ((unit.loc_y() >> 8) / 2) as f32 + 0.5;
         let cell_x = bevy_z;
         let cell_y = (n - 1.0) - bevy_x;
+        eprintln!("[extract] type={:?} subtype={} tribe={} angle={} loc=({},{})",
+            model_type, unit.subtype, unit.tribe_index(), unit.angle(),
+            unit.loc_x(), unit.loc_y());
         objects.push(LevelObject {
             cell_x,
             cell_y,
             model_type,
             subtype: unit.subtype,
             tribe_index: unit.tribe_index(),
+            angle: unit.angle(),
         });
     }
     objects
@@ -545,7 +550,7 @@ fn build_object_markers(
 
 fn build_building_meshes(
     device: &wgpu::Device, objects: &[LevelObject], objects_3d: &[Option<Object3D>],
-    landscape: &LandscapeMesh<128>, curvature_scale: f32,
+    shapes: &[Shape], landscape: &LandscapeMesh<128>, curvature_scale: f32,
 ) -> ModelEnvelop<TexModel> {
     let mut combined: TexModel = MeshModel::new();
     let step = landscape.step();
@@ -581,19 +586,30 @@ fn build_building_meshes(
         let ix = (obj.cell_x as usize).min(127);
         let iy = (obj.cell_y as usize).min(127);
         let gz = landscape.height_at(ix, iy) as f32 * height_scale;
+        // TODO: height averaging across footprint — needs correct shapes_index mapping
+        // (ObjectRaw.shapes_index may not be a direct SHAPES.DAT index)
+        eprintln!("[bldg] subtype={} angle={} shape_idx={} gz={:.3}",
+            obj.subtype, obj.angle, obj3d.shapes_index(), gz);
 
         let dx = gx - center;
         let dy = gy - center;
         let curvature_offset = (dx * dx + dy * dy) * curvature_scale;
         let z_base = gz - curvature_offset;
 
+        // Rotate model vertices in the horizontal plane (model X/Z -> world X/Y)
+        let angle_rad = (obj.angle as f32) * std::f32::consts::TAU / 2048.0;
+        let cos_a = angle_rad.cos();
+        let sin_a = angle_rad.sin();
+
         let base_idx = combined.vertices.len() as u16;
         let first_vert = combined.vertices.len();
         for v in &local_model.vertices {
+            let rx = v.coord.x * cos_a - v.coord.z * sin_a;
+            let rz = v.coord.x * sin_a + v.coord.z * cos_a;
             combined.push_vertex(TexVertex {
                 coord: Vector3::new(
-                    gx + v.coord.x * scale,
-                    gy + v.coord.z * scale,
+                    gx + rx * scale,
+                    gy + rz * scale,
                     z_base + v.coord.y * scale,
                 ),
                 uv: v.uv,
@@ -601,9 +617,9 @@ fn build_building_meshes(
             });
         }
         if let Some(fv) = combined.vertices.get(first_vert) {
-            eprintln!("  -> verts={} pos=({:.3},{:.3},{:.3}) scale={:.4} gx={:.3} gy={:.3} gz={:.3} tex_id={}",
+            eprintln!("  -> verts={} pos=({:.3},{:.3},{:.3}) scale={:.4} gx={:.3} gy={:.3} gz={:.3} angle={} ({:.2} rad) tex_id={}",
                 local_model.vertices.len(), fv.coord.x, fv.coord.y, fv.coord.z,
-                scale, gx, gy, gz, fv.tex_id);
+                scale, gx, gy, gz, obj.angle, angle_rad, fv.tex_id);
         }
         for &idx16 in &local_model.indices {
             combined.indices.push(base_idx + idx16);
@@ -1089,6 +1105,7 @@ struct App {
 
     // 3D building meshes
     objects_3d: Vec<Option<Object3D>>,
+    shapes: Vec<Shape>,
     building_pipeline: Option<wgpu::RenderPipeline>,
     building_bind_group_1: Option<wgpu::BindGroup>,
     model_buildings: Option<ModelEnvelop<TexModel>>,
@@ -1195,6 +1212,7 @@ impl App {
             level_objects: Vec::new(),
             show_objects: true,
             objects_3d: Vec::new(),
+            shapes: Vec::new(),
             building_pipeline: None,
             building_bind_group_1: None,
             model_buildings: None,
@@ -1486,7 +1504,7 @@ impl App {
             ));
             self.model_buildings = Some(build_building_meshes(
                 &gpu.device, &self.level_objects, &self.objects_3d,
-                &self.landscape_mesh, cs,
+                &self.shapes, &self.landscape_mesh, cs,
             ));
         }
     }
@@ -2086,8 +2104,16 @@ impl ApplicationHandler for App {
             None
         };
 
-        // Load 3D objects (bank "0") and BL320 texture atlas for building meshes
+        // Load 3D objects (bank "0"), shapes, and BL320 texture atlas for building meshes
         let objects_3d = Object3D::from_file_all(&base, "0");
+        let obj_paths = ObjectPaths::from_default_dir(&base, "0");
+        let shapes: Vec<Shape> = Shape::from_file_vec(&obj_paths.shapes);
+        eprintln!("[shapes] loaded {} entries", shapes.len());
+        for (i, s) in shapes.iter().take(10).enumerate() {
+            let sref = s.shape_ref;
+            eprintln!("[shapes] [{}] {}x{} origin=({},{}) ref={}",
+                i, s.width, s.height, s.origin_x, s.origin_z, sref);
+        }
 
         let (bl320_w, bl320_h, mut bl320_data) = make_bl320_texture_rgba(
             &level_res.paths.bl320, &level_res.params.palette);
@@ -2425,6 +2451,7 @@ impl ApplicationHandler for App {
         self.shaman_atlas_info = shaman_atlas_info;
         self.objects_marker_pipeline = Some(objects_marker_pipeline);
         self.objects_3d = objects_3d;
+        self.shapes = shapes;
         self.building_pipeline = Some(building_pipeline);
         self.building_bind_group_1 = Some(building_bind_group_1);
         self.sky_pipeline = sky_pipeline;

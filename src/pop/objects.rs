@@ -51,12 +51,12 @@ impl BinDeserializer for ObjectRaw {
 #[derive(Debug, Copy, Clone)]
 #[repr(C, packed)]
 pub struct Shape {
-    x1: u8,
-    y1: u8,
-    x2: u8,
-    y2: u8,
-    unknown: [u8; 40],
-    ptr: u32,
+    pub width: u8,
+    pub height: u8,
+    pub origin_x: u8,
+    pub origin_z: u8,
+    pub cell_mask: [u8; 40],
+    pub shape_ref: u32,
 }
 
 impl BinDeserializer for Shape {
@@ -230,6 +230,10 @@ impl Object3D {
 
     pub fn coord_scale(&self) -> f32 {
         self.object.coord_scale as f32
+    }
+
+    pub fn shapes_index(&self) -> u8 {
+        self.object.shapes_index
     }
 }
 
