@@ -53,9 +53,9 @@ pub struct UnitRaw {
     pub subtype: u8,       // byte 0: subtype within model (e.g. Brave=2, Shaman=7)
     pub model: u8,         // byte 1: model type (1=Person, 2=Building, 3=Creature, ...)
     tribe_index: u8,       // byte 2: owner tribe (0-3, or 255=unowned)
-    loc_x: u16,
-    loc_y: u16,
-    f1: u32,
+    loc_x: u16,            // bytes 3-4: world X position
+    loc_y: u16,            // bytes 5-6: world Y position
+    angle: u32,            // bytes 7-10: rotation angle (game uses angle/512 for buildings)
     f2: u16,
     f3: u16,
     fd: [u8; 40],
@@ -66,6 +66,10 @@ impl UnitRaw {
     pub fn loc_x(&self) -> u16 { self.loc_x }
     pub fn loc_y(&self) -> u16 { self.loc_y }
     pub fn model_type(&self) -> Option<ModelType> { ModelType::from_u8(self.model) }
+    pub fn angle(&self) -> u32 { self.angle }
+    pub fn f2(&self) -> u16 { self.f2 }
+    pub fn f3(&self) -> u16 { self.f3 }
+    pub fn fd(&self) -> &[u8; 40] { &self.fd }
 }
 
 impl BinDeserializer for UnitRaw {
@@ -110,6 +114,18 @@ pub fn building_obj_index(subtype: u8, tribe_index: u8) -> Option<usize> {
         7  => Some(141 + tribe),         // Warrior Training
         19 => Some(190),                 // Vault of Knowledge
         _  => None,
+    }
+}
+
+/// Returns the OBJS object index for any model type + subtype combination.
+/// Currently only Building types are mapped.
+/// General/Scenery types (vault, stone heads, etc.) also have 3D meshes
+/// but their OBJS index depends on runtime state (discovery type from
+/// the parameter stack mechanism in the game engine).
+pub fn object_3d_index(model_type: &ModelType, subtype: u8, tribe_index: u8) -> Option<usize> {
+    match model_type {
+        ModelType::Building => building_obj_index(subtype, tribe_index),
+        _ => None,
     }
 }
 

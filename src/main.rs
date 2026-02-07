@@ -27,7 +27,7 @@ use faithful::intersect::intersect_iter;
 
 use faithful::landscape::{LandscapeMesh, LandscapeModel};
 use faithful::pop::level::LevelRes;
-use faithful::pop::units::{ModelType, building_obj_index};
+use faithful::pop::units::{ModelType, object_3d_index};
 use faithful::pop::objects::{Object3D, mk_pop_object};
 use faithful::pop::bl320::make_bl320_texture_rgba;
 use faithful::pop::landscape::{make_texture_land, draw_texture_u8};
@@ -485,8 +485,8 @@ fn build_object_markers(
     let up = Vector3::new(view.x.y, view.y.y, view.z.y);
 
     for obj in objects {
-        // Skip buildings — they are rendered as 3D meshes
-        if obj.model_type == ModelType::Building {
+        // Skip objects that have 3D meshes
+        if object_3d_index(&obj.model_type, obj.subtype, obj.tribe_index).is_some() {
             continue;
         }
 
@@ -556,12 +556,12 @@ fn build_building_meshes(
 
     let mut building_count = 0;
     for obj in objects {
-        if obj.model_type != ModelType::Building {
-            continue;
-        }
+        let idx = match object_3d_index(&obj.model_type, obj.subtype, obj.tribe_index) {
+            Some(i) => Some(i),
+            None => continue,
+        };
         building_count += 1;
-        let idx = building_obj_index(obj.subtype, obj.tribe_index);
-        eprintln!("[building] subtype={} tribe={} -> idx={:?}", obj.subtype, obj.tribe_index, idx);
+        eprintln!("[3d-obj] type={:?} subtype={} tribe={} -> idx={:?}", obj.model_type, obj.subtype, obj.tribe_index, idx);
         let obj3d = match idx {
             Some(i) if i < objects_3d.len() => match &objects_3d[i] {
                 Some(o) => o,
