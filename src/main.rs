@@ -158,6 +158,7 @@ fn make_landscape_model(device: &wgpu::Device, landscape_mesh: &LandscapeMeshS) 
         m.location.y = -2.0;
         m.scale = 2.5;
     }
+    eprintln!("[landscape] model transform: location=(-2,-2,0) scale=2.5");
     model_main
 }
 
@@ -527,6 +528,17 @@ fn build_object_markers(
         model.push_vertex(v(tr));
         model.push_vertex(v(tl));
     }
+    if !model.vertices.is_empty() {
+        let (mut min_x, mut min_y, mut min_z) = (f32::MAX, f32::MAX, f32::MAX);
+        let (mut max_x, mut max_y, mut max_z) = (f32::MIN, f32::MIN, f32::MIN);
+        for v in &model.vertices {
+            min_x = min_x.min(v.coord.x); max_x = max_x.max(v.coord.x);
+            min_y = min_y.min(v.coord.y); max_y = max_y.max(v.coord.y);
+            min_z = min_z.min(v.coord.z); max_z = max_z.max(v.coord.z);
+        }
+        eprintln!("[markers] bbox x=[{:.3}..{:.3}] y=[{:.3}..{:.3}] z=[{:.3}..{:.3}] verts={}",
+            min_x, max_x, min_y, max_y, min_z, max_z, model.vertices.len());
+    }
     let m = vec![(RenderType::Triangles, model)];
     ModelEnvelop::<ColorModel>::new(device, m)
 }
@@ -542,20 +554,24 @@ fn build_building_meshes(
     let shift = landscape.get_shift_vector();
     let center = (w - 1.0) * step / 2.0;
 
+    let mut building_count = 0;
     for obj in objects {
         if obj.model_type != ModelType::Building {
             continue;
         }
-        let obj3d = match building_obj_index(obj.subtype, obj.tribe_index) {
+        building_count += 1;
+        let idx = building_obj_index(obj.subtype, obj.tribe_index);
+        eprintln!("[building] subtype={} tribe={} -> idx={:?}", obj.subtype, obj.tribe_index, idx);
+        let obj3d = match idx {
             Some(i) if i < objects_3d.len() => match &objects_3d[i] {
                 Some(o) => o,
-                None => continue,
+                None => { eprintln!("  -> object at {} is None", i); continue; },
             },
             _ => continue,
         };
 
         let local_model = mk_pop_object(obj3d);
-        let scale = step * (obj3d.coord_scale() / 300.0) * 0.5;
+        let scale = step * (obj3d.coord_scale() / 300.0);
 
         let vis_x = ((obj.cell_x - shift.x as f32) % w + w) % w;
         let vis_y = ((obj.cell_y - shift.y as f32) % w + w) % w;
@@ -572,20 +588,40 @@ fn build_building_meshes(
         let z_base = gz - curvature_offset;
 
         let base_idx = combined.vertices.len() as u16;
+        let first_vert = combined.vertices.len();
         for v in &local_model.vertices {
             combined.push_vertex(TexVertex {
                 coord: Vector3::new(
                     gx + v.coord.x * scale,
                     gy + v.coord.z * scale,
-                    z_base - v.coord.y * scale,
+                    z_base + v.coord.y * scale,
                 ),
                 uv: v.uv,
                 tex_id: v.tex_id,
             });
         }
+        if let Some(fv) = combined.vertices.get(first_vert) {
+            eprintln!("  -> verts={} pos=({:.3},{:.3},{:.3}) scale={:.4} gx={:.3} gy={:.3} gz={:.3} tex_id={}",
+                local_model.vertices.len(), fv.coord.x, fv.coord.y, fv.coord.z,
+                scale, gx, gy, gz, fv.tex_id);
+        }
         for &idx16 in &local_model.indices {
             combined.indices.push(base_idx + idx16);
         }
+    }
+    eprintln!("[buildings] total={} vertices={} indices={} step={:.4} center={:.4} h_scale={:.6}",
+        building_count, combined.vertices.len(), combined.indices.len(), step, center, height_scale);
+    // Print vertex bounding box for debugging
+    if !combined.vertices.is_empty() {
+        let (mut min_x, mut min_y, mut min_z) = (f32::MAX, f32::MAX, f32::MAX);
+        let (mut max_x, mut max_y, mut max_z) = (f32::MIN, f32::MIN, f32::MIN);
+        for v in &combined.vertices {
+            min_x = min_x.min(v.coord.x); max_x = max_x.max(v.coord.x);
+            min_y = min_y.min(v.coord.y); max_y = max_y.max(v.coord.y);
+            min_z = min_z.min(v.coord.z); max_z = max_z.max(v.coord.z);
+        }
+        eprintln!("[buildings] bbox x=[{:.3}..{:.3}] y=[{:.3}..{:.3}] z=[{:.3}..{:.3}]",
+            min_x, max_x, min_y, max_y, min_z, max_z);
     }
     let m = vec![(RenderType::Triangles, combined)];
     ModelEnvelop::<TexModel>::new(device, m)
@@ -1740,11 +1776,12 @@ impl App {
                 }
             }
 
-            // Draw 3D building meshes
+            // Draw 3D building meshes (identity model transform, same as markers)
             if self.show_objects {
                 if let (Some(ref pipeline), Some(ref bg1)) =
                     (&self.building_pipeline, &self.building_bind_group_1)
                 {
+                    // model_select already wrote identity — no extra write needed
                     render_pass.set_pipeline(pipeline);
                     render_pass.set_bind_group(0, self.objects_group0_bind_group.as_ref().unwrap(), &[]);
                     render_pass.set_bind_group(1, bg1, &[]);
@@ -2059,13 +2096,58 @@ impl ApplicationHandler for App {
         // Building pipeline (reuses objects_tex.wgsl shader, TexModel vertex layout)
         let building_shader_source = include_str!("../shaders/objects_tex.wgsl");
         let building_vertex_layouts = TexModel::vertex_buffer_layouts();
-        let building_pipeline = create_pipeline(
-            device, building_shader_source, &building_vertex_layouts,
-            &[&objects_group0_layout, &sprite_group1_layout],
-            gpu.surface_format(), true,
-            wgpu::PrimitiveTopology::TriangleList,
-            "building_pipeline",
-        );
+        let building_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("building_shader"),
+            source: wgpu::ShaderSource::Wgsl(building_shader_source.into()),
+        });
+        let building_pipe_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("building_pipeline_layout"),
+            bind_group_layouts: &[&objects_group0_layout, &sprite_group1_layout],
+            immediate_size: 0,
+        });
+        let building_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("building_pipeline"),
+            layout: Some(&building_pipe_layout),
+            vertex: wgpu::VertexState {
+                module: &building_shader,
+                entry_point: Some("vs_main"),
+                buffers: &building_vertex_layouts,
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &building_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: gpu.surface_format(),
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview_mask: None,
+            cache: None,
+        });
 
         // Empty spawn model (will be populated when level loads)
         let model_spawn = {

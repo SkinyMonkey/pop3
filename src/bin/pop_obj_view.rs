@@ -11,6 +11,7 @@ use clap::{Arg, ArgAction, Command};
 
 use cgmath::Vector3;
 
+use faithful::model::MeshModel;
 use faithful::tex_model::TexModel;
 use faithful::view::*;
 
@@ -35,6 +36,20 @@ fn mk_pop_envelope(device: &wgpu::Device, object: &Object3D) -> ModelEnvelop<Tex
         m.scale = (object.coord_scale() / 300.0) * 0.5;
     }
     e
+}
+
+fn mk_empty_envelope(device: &wgpu::Device) -> ModelEnvelop<TexModel> {
+    let model: TexModel = MeshModel::new();
+    let m = vec![(RenderType::Triangles, model)];
+    ModelEnvelop::<TexModel>::new(device, m)
+}
+
+fn obj_title(obj_num: usize, total: usize, objects_3d: &[Option<Object3D>]) -> String {
+    match objects_3d.get(obj_num) {
+        Some(Some(o)) => format!("pop-obj-view [{}/{}] faces={} scale={}",
+            obj_num, total, o.iter_face().count(), o.coord_scale() as u32),
+        _ => format!("pop-obj-view [{}/{}] (empty)", obj_num, total),
+    }
 }
 
 /******************************************************************************/
@@ -62,7 +77,7 @@ fn cli() -> Command {
             .action(ArgAction::Set)
             .value_name("OBJ")
             .value_parser(clap::value_parser!(u16).range(0..16000))
-            .help("Obj number"),
+            .help("Obj file index (0-based)"),
     ];
     Command::new("pop-obj-view")
         .about("POP3 object viewer")
@@ -80,7 +95,7 @@ struct App {
     pop_obj: Option<ModelEnvelop<TexModel>>,
     camera: Camera,
     screen: Screen,
-    objects_3d: Vec<Object3D>,
+    objects_3d: Vec<Option<Object3D>>,
     obj_num: usize,
     scale: f32,
     scale_origin: f32,
@@ -88,11 +103,10 @@ struct App {
     // Init data
     base: PathBuf,
     landtype: String,
-    init_obj_num: Option<u16>,
 }
 
 impl App {
-    fn new(base: PathBuf, landtype: String, init_obj_num: Option<u16>, objects_3d: Vec<Object3D>) -> Self {
+    fn new(base: PathBuf, landtype: String, init_obj_num: Option<u16>, objects_3d: Vec<Option<Object3D>>) -> Self {
         let mut camera = Camera::new();
         camera.angle_x = -75;
         camera.angle_z = 60;
@@ -114,7 +128,6 @@ impl App {
             do_render: true,
             base,
             landtype,
-            init_obj_num,
         }
     }
 
@@ -191,9 +204,10 @@ impl ApplicationHandler for App {
             return;
         }
 
+        let title = obj_title(self.obj_num, self.objects_3d.len(), &self.objects_3d);
         let window = Arc::new(
             event_loop
-                .create_window(WindowAttributes::default().with_title("pop-obj-view"))
+                .create_window(WindowAttributes::default().with_title(&title))
                 .unwrap(),
         );
         self.window = Some(window.clone());
@@ -335,8 +349,18 @@ impl ApplicationHandler for App {
             return;
         }
 
-        let mut pop_obj = mk_pop_envelope(device, &self.objects_3d[self.obj_num]);
-        self.scale_origin = pop_obj.get(0).map(|m| m.scale).unwrap();
+        let pop_obj = match &self.objects_3d[self.obj_num] {
+            Some(obj) => {
+                let mut e = mk_pop_envelope(device, obj);
+                self.scale_origin = e.get(0).map(|m| m.scale).unwrap();
+                e
+            }
+            None => {
+                self.scale_origin = 1.0;
+                mk_empty_envelope(device)
+            }
+        };
+        eprintln!("{}", obj_title(self.obj_num, self.objects_3d.len(), &self.objects_3d));
 
         self.pipeline = Some(pipeline);
         self.mvp_buffer = Some(mvp_buffer);
@@ -420,15 +444,25 @@ impl ApplicationHandler for App {
                                 }
                             },
                             KeyCode::KeyV => {
-                                let new_obj = if self.obj_num > 0 { self.obj_num - 1 } else { self.obj_num };
-                                if new_obj != self.obj_num {
-                                    self.switch_object(new_obj);
+                                // Previous non-empty object
+                                let mut i = self.obj_num;
+                                while i > 0 {
+                                    i -= 1;
+                                    if self.objects_3d[i].is_some() {
+                                        self.switch_object(i);
+                                        break;
+                                    }
                                 }
                             },
                             KeyCode::KeyB => {
-                                let new_obj = if (self.obj_num + 1) >= self.objects_3d.len() { self.obj_num } else { self.obj_num + 1 };
-                                if new_obj != self.obj_num {
-                                    self.switch_object(new_obj);
+                                // Next non-empty object
+                                let mut i = self.obj_num;
+                                while i + 1 < self.objects_3d.len() {
+                                    i += 1;
+                                    if self.objects_3d[i].is_some() {
+                                        self.switch_object(i);
+                                        break;
+                                    }
                                 }
                             },
                             KeyCode::KeyR => {
@@ -464,20 +498,34 @@ impl App {
         let (l, a) = self.pop_obj.as_mut()
             .and_then(|o| o.get(0))
             .map(|m| (m.location, m.angles))
-            .unwrap();
+            .unwrap_or((Vector3::new(0.0, -0.5, 0.0), Vector3::new(0.0, 0.0, 0.0)));
 
         let device = &self.gpu.as_ref().unwrap().device;
-        let mut pop_obj = mk_pop_envelope(device, &self.objects_3d[new_obj]);
-
-        if let Some(m) = pop_obj.get(0) {
-            m.location = l;
-            m.angles = a;
-            self.scale_origin = m.scale;
-            m.scale = self.scale_origin * self.scale;
-        }
+        let pop_obj = match &self.objects_3d[new_obj] {
+            Some(obj) => {
+                let mut e = mk_pop_envelope(device, obj);
+                if let Some(m) = e.get(0) {
+                    m.location = l;
+                    m.angles = a;
+                    self.scale_origin = m.scale;
+                    m.scale = self.scale_origin * self.scale;
+                }
+                e
+            }
+            None => {
+                self.scale_origin = 1.0;
+                mk_empty_envelope(device)
+            }
+        };
 
         self.obj_num = new_obj;
         self.pop_obj = Some(pop_obj);
+
+        let title = obj_title(self.obj_num, self.objects_3d.len(), &self.objects_3d);
+        eprintln!("{}", title);
+        if let Some(window) = &self.window {
+            window.set_title(&title);
+        }
     }
 }
 
@@ -498,7 +546,9 @@ fn main() {
         .write_style_or("F_LOG_STYLE", "always");
     env_logger::init_from_env(env);
 
-    let objects_3d = Object3D::from_file(&base, "0");
+    let objects_3d = Object3D::from_file_all(&base, "0");
+    eprintln!("Loaded {} objects from OBJS0-0.DAT ({} with faces)",
+        objects_3d.len(), objects_3d.iter().filter(|o| o.is_some()).count());
 
     let event_loop = EventLoop::new().unwrap();
     let mut app = App::new(base, landtype, obj_num, objects_3d);
