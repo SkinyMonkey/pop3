@@ -163,14 +163,14 @@ fn make_landscape_model(device: &wgpu::Device, landscape_mesh: &LandscapeMeshS) 
 }
 
 /// Extract spawn cell coordinates from level data.
-/// Returns (cell_x, cell_y, tribe_index) for each tribe's first building (model == 2).
+/// Returns (cell_x, cell_y, tribe_index) for each tribe's shaman (Person subtype 7).
 fn extract_spawn_cells(level_res: &LevelRes) -> Vec<(f32, f32, u8)> {
     let mut found = [false; 4];
     let mut cells = Vec::new();
     let n = level_res.landscape.land_size() as f32;
     for unit in &level_res.units {
         let tribe = unit.tribe_index() as usize;
-        if unit.model == 2 && tribe < 4 && !found[tribe] {
+        if unit.model == 1 && unit.subtype == 7 && tribe < 4 && !found[tribe] {
             found[tribe] = true;
             // Bevy convention: cell_x from loc_x, cell_z from loc_y
             let bevy_x = ((unit.loc_x() >> 8) / 2) as f32 + 0.5;
