@@ -1,0 +1,36 @@
+# Test zoom boundary clamping
+
+# Below minimum: should clamp to 0.3
+zoom 0.1
+
+# Pan and rotate at min zoom
+W
+W
+Q
+Q
+D
+D
+
+# Above maximum: should clamp to 5.0
+zoom 10.0
+
+# Pan and rotate at max zoom
+W
+W
+Q
+Q
+D
+D
+
+# Exact boundaries
+zoom 0.3
+W
+W
+zoom 5.0
+W
+W
+
+# Restore normal zoom
+zoom 1.0
+W
+W

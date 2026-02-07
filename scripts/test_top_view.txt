@@ -1,0 +1,42 @@
+# Test T key (direct top-down view at angle_x=-90)
+
+# T sets angle_x = -90 directly
+T
+
+# Pan with WASD at top-down view
+W
+W
+W
+S
+S
+A
+A
+D
+D
+D
+
+# Rotate while top-down
+Q
+Q
+Q
+Q
+
+# Pan again after rotation at top-down
+W
+W
+S
+S
+
+# Recover from top-down with ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+
+# Pan at recovered angle
+W
+W
+D
+D

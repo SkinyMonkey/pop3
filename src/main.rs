@@ -1,5 +1,8 @@
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
@@ -9,7 +12,7 @@ use winit::window::{Window, WindowAttributes};
 
 use clap::{Arg, ArgAction, Command};
 
-use cgmath::{Point2, Vector2, Vector3, Vector4, Matrix4, SquareMatrix};
+use cgmath::{Point2, Point3, Vector2, Vector3, Vector4, Matrix4, SquareMatrix};
 
 use faithful::model::{VertexModel, MeshModel};
 use faithful::default_model::DefaultModel;
@@ -65,10 +68,12 @@ fn process_key(key: KeyCode, camera: &mut Camera, landscape_mesh: &mut Landscape
                 KeyCode::KeyD => (1.0, 0.0),
                 _ => unreachable!(),
             };
-            // Rotate screen direction by angle_z to get grid direction
+            // Project screen direction through orbit camera orientation.
+            // Camera forward on XY = (-sin(az), -cos(az)),
+            // camera right on XY = (-cos(az), sin(az)).
             let az = (camera.angle_z as f32).to_radians();
-            let gx = dx * az.cos() - dy * az.sin();
-            let gy = dx * az.sin() + dy * az.cos();
+            let gx = -dx * az.cos() - dy * az.sin();
+            let gy =  dx * az.sin() - dy * az.cos();
             landscape_mesh.shift_x(gx.round() as i32);
             landscape_mesh.shift_y(gy.round() as i32);
         },
@@ -298,7 +303,7 @@ fn build_spawn_model(device: &wgpu::Device, cells: &[(f32, f32, u8)],
     let shift = landscape.get_shift_vector();
 
     // Sprite sizing: use atlas aspect ratio if available
-    let sprite_h = step * 1.5;
+    let sprite_h = step * 0.6;
     let half_w = if let Some(info) = atlas_info {
         let aspect = info.frame_width as f32 / info.frame_height as f32;
         sprite_h * aspect / 2.0
@@ -308,15 +313,20 @@ fn build_spawn_model(device: &wgpu::Device, cells: &[(f32, f32, u8)],
 
     let center = (w - 1.0) * step / 2.0;
 
-    // Billboard orientation: screen-aligned right and up vectors from camera angles.
-    // transform = Rx(ax) * Rz(az), so inverse = Rz(-az) * Rx(-ax).
-    // Screen right = column 0 of inverse, screen up = column 1 of inverse.
+    // Billboard orientation: extract screen-aligned right and up vectors from the
+    // orbit camera's view matrix, matching MVP::with_zoom exactly.
     let az = (angle_z as f32).to_radians();
     let ax = (angle_x as f32).to_radians();
-    // Right vector (screen X axis in world space)
-    let right = Vector3::new(az.cos(), -az.sin(), 0.0);
-    // Up vector (screen Y axis in world space) — tilted by angle_x
-    let up = Vector3::new(az.sin() * ax.cos(), az.cos() * ax.cos(), -ax.sin());
+    let eye = Point3::new(
+        center + ax.cos() * az.sin(),
+        center + ax.cos() * az.cos(),
+        -ax.sin(),
+    );
+    let target = Point3::new(center, center, 0.0);
+    let view = Matrix4::look_at_rh(eye, target, Vector3::new(0.0, 0.0, 1.0));
+    // World-space right = first row of view matrix, up = second row
+    let right = Vector3::new(view.x.x, view.y.x, view.z.x);
+    let up = Vector3::new(view.x.y, view.y.y, view.z.y);
 
     let fpd = SHAMAN_FRAMES_PER_DIR as f32;
     let uv_scale_x = 1.0 / fpd;
@@ -801,6 +811,7 @@ struct AppConfig {
     cpu_full: bool,
     debug: bool,
     light: Option<(i16, i16)>,
+    script: Option<PathBuf>,
 }
 
 struct App {
@@ -860,6 +871,14 @@ struct App {
 
     // Config
     config: AppConfig,
+
+    // Debug logging
+    debug_log: BufWriter<File>,
+    start_time: Instant,
+
+    // Script replay
+    script_commands: Vec<String>,
+    script_index: usize,
 }
 
 impl App {
@@ -875,6 +894,21 @@ impl App {
         };
 
         let landscape_mesh = LandscapeMesh::new(1.0 / 16.0, (1.0 / 16.0) * 4.0 / 1024.0);
+
+        let debug_log = BufWriter::new(
+            File::create("/tmp/faithful_debug.jsonl").expect("failed to create debug log"),
+        );
+
+        let script_commands: Vec<String> = config.script.as_ref()
+            .map(|path| {
+                std::fs::read_to_string(path)
+                    .unwrap_or_else(|e| panic!("failed to read script {:?}: {}", path, e))
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                    .collect()
+            })
+            .unwrap_or_default();
 
         App {
             window: None,
@@ -918,6 +952,10 @@ impl App {
             sunlight,
             wat_offset: -1,
             config,
+            debug_log,
+            start_time: Instant::now(),
+            script_commands,
+            script_index: 0,
         }
     }
 
@@ -1003,6 +1041,150 @@ impl App {
         // Rebuild spawn markers
         self.spawn_cells = extract_spawn_cells(&level_res);
         self.rebuild_spawn_model();
+    }
+
+    /// Compute the terrain height under the orbit camera eye position.
+    fn camera_min_z(&self) -> f32 {
+        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+        let az = (self.camera.angle_z as f32).to_radians();
+        let ax = (self.camera.angle_x as f32).to_radians();
+        let radius = 1.5 / self.zoom;
+        let eye_x = center + radius * ax.cos() * az.sin();
+        let eye_y = center + radius * ax.cos() * az.cos();
+        let step = self.landscape_mesh.step();
+        let n = self.landscape_mesh.width();
+        let gx = (eye_x / step).clamp(0.0, (n - 1) as f32) as usize;
+        let gy = (eye_y / step).clamp(0.0, (n - 1) as f32) as usize;
+        // Add shift to match what the shader renders at this world position
+        let shift = self.landscape_mesh.get_shift_vector();
+        let sx = (gx + shift.x as usize) % n;
+        let sy = (gy + shift.y as usize) % n;
+        self.landscape_mesh.height_at(sx, sy) as f32 * self.landscape_mesh.height_scale() + 0.05
+    }
+
+    fn log_camera_state(&mut self, event: &str) {
+        let t = self.start_time.elapsed().as_secs_f64();
+        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+        let az = (self.camera.angle_z as f32).to_radians();
+        let ax = (self.camera.angle_x as f32).to_radians();
+        let radius = 1.5 / self.zoom;
+        let eye_x = center + radius * ax.cos() * az.sin();
+        let eye_y = center + radius * ax.cos() * az.cos();
+        let eye_z_orbit = -radius * ax.sin();
+        let min_z = self.camera_min_z();
+        let eye_z = eye_z_orbit.max(min_z);
+        let shift = self.landscape_mesh.get_shift_vector();
+        let _ = writeln!(
+            self.debug_log,
+            r#"{{"t":{:.3},"event":"{}","angle_x":{},"angle_z":{},"zoom":{:.3},"radius":{:.4},"eye":[{:.4},{:.4},{:.4}],"eye_z_orbit":{:.4},"min_z":{:.4},"focus":[{:.4},{:.4},0.0],"shift":[{},{}]}}"#,
+            t, event,
+            self.camera.angle_x, self.camera.angle_z,
+            self.zoom, radius,
+            eye_x, eye_y, eye_z, eye_z_orbit, min_z,
+            center, center,
+            shift.x, shift.y,
+        );
+        let _ = self.debug_log.flush();
+    }
+
+    fn is_script_mode(&self) -> bool {
+        !self.script_commands.is_empty()
+    }
+
+    fn run_script_step(&mut self) -> bool {
+        if self.script_index >= self.script_commands.len() {
+            return false; // done
+        }
+        let cmd = self.script_commands[self.script_index].clone();
+        self.script_index += 1;
+
+        // Parse zoom command
+        if let Some(val) = cmd.strip_prefix("zoom ") {
+            if let Ok(z) = val.trim().parse::<f32>() {
+                self.zoom = z.clamp(0.3, 5.0);
+                self.log_camera_state("zoom");
+                self.do_render = true;
+                return true;
+            }
+        }
+
+        // Parse key name to KeyCode
+        let key = match cmd.as_str() {
+            "W" => KeyCode::KeyW,
+            "A" => KeyCode::KeyA,
+            "S" => KeyCode::KeyS,
+            "D" => KeyCode::KeyD,
+            "Q" => KeyCode::KeyQ,
+            "E" => KeyCode::KeyE,
+            "R" => KeyCode::KeyR,
+            "T" => KeyCode::KeyT,
+            "N" => KeyCode::KeyN,
+            "M" => KeyCode::KeyM,
+            "B" => KeyCode::KeyB,
+            "V" => KeyCode::KeyV,
+            "C" => KeyCode::KeyC,
+            "Space" => KeyCode::Space,
+            "ArrowUp" => KeyCode::ArrowUp,
+            "ArrowDown" => KeyCode::ArrowDown,
+            "BracketLeft" => KeyCode::BracketLeft,
+            "BracketRight" => KeyCode::BracketRight,
+            other => {
+                log::warn!("script: unknown command {:?}", other);
+                return true; // skip, continue
+            }
+        };
+
+        // Replay through the same logic as the keyboard handler
+        match key {
+            KeyCode::KeyR => {
+                self.camera.angle_x = -55;
+                self.camera.angle_y = 0;
+                self.camera.angle_z = 0;
+                self.camera.pos = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
+                self.rebuild_spawn_model();
+                self.log_camera_state("reset");
+            },
+            KeyCode::KeyT => {
+                self.camera.angle_x = -90;
+                self.log_camera_state("KeyT");
+            },
+            KeyCode::Space => {
+                if let Some(&(cx, cy, _)) = self.spawn_cells.iter().find(|(_, _, t)| *t == 0) {
+                    let n = self.landscape_mesh.width() as i32;
+                    let sx = ((cx as i32 - n / 2) % n + n) % n;
+                    let sy = ((cy as i32 - n / 2) % n + n) % n;
+                    self.landscape_mesh.set_shift(sx as usize, sy as usize);
+                    self.rebuild_spawn_model();
+                    self.log_camera_state("space_center");
+                }
+            },
+            KeyCode::KeyC => {
+                self.curvature_enabled = !self.curvature_enabled;
+                self.rebuild_spawn_model();
+            },
+            KeyCode::BracketRight => {
+                self.curvature_scale *= 1.2;
+                self.rebuild_spawn_model();
+            },
+            KeyCode::BracketLeft => {
+                self.curvature_scale *= 0.8;
+                self.rebuild_spawn_model();
+            },
+            _ => {
+                let prev_shift = self.landscape_mesh.get_shift_vector();
+                let prev_angle_z = self.camera.angle_z;
+                let prev_angle_x = self.camera.angle_x;
+                process_key(key, &mut self.camera, &mut self.landscape_mesh);
+                let new_shift = self.landscape_mesh.get_shift_vector();
+                let shift_changed = new_shift != prev_shift;
+                if shift_changed || self.camera.angle_z != prev_angle_z || self.camera.angle_x != prev_angle_x {
+                    self.rebuild_spawn_model();
+                    self.log_camera_state(&format!("{:?}", key));
+                }
+            },
+        }
+        self.do_render = true;
+        true
     }
 
     fn rebuild_spawn_model(&mut self) {
@@ -1226,7 +1408,8 @@ impl App {
         // Update uniforms
         let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
         let focus = Vector3::new(center, center, 0.0);
-        let mvp = MVP::with_zoom(&self.screen, &self.camera, self.zoom, focus);
+        let min_z = self.camera_min_z();
+        let mvp = MVP::with_zoom(&self.screen, &self.camera, self.zoom, focus, min_z);
         let mvp_m = mvp.projection * mvp.view * mvp.transform;
         let mvp_raw: TransformRaw = mvp_m.into();
         self.mvp_buffer.as_ref().unwrap().update(&gpu.queue, 0, bytemuck::bytes_of(&mvp_raw));
@@ -1720,7 +1903,8 @@ impl ApplicationHandler for App {
                 if state == ElementState::Pressed {
                     let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
                     let focus = Vector3::new(center, center, 0.0);
-                    let (v1, v2) = screen_to_scene_zoom(&self.screen, &self.camera, &self.mouse_pos, self.zoom, focus);
+                    let min_z = self.camera_min_z();
+                    let (v1, v2) = screen_to_scene_zoom(&self.screen, &self.camera, &self.mouse_pos, self.zoom, focus, min_z);
                     if let Some(ref mut model_select) = self.model_select {
                         if let Some(m) = model_select.get(0) {
                             m.model.set_vertex(0, v1);
@@ -1748,6 +1932,7 @@ impl ApplicationHandler for App {
                 };
                 self.zoom *= 1.1_f32.powf(scroll_y);
                 self.zoom = self.zoom.clamp(0.3, 5.0);
+                self.log_camera_state("zoom");
                 self.do_render = true;
             },
             WindowEvent::CloseRequested => event_loop.exit(),
@@ -1765,6 +1950,7 @@ impl ApplicationHandler for App {
                                 self.camera.angle_z = 0;
                                 self.camera.pos = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
                                 self.rebuild_spawn_model();
+                                self.log_camera_state("reset");
                             },
                             KeyCode::KeyT => {
                                 self.camera.angle_x = -90;
@@ -1827,6 +2013,7 @@ impl ApplicationHandler for App {
                                     let sy = ((cy as i32 - n / 2) % n + n) % n;
                                     self.landscape_mesh.set_shift(sx as usize, sy as usize);
                                     self.rebuild_spawn_model();
+                                    self.log_camera_state("space_center");
                                 }
                             },
                             _ => {
@@ -1838,6 +2025,7 @@ impl ApplicationHandler for App {
                                 let shift_changed = new_shift != prev_shift;
                                 if shift_changed || self.camera.angle_z != prev_angle_z || self.camera.angle_x != prev_angle_x {
                                     self.rebuild_spawn_model();
+                                    self.log_camera_state(&format!("{:?}", key));
                                 }
                             },
                         }
@@ -1849,6 +2037,13 @@ impl ApplicationHandler for App {
                 if self.do_render && self.gpu.is_some() {
                     self.render();
                     self.do_render = false;
+                }
+                // Script replay: process one command per frame
+                if self.is_script_mode() {
+                    if !self.run_script_step() {
+                        event_loop.exit();
+                        return;
+                    }
                 }
             },
             _ => (),
@@ -1905,6 +2100,12 @@ fn cli() -> Command {
             .long("debug")
             .action(ArgAction::SetTrue)
             .help("Enable debug printing"),
+        Arg::new("script")
+            .long("script")
+            .action(ArgAction::Set)
+            .value_name("SCRIPT_PATH")
+            .value_parser(clap::value_parser!(PathBuf))
+            .help("Replay key events from a script file"),
     ];
     Command::new("faithful")
         .about("POP3 wgpu renderer")
@@ -1922,6 +2123,7 @@ fn main() {
         cpu_full: matches.get_flag("cpu-full"),
         debug: matches.get_flag("debug"),
         light: matches.get_one::<String>("light").and_then(|s| parse_light(s)),
+        script: matches.get_one("script").cloned(),
     };
 
     let log_level: &str = if config.debug { "debug" } else { "info" };

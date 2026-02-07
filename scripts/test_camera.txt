@@ -1,0 +1,141 @@
+# Pan forward/back at default angle (angle_z=65)
+W
+W
+W
+S
+S
+
+# Rotate and pan
+Q
+Q
+Q
+W
+W
+D
+D
+
+# Rotate the other way
+E
+E
+E
+E
+E
+E
+W
+W
+A
+A
+
+# Tilt up and pan
+ArrowUp
+ArrowUp
+W
+W
+
+# Tilt down and pan
+ArrowDown
+ArrowDown
+ArrowDown
+S
+S
+
+# Reset camera
+R
+
+# Center on blue shaman
+Space
+
+# Zoom in
+zoom 2.0
+
+# Pan while zoomed
+W
+W
+W
+Q
+Q
+D
+D
+
+# Zoom out
+zoom 0.5
+
+# Pan while zoomed out
+S
+S
+A
+A
+
+# Full 360 rotation (72 Q presses * 5 = 360 degrees)
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q
+Q

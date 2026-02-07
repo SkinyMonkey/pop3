@@ -33,19 +33,19 @@ impl Default for Camera {
 
 impl MVP {
     pub fn new(screen: &Screen, camera: &Camera, focus: Vector3<f32>) -> MVP {
-        Self::with_zoom(screen, camera, 1.0, focus)
+        Self::with_zoom(screen, camera, 1.0, focus, 0.0)
     }
 
-    pub fn with_zoom(screen: &Screen, camera: &Camera, zoom: f32, focus: Vector3<f32>) -> MVP {
+    pub fn with_zoom(screen: &Screen, camera: &Camera, zoom: f32, focus: Vector3<f32>, min_z: f32) -> MVP {
         let az = Rad::from(Deg(camera.angle_z as f32));
         let ax = Rad::from(Deg(camera.angle_x as f32));
         let radius = 1.5 / zoom;
 
-        // Orbit camera position around focus point
+        // Orbit camera position around focus point, clamped above terrain
         let eye_pos = Point3::new(
             focus.x + radius * Rad::cos(ax) * Rad::sin(az),
             focus.y + radius * Rad::cos(ax) * Rad::cos(az),
-            focus.z - radius * Rad::sin(ax),
+            (focus.z - radius * Rad::sin(ax)).max(min_z),
         );
         let target = Point3::new(focus.x, focus.y, focus.z);
 
@@ -79,8 +79,8 @@ impl MVP {
  * (0;0) (w;0)
  * (0;h) (w;h)
  */
-pub fn screen_to_scene_zoom(screen: &Screen, camera: &Camera, pos_screen: &Point2<f32>, zoom: f32, focus: Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) {
-    let mvp = MVP::with_zoom(screen, camera, zoom, focus);
+pub fn screen_to_scene_zoom(screen: &Screen, camera: &Camera, pos_screen: &Point2<f32>, zoom: f32, focus: Vector3<f32>, min_z: f32) -> (Vector3<f32>, Vector3<f32>) {
+    let mvp = MVP::with_zoom(screen, camera, zoom, focus, min_z);
     let asp = screen.width as f32 / screen.height as f32;
     let x: f32 = {
         let w = screen.width as f32;

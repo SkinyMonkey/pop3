@@ -1,0 +1,79 @@
+# Test angle_x clamping at boundaries
+# Default angle_x = -55
+
+# ArrowUp 10 times: -55 + 50 = -5 but clamps at -30
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+
+# ArrowDown 20 times: -30 - 100 = -130 but clamps at -90
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+
+# ArrowUp 12 times: -90 + 60 = -30
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+
+# Hammer ArrowUp 5 more times at the boundary (should stay at -30)
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+ArrowUp
+
+# Hammer ArrowDown 15 times to reach -90 again
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+ArrowDown
+
+# 3 more at the bottom boundary (should stay at -90)
+ArrowDown
+ArrowDown
+ArrowDown
