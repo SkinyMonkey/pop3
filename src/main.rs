@@ -32,8 +32,8 @@ use pop3::pop::objects::{Object3D, Shape, mk_pop_object};
 use pop3::pop::bl320::make_bl320_texture_rgba;
 use pop3::pop::landscape::{make_texture_land, draw_texture_u8};
 
-use pop3::unit_control::{UnitCoordinator, DragState, find_unit_at_cell};
-use pop3::unit_control::coords::{gpu_to_cell, cell_to_world};
+use pop3::unit_control::{UnitCoordinator, DragState, Unit};
+use pop3::unit_control::coords::{cell_to_world, triangle_to_cell, project_to_screen, nearest_screen_hit};
 
 use pop3::gpu::context::GpuContext;
 use pop3::gpu::pipeline::create_pipeline;
@@ -149,6 +149,10 @@ impl LandscapeProgramContainer {
 
 /******************************************************************************/
 
+/// Landscape model transform: world = LANDSCAPE_SCALE * model + LANDSCAPE_OFFSET.
+const LANDSCAPE_SCALE: f32 = 2.5;
+const LANDSCAPE_OFFSET: f32 = -2.0;
+
 fn make_landscape_model(device: &wgpu::Device, landscape_mesh: &LandscapeMeshS) -> ModelEnvelop<LandscapeModel> {
     let mut model: LandscapeModel = MeshModel::new();
     landscape_mesh.to_model(&mut model);
@@ -156,11 +160,11 @@ fn make_landscape_model(device: &wgpu::Device, landscape_mesh: &LandscapeMeshS) 
     let m = vec![(RenderType::Triangles, model)];
     let mut model_main = ModelEnvelop::<LandscapeModel>::new(device, m);
     if let Some(m) = model_main.get(0) {
-        m.location.x = -2.0;
-        m.location.y = -2.0;
-        m.scale = 2.5;
+        m.location.x = LANDSCAPE_OFFSET;
+        m.location.y = LANDSCAPE_OFFSET;
+        m.scale = LANDSCAPE_SCALE;
     }
-    eprintln!("[landscape] model transform: location=(-2,-2,0) scale=2.5");
+    eprintln!("[landscape] model transform: location=({0},{0},0) scale={1}", LANDSCAPE_OFFSET, LANDSCAPE_SCALE);
     model_main
 }
 
@@ -1411,6 +1415,29 @@ impl App {
         }
     }
 
+    /// The grid vertex that appears at the camera's focus point,
+    /// accounting for the landscape model transform.
+    fn camera_focus_vertex(&self) -> f32 {
+        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+        // Camera focus is at world (center, center). Invert model transform to get model-space pos.
+        let model_x = (center - LANDSCAPE_OFFSET) / LANDSCAPE_SCALE;
+        model_x / self.landscape_mesh.step()
+    }
+
+    fn center_on_tribe0_shaman(&mut self) {
+        if let Some(&(cx, cy, _)) = self.spawn_cells.iter().find(|(_, _, t)| *t == 0) {
+            let n = self.landscape_mesh.width() as i32;
+            let v = self.camera_focus_vertex() as i32;
+            let sx = ((cx as i32 - v) % n + n) % n;
+            let sy = ((cy as i32 - v) % n + n) % n;
+            log::info!("[center] shaman at cell ({}, {}), camera_vertex={}, shift -> ({}, {})", cx, cy, v, sx, sy);
+            self.landscape_mesh.set_shift(sx as usize, sy as usize);
+            self.rebuild_spawn_model();
+        } else {
+            log::warn!("[center] no tribe 0 shaman in spawn_cells (len={})", self.spawn_cells.len());
+        }
+    }
+
     fn update_level(&mut self) {
         let base = self.config.base.clone().unwrap_or_else(|| Path::new("/opt/sandbox/pop").to_path_buf());
         let level_type = self.config.landtype.as_deref();
@@ -1476,6 +1503,7 @@ impl App {
         self.level_objects.retain(|obj| obj.model_type != ModelType::Person);
 
         self.rebuild_spawn_model();
+        self.center_on_tribe0_shaman();
     }
 
     /// Compute the terrain height under the orbit camera eye position.
@@ -1505,71 +1533,84 @@ impl App {
         let min_z = self.camera_min_z();
         let (v1, v2) = screen_to_scene_zoom(&self.screen, &self.camera, &self.mouse_pos, self.zoom, focus, min_z);
 
-        // Landscape model transform is always identity
-        let mvp_transform = Matrix4::identity();
+        // Must use the actual landscape model transform (translate + scale)
+        let mvp_transform = Matrix4::from_translation(Vector3::new(LANDSCAPE_OFFSET, LANDSCAPE_OFFSET, 0.0))
+            * Matrix4::from_scale(LANDSCAPE_SCALE);
         let iter = self.landscape_mesh.iter();
 
         match intersect_iter(iter, &mvp_transform, v1, v2) {
-            Some((_, t)) => {
-                // Hit point in GPU space: origin + t * direction
-                let hit = v1 + v2 * t;
+            Some((triangle_id, _)) => {
                 let shift = self.landscape_mesh.get_shift_vector();
-                let w = self.landscape_mesh.width() as f32;
-                let step = self.landscape_mesh.step();
-                Some(gpu_to_cell(hit.x, hit.y, step, shift.x as f32, shift.y as f32, w))
+                Some(triangle_to_cell(
+                    triangle_id,
+                    self.landscape_mesh.width(),
+                    shift.x as usize,
+                    shift.y as usize,
+                ))
             }
             None => None,
         }
     }
 
-    /// Find all units whose GPU-space positions project into a screen rectangle.
+    /// Build the projection-view-model matrix for unit screen projection.
+    fn unit_pvm(&self) -> Matrix4<f32> {
+        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+        let focus = Vector3::new(center, center, 0.0);
+        let min_z = self.camera_min_z();
+        let mvp = MVP::with_zoom(&self.screen, &self.camera, self.zoom, focus, min_z);
+        let model_transform = Matrix4::from_translation(Vector3::new(LANDSCAPE_OFFSET, LANDSCAPE_OFFSET, 0.0))
+            * Matrix4::from_scale(LANDSCAPE_SCALE);
+        mvp.projection * mvp.view * model_transform
+    }
+
+    /// Project a unit's billboard center to screen coordinates.
+    /// Returns None if behind camera.
+    fn unit_screen_pos(&self, unit: &Unit, pvm: &Matrix4<f32>) -> Option<(f32, f32)> {
+        let step = self.landscape_mesh.step();
+        let w = self.landscape_mesh.width() as f32;
+        let shift = self.landscape_mesh.get_shift_vector();
+        let height_scale = self.landscape_mesh.height_scale();
+        let center = (w - 1.0) * step / 2.0;
+        let cs = if self.curvature_enabled { self.curvature_scale } else { 0.0 };
+
+        let vis_x = ((unit.cell_x - shift.x as f32) % w + w) % w;
+        let vis_y = ((unit.cell_y - shift.y as f32) % w + w) % w;
+        let gx = vis_x * step;
+        let gy = vis_y * step;
+        let ix = (unit.cell_x as usize).min(127);
+        let iy = (unit.cell_y as usize).min(127);
+        let gz = self.landscape_mesh.height_at(ix, iy) as f32 * height_scale;
+        let dx = gx - center;
+        let dy = gy - center;
+        let curvature_offset = (dx * dx + dy * dy) * cs;
+        let z_base = gz - curvature_offset;
+
+        project_to_screen([gx, gy, z_base], pvm, self.screen.width as f32, self.screen.height as f32)
+    }
+
+    /// Find the unit whose billboard is closest to the screen click position.
+    fn find_unit_at_screen_pos(&self, mouse: &Point2<f32>) -> Option<usize> {
+        let pvm = self.unit_pvm();
+        let candidates = self.unit_coordinator.units.iter().filter_map(|unit| {
+            self.unit_screen_pos(unit, &pvm).map(|(sx, sy)| (unit.id, sx, sy))
+        });
+        nearest_screen_hit(candidates, mouse.x, mouse.y, 20.0)
+    }
+
+    /// Find all units whose billboard centers project into a screen rectangle.
     fn units_in_screen_rect(&self, corner_a: Point2<f32>, corner_b: Point2<f32>) -> Vec<usize> {
         let min_x = corner_a.x.min(corner_b.x);
         let max_x = corner_a.x.max(corner_b.x);
         let min_y = corner_a.y.min(corner_b.y);
         let max_y = corner_a.y.max(corner_b.y);
 
-        let step = self.landscape_mesh.step();
-        let height_scale = self.landscape_mesh.height_scale();
-        let w = self.landscape_mesh.width() as f32;
-        let shift = self.landscape_mesh.get_shift_vector();
-        let center = (w - 1.0) * step / 2.0;
-        let focus = Vector3::new(center, center, 0.0);
-        let min_z = self.camera_min_z();
-        let cs = if self.curvature_enabled { self.curvature_scale } else { 0.0 };
-
-        let mvp = MVP::with_zoom(&self.screen, &self.camera, self.zoom, focus, min_z);
-        let proj_view = mvp.projection * mvp.view;
-        let sw = self.screen.width as f32;
-        let sh = self.screen.height as f32;
-
+        let pvm = self.unit_pvm();
         let mut ids = Vec::new();
         for unit in &self.unit_coordinator.units {
-            let vis_x = ((unit.cell_x - shift.x as f32) % w + w) % w;
-            let vis_y = ((unit.cell_y - shift.y as f32) % w + w) % w;
-            let gx = vis_x * step;
-            let gy = vis_y * step;
-            let ix = (unit.cell_x as usize).min(127);
-            let iy = (unit.cell_y as usize).min(127);
-            let gz = self.landscape_mesh.height_at(ix, iy) as f32 * height_scale;
-            let dx = gx - center;
-            let dy = gy - center;
-            let curvature_offset = (dx * dx + dy * dy) * cs;
-            let z_base = gz - curvature_offset;
-
-            // Project to clip space
-            let world_pos = Vector4::new(gx, gy, z_base, 1.0);
-            let clip = proj_view * world_pos;
-            if clip.w <= 0.0 { continue; } // Behind camera
-
-            // NDC → screen
-            let ndc_x = clip.x / clip.w;
-            let ndc_y = clip.y / clip.w;
-            let screen_x = (ndc_x + 1.0) * 0.5 * sw;
-            let screen_y = (1.0 - ndc_y) * 0.5 * sh;
-
-            if screen_x >= min_x && screen_x <= max_x && screen_y >= min_y && screen_y <= max_y {
-                ids.push(unit.id);
+            if let Some((sx, sy)) = self.unit_screen_pos(unit, &pvm) {
+                if sx >= min_x && sx <= max_x && sy >= min_y && sy <= max_y {
+                    ids.push(unit.id);
+                }
             }
         }
         ids
@@ -1662,14 +1703,8 @@ impl App {
                 self.log_camera_state("KeyT");
             },
             KeyCode::Space => {
-                if let Some(&(cx, cy, _)) = self.spawn_cells.iter().find(|(_, _, t)| *t == 0) {
-                    let n = self.landscape_mesh.width() as i32;
-                    let sx = ((cx as i32 - n / 2) % n + n) % n;
-                    let sy = ((cy as i32 - n / 2) % n + n) % n;
-                    self.landscape_mesh.set_shift(sx as usize, sy as usize);
-                    self.rebuild_spawn_model();
-                    self.log_camera_state("space_center");
-                }
+                self.center_on_tribe0_shaman();
+                self.log_camera_state("space_center");
             },
             KeyCode::KeyC => {
                 self.curvature_enabled = !self.curvature_enabled;
@@ -2693,6 +2728,7 @@ impl ApplicationHandler for App {
         self.level_objects.retain(|obj| obj.model_type != ModelType::Person);
 
         self.rebuild_spawn_model();
+        self.center_on_tribe0_shaman();
 
         // Build initial overlay text
         self.rebuild_overlay();
@@ -2736,30 +2772,14 @@ impl ApplicationHandler for App {
                     (MouseButton::Left, ElementState::Pressed) => {
                         // Start potential drag
                         self.drag_state = DragState::PendingDrag { start: self.mouse_pos };
-                        log::info!("[click] left press at screen ({:.0}, {:.0})", self.mouse_pos.x, self.mouse_pos.y);
                     }
                     (MouseButton::Left, ElementState::Released) => {
                         match self.drag_state {
                             DragState::PendingDrag { .. } => {
-                                // Short click (no drag) — single-select
-                                log::info!("[click] left release (single-click), {} units total",
-                                    self.unit_coordinator.units.len());
-                                if let Some((cx, cy)) = self.screen_to_cell() {
-                                    log::info!("[click] hit cell ({:.2}, {:.2})", cx, cy);
-                                    let threshold = 1.5;
-                                    match find_unit_at_cell(&self.unit_coordinator.units, cx, cy, threshold) {
-                                        Some(id) => {
-                                            let u = &self.unit_coordinator.units[id];
-                                            log::info!("[click] selected unit {} at cell ({:.2}, {:.2})", id, u.cell_x, u.cell_y);
-                                            self.unit_coordinator.selection.select_single(id);
-                                        }
-                                        None => {
-                                            log::info!("[click] no unit found near ({:.2}, {:.2})", cx, cy);
-                                            self.unit_coordinator.selection.clear();
-                                        }
-                                    }
-                                } else {
-                                    log::info!("[click] ray missed terrain");
+                                // Short click (no drag) — single-select via billboard projection
+                                match self.find_unit_at_screen_pos(&self.mouse_pos) {
+                                    Some(id) => self.unit_coordinator.selection.select_single(id),
+                                    None => self.unit_coordinator.selection.clear(),
                                 }
 
                             }
@@ -2777,8 +2797,6 @@ impl ApplicationHandler for App {
                         // Right-click: move order
                         if let Some((cx, cy)) = self.screen_to_cell() {
                             let target = cell_to_world(cx, cy, self.landscape_mesh.width() as f32);
-                            log::info!("[click] right-click move order to cell ({:.2}, {:.2}), world ({}, {}), {} selected",
-                                cx, cy, target.x, target.z, self.unit_coordinator.selection.selected.len());
                             self.unit_coordinator.order_move(target);
                         }
                     }
@@ -2875,15 +2893,8 @@ impl ApplicationHandler for App {
                                 log::info!("game ticking {}", if self.game_ticking { "on" } else { "off" });
                             },
                             KeyCode::Space => {
-                                // Center on blue shaman (tribe 0)
-                                if let Some(&(cx, cy, _)) = self.spawn_cells.iter().find(|(_, _, t)| *t == 0) {
-                                    let n = self.landscape_mesh.width() as i32;
-                                    let sx = ((cx as i32 - n / 2) % n + n) % n;
-                                    let sy = ((cy as i32 - n / 2) % n + n) % n;
-                                    self.landscape_mesh.set_shift(sx as usize, sy as usize);
-                                    self.rebuild_spawn_model();
-                                    self.log_camera_state("space_center");
-                                }
+                                self.center_on_tribe0_shaman();
+                                self.log_camera_state("space_center");
                             },
                             _ => {
                                 let prev_shift = self.landscape_mesh.get_shift_vector();
