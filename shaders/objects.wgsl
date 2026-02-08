@@ -16,7 +16,6 @@ struct Transforms1 {
 
 // Group 1: Fragment uniforms and color storage buffer
 struct ObjectParams {
-    selected_frag: i32,
     num_colors: i32,
 };
 
@@ -47,12 +46,6 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let prim_id = i32(in.primitive_id);
-
-    if (params.selected_frag > 0 && params.selected_frag == prim_id) {
-        return vec4<f32>(1.0, 0.0, 0.0, 0.0);
-    }
-
     let size = params.num_colors;
     let idx = prim_id % size;
     let color = colors[idx];

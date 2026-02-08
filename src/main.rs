@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes};
@@ -31,6 +31,9 @@ use pop3::pop::units::{ModelType, object_3d_index};
 use pop3::pop::objects::{Object3D, Shape, mk_pop_object};
 use pop3::pop::bl320::make_bl320_texture_rgba;
 use pop3::pop::landscape::{make_texture_land, draw_texture_u8};
+
+use pop3::unit_control::{UnitCoordinator, DragState, find_unit_at_cell};
+use pop3::unit_control::coords::{gpu_to_cell, cell_to_world};
 
 use pop3::gpu::context::GpuContext;
 use pop3::gpu::pipeline::create_pipeline;
@@ -95,8 +98,7 @@ struct LandscapeUniformData {
     height_scale: f32,
     step: f32,
     width: i32,
-    selected_frag: i32,
-    selected_color: [f32; 4],
+    _pad_width: i32,
     sunlight: [f32; 4],
     wat_offset: i32,
     curvature_scale: f32,
@@ -546,6 +548,129 @@ fn build_object_markers(
     }
     let m = vec![(RenderType::Triangles, model)];
     ModelEnvelop::<ColorModel>::new(device, m)
+}
+
+fn build_unit_markers(
+    device: &wgpu::Device, units: &[pop3::unit_control::Unit],
+    landscape: &LandscapeMesh<128>, curvature_scale: f32,
+    angle_x: i16, angle_z: i16,
+) -> Option<ModelEnvelop<ColorModel>> {
+    if units.is_empty() { return None; }
+    let mut model: ColorModel = MeshModel::new();
+    let step = landscape.step();
+    let height_scale = landscape.height_scale();
+    let w = landscape.width() as f32;
+    let shift = landscape.get_shift_vector();
+    let center = (w - 1.0) * step / 2.0;
+
+    let az = (angle_z as f32).to_radians();
+    let ax = (angle_x as f32).to_radians();
+    let eye = Point3::new(
+        center + ax.cos() * az.sin(),
+        center + ax.cos() * az.cos(),
+        -ax.sin(),
+    );
+    let target = Point3::new(center, center, 0.0);
+    let view = Matrix4::look_at_rh(eye, target, Vector3::new(0.0, 0.0, 1.0));
+    let right = Vector3::new(view.x.x, view.y.x, view.z.x);
+    let up = Vector3::new(view.x.y, view.y.y, view.z.y);
+
+    for unit in units {
+        let vis_x = ((unit.cell_x - shift.x as f32) % w + w) % w;
+        let vis_y = ((unit.cell_y - shift.y as f32) % w + w) % w;
+        let gx = vis_x * step;
+        let gy = vis_y * step;
+
+        let ix = (unit.cell_x as usize).min(127);
+        let iy = (unit.cell_y as usize).min(127);
+        let gz = landscape.height_at(ix, iy) as f32 * height_scale;
+
+        let dx = gx - center;
+        let dy = gy - center;
+        let curvature_offset = (dx * dx + dy * dy) * curvature_scale;
+        let z_base = gz - curvature_offset + 0.005;
+
+        let half_w = step * 0.15;
+        let sprite_h = step * 0.4;
+
+        let color_rgb = object_marker_color(&unit.model_type, unit.tribe_index);
+        let color = Vector3::new(color_rgb[0], color_rgb[1], color_rgb[2]);
+
+        let base_pos = Vector3::new(gx, gy, z_base);
+        let bl = base_pos - right * half_w;
+        let br = base_pos + right * half_w;
+        let tl = bl + up * sprite_h;
+        let tr = br + up * sprite_h;
+
+        let v = |p: Vector3<f32>| ColorVertex { coord: p, color };
+        model.push_vertex(v(bl));
+        model.push_vertex(v(br));
+        model.push_vertex(v(tr));
+        model.push_vertex(v(bl));
+        model.push_vertex(v(tr));
+        model.push_vertex(v(tl));
+    }
+    let m = vec![(RenderType::Triangles, model)];
+    Some(ModelEnvelop::<ColorModel>::new(device, m))
+}
+
+fn build_selection_rings(
+    device: &wgpu::Device, coordinator: &UnitCoordinator,
+    landscape: &LandscapeMesh<128>, curvature_scale: f32,
+) -> Option<ModelEnvelop<ColorModel>> {
+    if coordinator.selection.selected.is_empty() { return None; }
+    let mut model: ColorModel = MeshModel::new();
+    let step = landscape.step();
+    let height_scale = landscape.height_scale();
+    let w = landscape.width() as f32;
+    let shift = landscape.get_shift_vector();
+    let center = (w - 1.0) * step / 2.0;
+    let segments = 16;
+    let radius = step * 0.3;
+    let ring_width = step * 0.04;
+    let color = Vector3::new(0.0, 1.0, 0.0); // Green
+
+    for &unit_id in &coordinator.selection.selected {
+        let unit = match coordinator.units.get(unit_id) {
+            Some(u) => u,
+            None => continue,
+        };
+
+        let vis_x = ((unit.cell_x - shift.x as f32) % w + w) % w;
+        let vis_y = ((unit.cell_y - shift.y as f32) % w + w) % w;
+        let gx = vis_x * step;
+        let gy = vis_y * step;
+        let ix = (unit.cell_x as usize).min(127);
+        let iy = (unit.cell_y as usize).min(127);
+        let gz = landscape.height_at(ix, iy) as f32 * height_scale;
+        let dx = gx - center;
+        let dy = gy - center;
+        let curvature_offset = (dx * dx + dy * dy) * curvature_scale;
+        let z_base = gz - curvature_offset + 0.003;
+
+        for i in 0..segments {
+            let a0 = (i as f32 / segments as f32) * std::f32::consts::TAU;
+            let a1 = ((i + 1) as f32 / segments as f32) * std::f32::consts::TAU;
+            let (c0, s0) = (a0.cos(), a0.sin());
+            let (c1, s1) = (a1.cos(), a1.sin());
+
+            // Inner and outer ring vertices (flat on ground plane)
+            let inner0 = Vector3::new(gx + (radius - ring_width) * c0, gy + (radius - ring_width) * s0, z_base);
+            let outer0 = Vector3::new(gx + radius * c0, gy + radius * s0, z_base);
+            let inner1 = Vector3::new(gx + (radius - ring_width) * c1, gy + (radius - ring_width) * s1, z_base);
+            let outer1 = Vector3::new(gx + radius * c1, gy + radius * s1, z_base);
+
+            let v = |p: Vector3<f32>| ColorVertex { coord: p, color };
+            model.push_vertex(v(inner0));
+            model.push_vertex(v(outer0));
+            model.push_vertex(v(outer1));
+            model.push_vertex(v(inner0));
+            model.push_vertex(v(outer1));
+            model.push_vertex(v(inner1));
+        }
+    }
+    let m = vec![(RenderType::Triangles, model)];
+    Some(ModelEnvelop::<ColorModel>::new(device, m))
 }
 
 fn build_building_meshes(
@@ -1081,12 +1206,9 @@ struct App {
     landscape_group0_bind_group: Option<wgpu::BindGroup>,
     model_main: Option<ModelEnvelop<LandscapeModel>>,
 
-    // Selection lines
-    select_pipeline: Option<wgpu::RenderPipeline>,
+    // Object marker bind groups (shared by markers, unit markers, selection rings)
     objects_group0_bind_group: Option<wgpu::BindGroup>,
     objects_group1_bind_group: Option<wgpu::BindGroup>,
-    model_select: Option<ModelEnvelop<DefaultModel>>,
-    select_frag: i32,
 
     // Spawn markers (shaman sprites)
     spawn_pipeline: Option<wgpu::RenderPipeline>,
@@ -1157,6 +1279,15 @@ struct App {
     // Script replay
     script_commands: Vec<String>,
     script_index: usize,
+
+    // Unit control
+    unit_coordinator: UnitCoordinator,
+    model_unit_markers: Option<ModelEnvelop<ColorModel>>,
+    model_selection_rings: Option<ModelEnvelop<ColorModel>>,
+    drag_state: DragState,
+    last_tick: Instant,
+    tick_interval: std::time::Duration,
+    game_ticking: bool,
 }
 
 impl App {
@@ -1195,11 +1326,8 @@ impl App {
             landscape_group0_layout: None,
             landscape_group0_bind_group: None,
             model_main: None,
-            select_pipeline: None,
             objects_group0_bind_group: None,
             objects_group1_bind_group: None,
-            model_select: None,
-            select_frag: -1,
             spawn_pipeline: None,
             spawn_group1_bind_group: None,
             sprite_group1_layout: None,
@@ -1248,6 +1376,15 @@ impl App {
             start_time: Instant::now(),
             script_commands,
             script_index: 0,
+
+            // Unit control
+            unit_coordinator: UnitCoordinator::new(),
+            model_unit_markers: None,
+            model_selection_rings: None,
+            drag_state: DragState::None,
+            last_tick: Instant::now(),
+            tick_interval: std::time::Duration::from_millis(50),
+            game_ticking: false,
         }
     }
 
@@ -1258,8 +1395,7 @@ impl App {
             height_scale: self.landscape_mesh.height_scale(),
             step: self.landscape_mesh.step(),
             width: self.landscape_mesh.width() as i32,
-            selected_frag: self.select_frag,
-            selected_color: [1.0, 0.0, 0.0, 0.0],
+            _pad_width: 0,
             sunlight: [self.sunlight.x, self.sunlight.y, self.sunlight.z, self.sunlight.w],
             wat_offset: self.wat_offset,
             curvature_scale: if self.curvature_enabled { self.curvature_scale } else { 0.0 },
@@ -1333,6 +1469,12 @@ impl App {
         // Rebuild spawn markers and object markers
         self.spawn_cells = extract_spawn_cells(&level_res);
         self.level_objects = extract_level_objects(&level_res);
+
+        // Extract person units into the coordinator (they become live entities)
+        self.unit_coordinator.load_level(&level_res.units, level_res.landscape.land_size());
+        // Remove persons from static markers — they're now rendered by the coordinator
+        self.level_objects.retain(|obj| obj.model_type != ModelType::Person);
+
         self.rebuild_spawn_model();
     }
 
@@ -1353,6 +1495,84 @@ impl App {
         let sx = (gx + shift.x as usize) % n;
         let sy = (gy + shift.y as usize) % n;
         self.landscape_mesh.height_at(sx, sy) as f32 * self.landscape_mesh.height_scale() + 0.05
+    }
+
+    /// Ray-cast a screen click onto the landscape mesh and return cell coordinates.
+    /// Returns None if the ray misses the terrain entirely.
+    fn screen_to_cell(&self) -> Option<(f32, f32)> {
+        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+        let focus = Vector3::new(center, center, 0.0);
+        let min_z = self.camera_min_z();
+        let (v1, v2) = screen_to_scene_zoom(&self.screen, &self.camera, &self.mouse_pos, self.zoom, focus, min_z);
+
+        // Landscape model transform is always identity
+        let mvp_transform = Matrix4::identity();
+        let iter = self.landscape_mesh.iter();
+
+        match intersect_iter(iter, &mvp_transform, v1, v2) {
+            Some((_, t)) => {
+                // Hit point in GPU space: origin + t * direction
+                let hit = v1 + v2 * t;
+                let shift = self.landscape_mesh.get_shift_vector();
+                let w = self.landscape_mesh.width() as f32;
+                let step = self.landscape_mesh.step();
+                Some(gpu_to_cell(hit.x, hit.y, step, shift.x as f32, shift.y as f32, w))
+            }
+            None => None,
+        }
+    }
+
+    /// Find all units whose GPU-space positions project into a screen rectangle.
+    fn units_in_screen_rect(&self, corner_a: Point2<f32>, corner_b: Point2<f32>) -> Vec<usize> {
+        let min_x = corner_a.x.min(corner_b.x);
+        let max_x = corner_a.x.max(corner_b.x);
+        let min_y = corner_a.y.min(corner_b.y);
+        let max_y = corner_a.y.max(corner_b.y);
+
+        let step = self.landscape_mesh.step();
+        let height_scale = self.landscape_mesh.height_scale();
+        let w = self.landscape_mesh.width() as f32;
+        let shift = self.landscape_mesh.get_shift_vector();
+        let center = (w - 1.0) * step / 2.0;
+        let focus = Vector3::new(center, center, 0.0);
+        let min_z = self.camera_min_z();
+        let cs = if self.curvature_enabled { self.curvature_scale } else { 0.0 };
+
+        let mvp = MVP::with_zoom(&self.screen, &self.camera, self.zoom, focus, min_z);
+        let proj_view = mvp.projection * mvp.view;
+        let sw = self.screen.width as f32;
+        let sh = self.screen.height as f32;
+
+        let mut ids = Vec::new();
+        for unit in &self.unit_coordinator.units {
+            let vis_x = ((unit.cell_x - shift.x as f32) % w + w) % w;
+            let vis_y = ((unit.cell_y - shift.y as f32) % w + w) % w;
+            let gx = vis_x * step;
+            let gy = vis_y * step;
+            let ix = (unit.cell_x as usize).min(127);
+            let iy = (unit.cell_y as usize).min(127);
+            let gz = self.landscape_mesh.height_at(ix, iy) as f32 * height_scale;
+            let dx = gx - center;
+            let dy = gy - center;
+            let curvature_offset = (dx * dx + dy * dy) * cs;
+            let z_base = gz - curvature_offset;
+
+            // Project to clip space
+            let world_pos = Vector4::new(gx, gy, z_base, 1.0);
+            let clip = proj_view * world_pos;
+            if clip.w <= 0.0 { continue; } // Behind camera
+
+            // NDC → screen
+            let ndc_x = clip.x / clip.w;
+            let ndc_y = clip.y / clip.w;
+            let screen_x = (ndc_x + 1.0) * 0.5 * sw;
+            let screen_y = (1.0 - ndc_y) * 0.5 * sh;
+
+            if screen_x >= min_x && screen_x <= max_x && screen_y >= min_y && screen_y <= max_y {
+                ids.push(unit.id);
+            }
+        }
+        ids
     }
 
     fn log_camera_state(&mut self, event: &str) {
@@ -1495,6 +1715,20 @@ impl App {
         self.rebuild_object_markers();
     }
 
+    fn rebuild_unit_models(&mut self) {
+        if let Some(ref gpu) = self.gpu {
+            let cs = if self.curvature_enabled { self.curvature_scale } else { 0.0 };
+            self.model_unit_markers = build_unit_markers(
+                &gpu.device, &self.unit_coordinator.units, &self.landscape_mesh, cs,
+                self.camera.angle_x, self.camera.angle_z,
+            );
+            self.model_selection_rings = build_selection_rings(
+                &gpu.device, &self.unit_coordinator,
+                &self.landscape_mesh, cs,
+            );
+        }
+    }
+
     fn rebuild_object_markers(&mut self) {
         if let Some(ref gpu) = self.gpu {
             let cs = if self.curvature_enabled { self.curvature_scale } else { 0.0 };
@@ -1507,6 +1741,7 @@ impl App {
                 &self.shapes, &self.landscape_mesh, cs,
             ));
         }
+        self.rebuild_unit_models();
     }
 
     fn rebuild_overlay(&mut self) {
@@ -1737,8 +1972,8 @@ impl App {
         // Update selection uniform
         #[repr(C)]
         #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-        struct ObjectParams { selected_frag: i32, num_colors: i32 }
-        let obj_params = ObjectParams { selected_frag: self.select_frag, num_colors: obj_colors().len() as i32 };
+        struct ObjectParams { num_colors: i32, _pad: i32 }
+        let obj_params = ObjectParams { num_colors: obj_colors().len() as i32, _pad: 0 };
         self.select_params_buffer.as_ref().unwrap().update(&gpu.queue, 0, bytemuck::bytes_of(&obj_params));
 
         // Update sky yaw offset
@@ -1749,10 +1984,6 @@ impl App {
         }
 
         // Update select model vertex data
-        if let Some(ref model_select) = self.model_select {
-            model_select.write_transform(&gpu.queue, &self.model_transform_buffer.as_ref().unwrap().buffer, 0);
-        }
-
         let output = match gpu.surface.get_current_texture() {
             Ok(t) => t,
             Err(wgpu::SurfaceError::Lost) => return,
@@ -1848,15 +2079,18 @@ impl App {
                 }
             }
 
-            // Draw selection lines
-            if let Some(ref select_pipeline) = self.select_pipeline {
-                render_pass.set_pipeline(select_pipeline);
+            // Draw live unit markers and selection rings
+            if let Some(ref marker_pipeline) = self.objects_marker_pipeline {
+                render_pass.set_pipeline(marker_pipeline);
                 render_pass.set_bind_group(0, self.objects_group0_bind_group.as_ref().unwrap(), &[]);
-                render_pass.set_bind_group(1, self.objects_group1_bind_group.as_ref().unwrap(), &[]);
-                if let Some(ref model_select) = self.model_select {
-                    model_select.draw(&mut render_pass);
+                if let Some(ref model) = self.model_unit_markers {
+                    model.draw(&mut render_pass);
+                }
+                if let Some(ref model) = self.model_selection_rings {
+                    model.draw(&mut render_pass);
                 }
             }
+
         }
 
         // Overlay text pass (no depth, load existing color)
@@ -1990,10 +2224,10 @@ impl ApplicationHandler for App {
 
         #[repr(C)]
         #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-        struct ObjectParams { selected_frag: i32, num_colors: i32 }
+        struct ObjectParams { num_colors: i32, _pad: i32 }
 
         let colors = obj_colors();
-        let obj_params = ObjectParams { selected_frag: self.select_frag, num_colors: colors.len() as i32 };
+        let obj_params = ObjectParams { num_colors: colors.len() as i32, _pad: 0 };
         let select_params_buffer = GpuBuffer::new_uniform_init(device, bytemuck::bytes_of(&obj_params), "select_params_buffer");
 
         // Pack colors as vec4<u32> (RGBA, each channel widened to u32)
@@ -2012,28 +2246,8 @@ impl ApplicationHandler for App {
             ],
         });
 
-        // Selection lines pipeline (LineList topology)
-        let select_shader_source = include_str!("../shaders/objects.wgsl");
-        let select_vertex_layouts = DefaultModel::vertex_buffer_layouts();
-        let select_pipeline = create_pipeline(
-            device, select_shader_source, &select_vertex_layouts,
-            &[&objects_group0_layout, &objects_group1_layout],
-            gpu.surface_format(), true,
-            wgpu::PrimitiveTopology::LineList,
-            "objects_pipeline",
-        );
-
         // Landscape model
         let model_main = make_landscape_model(device, &self.landscape_mesh);
-
-        // Selection model (2 vertices for a ray line)
-        let model_select = {
-            let mut model: DefaultModel = MeshModel::new();
-            model.push_vertex(Vector3::new(0.0, 0.0, 0.0));
-            model.push_vertex(Vector3::new(0.0, 0.0, 0.0));
-            let m = vec![(RenderType::Lines, model)];
-            ModelEnvelop::<DefaultModel>::new(device, m)
-        };
 
         // Shaman sprite atlas and pipeline
         let sprite_group1_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -2443,7 +2657,6 @@ impl ApplicationHandler for App {
         self.landscape_group0_bind_group = Some(landscape_group0_bind_group);
         self.objects_group0_bind_group = Some(objects_group0_bind_group);
         self.objects_group1_bind_group = Some(objects_group1_bind_group);
-        self.select_pipeline = Some(select_pipeline);
         self.spawn_pipeline = Some(spawn_pipeline);
         self.spawn_group1_bind_group = spawn_group1_bind_group;
         self.sprite_group1_layout = Some(sprite_group1_layout);
@@ -2459,7 +2672,6 @@ impl ApplicationHandler for App {
         self.sky_uniform_buffer = sky_uniform_buffer;
         self.model_spawn = Some(model_spawn);
         self.model_main = Some(model_main);
-        self.model_select = Some(model_select);
         self.overlay_pipeline = Some(overlay_pipeline);
         self.overlay_bind_group = Some(overlay_bind_group);
         self.overlay_uniform_buffer = Some(overlay_uniform_buffer);
@@ -2475,6 +2687,11 @@ impl ApplicationHandler for App {
         // Build spawn markers and object markers for initial level
         self.spawn_cells = extract_spawn_cells(&level_res2);
         self.level_objects = extract_level_objects(&level_res2);
+
+        // Extract person units into the coordinator (they become live entities)
+        self.unit_coordinator.load_level(&level_res2.units, level_res2.landscape.land_size());
+        self.level_objects.retain(|obj| obj.model_type != ModelType::Person);
+
         self.rebuild_spawn_model();
 
         // Build initial overlay text
@@ -2496,32 +2713,78 @@ impl ApplicationHandler for App {
             },
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_pos = Point2::<f32>::new(position.x as f32, position.y as f32);
-            },
-            WindowEvent::MouseInput { state, .. } => {
-                if state == ElementState::Pressed {
-                    let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
-                    let focus = Vector3::new(center, center, 0.0);
-                    let min_z = self.camera_min_z();
-                    let (v1, v2) = screen_to_scene_zoom(&self.screen, &self.camera, &self.mouse_pos, self.zoom, focus, min_z);
-                    if let Some(ref mut model_select) = self.model_select {
-                        if let Some(m) = model_select.get(0) {
-                            m.model.set_vertex(0, v1);
-                            m.model.set_vertex(1, v2);
-                        }
-                        model_select.update_model_buffers(&self.gpu.as_ref().unwrap().device, 0);
-                    }
 
-                    let mvp_transform = self.model_main.as_mut()
-                        .and_then(|mm| mm.get(0))
-                        .map(|m| m.transform())
-                        .unwrap_or(Matrix4::identity());
-                    let iter = self.landscape_mesh.iter();
-                    match intersect_iter(iter, &mvp_transform, v1, v2) {
-                        Some((n, _)) => self.select_frag = n as i32,
-                        None => self.select_frag = -1,
+                // Update drag state
+                match self.drag_state {
+                    DragState::PendingDrag { start } => {
+                        let dx = self.mouse_pos.x - start.x;
+                        let dy = self.mouse_pos.y - start.y;
+                        if dx * dx + dy * dy > 25.0 { // 5px threshold
+                            self.drag_state = DragState::Dragging { start, current: self.mouse_pos };
+                            self.do_render = true;
+                        }
                     }
-                    self.do_render = true;
+                    DragState::Dragging { start, .. } => {
+                        self.drag_state = DragState::Dragging { start, current: self.mouse_pos };
+                        self.do_render = true;
+                    }
+                    DragState::None => {}
                 }
+            },
+            WindowEvent::MouseInput { state, button, .. } => {
+                match (button, state) {
+                    (MouseButton::Left, ElementState::Pressed) => {
+                        // Start potential drag
+                        self.drag_state = DragState::PendingDrag { start: self.mouse_pos };
+                        log::info!("[click] left press at screen ({:.0}, {:.0})", self.mouse_pos.x, self.mouse_pos.y);
+                    }
+                    (MouseButton::Left, ElementState::Released) => {
+                        match self.drag_state {
+                            DragState::PendingDrag { .. } => {
+                                // Short click (no drag) — single-select
+                                log::info!("[click] left release (single-click), {} units total",
+                                    self.unit_coordinator.units.len());
+                                if let Some((cx, cy)) = self.screen_to_cell() {
+                                    log::info!("[click] hit cell ({:.2}, {:.2})", cx, cy);
+                                    let threshold = 1.5;
+                                    match find_unit_at_cell(&self.unit_coordinator.units, cx, cy, threshold) {
+                                        Some(id) => {
+                                            let u = &self.unit_coordinator.units[id];
+                                            log::info!("[click] selected unit {} at cell ({:.2}, {:.2})", id, u.cell_x, u.cell_y);
+                                            self.unit_coordinator.selection.select_single(id);
+                                        }
+                                        None => {
+                                            log::info!("[click] no unit found near ({:.2}, {:.2})", cx, cy);
+                                            self.unit_coordinator.selection.clear();
+                                        }
+                                    }
+                                } else {
+                                    log::info!("[click] ray missed terrain");
+                                }
+
+                            }
+                            DragState::Dragging { start, current } => {
+                                // Drag release — box-select units in screen rectangle
+                                let ids = self.units_in_screen_rect(start, current);
+                                self.unit_coordinator.selection.select_multiple(ids);
+                            }
+                            DragState::None => {}
+                        }
+                        self.drag_state = DragState::None;
+                        self.rebuild_unit_models();
+                    }
+                    (MouseButton::Right, ElementState::Pressed) => {
+                        // Right-click: move order
+                        if let Some((cx, cy)) = self.screen_to_cell() {
+                            let target = cell_to_world(cx, cy, self.landscape_mesh.width() as f32);
+                            log::info!("[click] right-click move order to cell ({:.2}, {:.2}), world ({}, {}), {} selected",
+                                cx, cy, target.x, target.z, self.unit_coordinator.selection.selected.len());
+                            self.unit_coordinator.order_move(target);
+                        }
+                    }
+                    _ => {}
+                }
+                self.do_render = true;
             },
             WindowEvent::MouseWheel { delta, .. } => {
                 let scroll_y = match delta {
@@ -2604,6 +2867,13 @@ impl ApplicationHandler for App {
                                 log::info!("curvature_scale = {:.6}", self.curvature_scale);
                                 self.rebuild_spawn_model();
                             },
+                            KeyCode::F5 => {
+                                self.game_ticking = !self.game_ticking;
+                                if self.game_ticking {
+                                    self.last_tick = Instant::now();
+                                }
+                                log::info!("game ticking {}", if self.game_ticking { "on" } else { "off" });
+                            },
                             KeyCode::Space => {
                                 // Center on blue shaman (tribe 0)
                                 if let Some(&(cx, cy, _)) = self.spawn_cells.iter().find(|(_, _, t)| *t == 0) {
@@ -2633,6 +2903,17 @@ impl ApplicationHandler for App {
                 }
             },
             WindowEvent::RedrawRequested => {
+                // Tick game simulation (20Hz when enabled)
+                if self.game_ticking {
+                    let now = Instant::now();
+                    if now - self.last_tick >= self.tick_interval {
+                        self.unit_coordinator.tick();
+                        self.rebuild_unit_models();
+                        self.last_tick = now;
+                        self.do_render = true;
+                    }
+                }
+
                 // Auto-animate water
                 self.frame_count = self.frame_count.wrapping_add(1);
                 if self.frame_count % self.wat_interval == 0 {

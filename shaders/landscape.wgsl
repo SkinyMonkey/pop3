@@ -8,8 +8,6 @@ struct LandscapeParams {
     height_scale: f32,
     step: f32,
     width: i32,
-    selected_frag: i32,
-    selected_color: vec4<f32>,
     sunlight: vec4<f32>,
     wat_offset: i32,
     curvature_scale: f32,
@@ -204,12 +202,6 @@ fn land_tex(coord: vec3<f32>, height_in: f32, brightness: f32) -> vec3<f32> {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (in.viewport_fade < 0.01) {
         discard;
-    }
-
-    let prim_id = i32(in.primitive_id);
-
-    if (params.selected_frag > 0 && params.selected_frag == prim_id) {
-        return params.selected_color;
     }
 
     let coordi = vec3<f32>(

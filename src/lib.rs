@@ -21,3 +21,4 @@ pub mod gpu {
 pub mod pop;
 pub mod landscape;
 pub mod movement;
+pub mod unit_control;
