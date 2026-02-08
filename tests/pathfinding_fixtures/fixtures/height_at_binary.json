@@ -1,0 +1,608 @@
+{
+  "description": "Terrain_GetHeightAtPoint \u2014 captured from popTB.exe runtime via Frida",
+  "function": "height_at",
+  "binary_address": "0x004e8e50",
+  "source": "frida_capture",
+  "cases": [
+    {
+      "label": "capture_1",
+      "input": {
+        "x": 14080,
+        "z": 27904
+      },
+      "expected": {
+        "result": 0
+      }
+    },
+    {
+      "label": "capture_2",
+      "input": {
+        "x": 11008,
+        "z": 13056
+      },
+      "expected": {
+        "result": 0
+      }
+    },
+    {
+      "label": "capture_3",
+      "input": {
+        "x": 58624,
+        "z": 2304
+      },
+      "expected": {
+        "result": 0
+      }
+    },
+    {
+      "label": "capture_4",
+      "input": {
+        "x": 6912,
+        "z": 16640
+      },
+      "expected": {
+        "result": 0
+      }
+    },
+    {
+      "label": "capture_5",
+      "input": {
+        "x": 19200,
+        "z": 8448
+      },
+      "expected": {
+        "result": 0
+      }
+    },
+    {
+      "label": "capture_6",
+      "input": {
+        "x": 9984,
+        "z": 29440
+      },
+      "expected": {
+        "result": 0
+      }
+    },
+    {
+      "label": "capture_7",
+      "input": {
+        "x": 55552,
+        "z": 31488
+      },
+      "expected": {
+        "result": 0
+      }
+    },
+    {
+      "label": "capture_8",
+      "input": {
+        "x": 8448,
+        "z": 63744
+      },
+      "expected": {
+        "result": 0
+      }
+    },
+    {
+      "label": "capture_9",
+      "input": {
+        "x": 13567,
+        "z": 65266
+      },
+      "expected": {
+        "result": 184
+      }
+    },
+    {
+      "label": "capture_11",
+      "input": {
+        "x": 8448,
+        "z": 16128
+      },
+      "expected": {
+        "result": 0
+      }
+    },
+    {
+      "label": "capture_12",
+      "input": {
+        "x": 59648,
+        "z": 10496
+      },
+      "expected": {
+        "result": 273
+      }
+    },
+    {
+      "label": "capture_13",
+      "input": {
+        "x": 8448,
+        "z": 26880
+      },
+      "expected": {
+        "result": 784
+      }
+    },
+    {
+      "label": "capture_16",
+      "input": {
+        "x": 58624,
+        "z": 10496
+      },
+      "expected": {
+        "result": 282
+      }
+    },
+    {
+      "label": "capture_17",
+      "input": {
+        "x": 18688,
+        "z": 5888
+      },
+      "expected": {
+        "result": 694
+      }
+    },
+    {
+      "label": "capture_20",
+      "input": {
+        "x": 18688,
+        "z": 59136
+      },
+      "expected": {
+        "result": 148
+      }
+    },
+    {
+      "label": "capture_21",
+      "input": {
+        "x": 9472,
+        "z": 26880
+      },
+      "expected": {
+        "result": 712
+      }
+    },
+    {
+      "label": "capture_22",
+      "input": {
+        "x": 59136,
+        "z": 11008
+      },
+      "expected": {
+        "result": 282
+      }
+    },
+    {
+      "label": "capture_23",
+      "input": {
+        "x": 49424,
+        "z": 27884
+      },
+      "expected": {
+        "result": 120
+      }
+    },
+    {
+      "label": "capture_25",
+      "input": {
+        "x": 15616,
+        "z": 56064
+      },
+      "expected": {
+        "result": 88
+      }
+    },
+    {
+      "label": "capture_27",
+      "input": {
+        "x": 13056,
+        "z": 59648
+      },
+      "expected": {
+        "result": 139
+      }
+    },
+    {
+      "label": "capture_29",
+      "input": {
+        "x": 10496,
+        "z": 59136
+      },
+      "expected": {
+        "result": 70
+      }
+    },
+    {
+      "label": "capture_31",
+      "input": {
+        "x": 9472,
+        "z": 59648
+      },
+      "expected": {
+        "result": 111
+      }
+    },
+    {
+      "label": "capture_33",
+      "input": {
+        "x": 12544,
+        "z": 60672
+      },
+      "expected": {
+        "result": 98
+      }
+    },
+    {
+      "label": "capture_35",
+      "input": {
+        "x": 17664,
+        "z": 60672
+      },
+      "expected": {
+        "result": 83
+      }
+    },
+    {
+      "label": "capture_37",
+      "input": {
+        "x": 18176,
+        "z": 58112
+      },
+      "expected": {
+        "result": 135
+      }
+    },
+    {
+      "label": "capture_39",
+      "input": {
+        "x": 17664,
+        "z": 57600
+      },
+      "expected": {
+        "result": 130
+      }
+    },
+    {
+      "label": "capture_41",
+      "input": {
+        "x": 3328,
+        "z": 62208
+      },
+      "expected": {
+        "result": 376
+      }
+    },
+    {
+      "label": "capture_43",
+      "input": {
+        "x": 3883,
+        "z": 61191
+      },
+      "expected": {
+        "result": 408
+      }
+    },
+    {
+      "label": "capture_45",
+      "input": {
+        "x": 46848,
+        "z": 24832
+      },
+      "expected": {
+        "result": 620
+      }
+    },
+    {
+      "label": "capture_46",
+      "input": {
+        "x": 48384,
+        "z": 27904
+      },
+      "expected": {
+        "result": 121
+      }
+    },
+    {
+      "label": "capture_47",
+      "input": {
+        "x": 49920,
+        "z": 25856
+      },
+      "expected": {
+        "result": 128
+      }
+    },
+    {
+      "label": "capture_48",
+      "input": {
+        "x": 47360,
+        "z": 24320
+      },
+      "expected": {
+        "result": 686
+      }
+    },
+    {
+      "label": "capture_49",
+      "input": {
+        "x": 51456,
+        "z": 30976
+      },
+      "expected": {
+        "result": 64
+      }
+    },
+    {
+      "label": "capture_50",
+      "input": {
+        "x": 49920,
+        "z": 29440
+      },
+      "expected": {
+        "result": 128
+      }
+    },
+    {
+      "label": "capture_51",
+      "input": {
+        "x": 48384,
+        "z": 31488
+      },
+      "expected": {
+        "result": 593
+      }
+    },
+    {
+      "label": "capture_52",
+      "input": {
+        "x": 50432,
+        "z": 28416
+      },
+      "expected": {
+        "result": 120
+      }
+    },
+    {
+      "label": "capture_53",
+      "input": {
+        "x": 50432,
+        "z": 27904
+      },
+      "expected": {
+        "result": 60
+      }
+    },
+    {
+      "label": "capture_54",
+      "input": {
+        "x": 50432,
+        "z": 27392
+      },
+      "expected": {
+        "result": 60
+      }
+    },
+    {
+      "label": "capture_55",
+      "input": {
+        "x": 29952,
+        "z": 14592
+      },
+      "expected": {
+        "result": 89
+      }
+    },
+    {
+      "label": "capture_56",
+      "input": {
+        "x": 55040,
+        "z": 5376
+      },
+      "expected": {
+        "result": 162
+      }
+    },
+    {
+      "label": "capture_57",
+      "input": {
+        "x": 59136,
+        "z": 10496
+      },
+      "expected": {
+        "result": 271
+      }
+    },
+    {
+      "label": "capture_58",
+      "input": {
+        "x": 60672,
+        "z": 7936
+      },
+      "expected": {
+        "result": 488
+      }
+    },
+    {
+      "label": "capture_59",
+      "input": {
+        "x": 61696,
+        "z": 14080
+      },
+      "expected": {
+        "result": 415
+      }
+    },
+    {
+      "label": "capture_60",
+      "input": {
+        "x": 55552,
+        "z": 11520
+      },
+      "expected": {
+        "result": 488
+      }
+    },
+    {
+      "label": "capture_69",
+      "input": {
+        "x": 59648,
+        "z": 6400
+      },
+      "expected": {
+        "result": 513
+      }
+    },
+    {
+      "label": "capture_71",
+      "input": {
+        "x": 61696,
+        "z": 11008
+      },
+      "expected": {
+        "result": 257
+      }
+    },
+    {
+      "label": "capture_73",
+      "input": {
+        "x": 61184,
+        "z": 11520
+      },
+      "expected": {
+        "result": 305
+      }
+    },
+    {
+      "label": "capture_75",
+      "input": {
+        "x": 60672,
+        "z": 9472
+      },
+      "expected": {
+        "result": 390
+      }
+    },
+    {
+      "label": "capture_77",
+      "input": {
+        "x": 58624,
+        "z": 13056
+      },
+      "expected": {
+        "result": 342
+      }
+    },
+    {
+      "label": "capture_79",
+      "input": {
+        "x": 57600,
+        "z": 12032
+      },
+      "expected": {
+        "result": 364
+      }
+    },
+    {
+      "label": "capture_81",
+      "input": {
+        "x": 60672,
+        "z": 6400
+      },
+      "expected": {
+        "result": 617
+      }
+    },
+    {
+      "label": "capture_83",
+      "input": {
+        "x": 59136,
+        "z": 7424
+      },
+      "expected": {
+        "result": 423
+      }
+    },
+    {
+      "label": "capture_85",
+      "input": {
+        "x": 57088,
+        "z": 12544
+      },
+      "expected": {
+        "result": 357
+      }
+    },
+    {
+      "label": "capture_87",
+      "input": {
+        "x": 56064,
+        "z": 9472
+      },
+      "expected": {
+        "result": 382
+      }
+    },
+    {
+      "label": "capture_89",
+      "input": {
+        "x": 55552,
+        "z": 8448
+      },
+      "expected": {
+        "result": 202
+      }
+    },
+    {
+      "label": "capture_91",
+      "input": {
+        "x": 55552,
+        "z": 27904
+      },
+      "expected": {
+        "result": 81
+      }
+    },
+    {
+      "label": "capture_94",
+      "input": {
+        "x": 51456,
+        "z": 28928
+      },
+      "expected": {
+        "result": 84
+      }
+    },
+    {
+      "label": "capture_96",
+      "input": {
+        "x": 47872,
+        "z": 27904
+      },
+      "expected": {
+        "result": 84
+      }
+    },
+    {
+      "label": "capture_98",
+      "input": {
+        "x": 48896,
+        "z": 29440
+      },
+      "expected": {
+        "result": 115
+      }
+    },
+    {
+      "label": "capture_100",
+      "input": {
+        "x": 51456,
+        "z": 26368
+      },
+      "expected": {
+        "result": 42
+      }
+    }
+  ]
+}

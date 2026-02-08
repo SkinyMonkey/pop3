@@ -1,0 +1,603 @@
+{
+  "description": "Math_Distance \u2014 captured from popTB.exe runtime via Frida",
+  "function": "distance",
+  "binary_address": "0x004ea8f0",
+  "source": "frida_capture",
+  "cases": [
+    {
+      "label": "capture_1",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9237,
+          7636
+        ]
+      },
+      "expected": {
+        "result": 0,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_10",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9221,
+          7613
+        ]
+      },
+      "expected": {
+        "result": 28,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_13",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9218,
+          7617
+        ]
+      },
+      "expected": {
+        "result": 26,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_14",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9222,
+          7613
+        ]
+      },
+      "expected": {
+        "result": 27,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_15",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9239,
+          7634
+        ]
+      },
+      "expected": {
+        "result": 2,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_16",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9281,
+          7179
+        ]
+      },
+      "expected": {
+        "result": 459,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_19",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9030,
+          7429
+        ]
+      },
+      "expected": {
+        "result": 292,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_20",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9280,
+          7178
+        ]
+      },
+      "expected": {
+        "result": 460,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_21",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9486,
+          7387
+        ]
+      },
+      "expected": {
+        "result": 352,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_22",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9216,
+          7615
+        ]
+      },
+      "expected": {
+        "result": 29,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_23",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9216,
+          7242
+        ]
+      },
+      "expected": {
+        "result": 394,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_24",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9254,
+          7205
+        ]
+      },
+      "expected": {
+        "result": 431,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_25",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9461,
+          7412
+        ]
+      },
+      "expected": {
+        "result": 316,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_26",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9776,
+          5929
+        ]
+      },
+      "expected": {
+        "result": 1790,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_28",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9984,
+          6400
+        ]
+      },
+      "expected": {
+        "result": 1444,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_29",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9728,
+          6144
+        ]
+      },
+      "expected": {
+        "result": 1570,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_30",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9472,
+          6400
+        ]
+      },
+      "expected": {
+        "result": 1258,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_31",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9728,
+          6656
+        ]
+      },
+      "expected": {
+        "result": 1096,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_32",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9472,
+          6912
+        ]
+      },
+      "expected": {
+        "result": 761,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_33",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9216,
+          6656
+        ]
+      },
+      "expected": {
+        "result": 980,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_34",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -8960,
+          6912
+        ]
+      },
+      "expected": {
+        "result": 775,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_35",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9216,
+          7168
+        ]
+      },
+      "expected": {
+        "result": 468,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_37",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -8648,
+          7047
+        ]
+      },
+      "expected": {
+        "result": 832,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_38",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9768,
+          5926
+        ]
+      },
+      "expected": {
+        "result": 1790,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_39",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -10356,
+          6517
+        ]
+      },
+      "expected": {
+        "result": 1582,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_41",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -8704,
+          7103
+        ]
+      },
+      "expected": {
+        "result": 753,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_42",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -8769,
+          7168
+        ]
+      },
+      "expected": {
+        "result": 661,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_43",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -8993,
+          7391
+        ]
+      },
+      "expected": {
+        "result": 345,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_44",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -8737,
+          7135
+        ]
+      },
+      "expected": {
+        "result": 707,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_45",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9728,
+          5966
+        ]
+      },
+      "expected": {
+        "result": 1740,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_46",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9216,
+          6478
+        ]
+      },
+      "expected": {
+        "result": 1158,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_47",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -8704,
+          6991
+        ]
+      },
+      "expected": {
+        "result": 836,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_48",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9550,
+          6144
+        ]
+      },
+      "expected": {
+        "result": 1524,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_49",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9039,
+          6656
+        ]
+      },
+      "expected": {
+        "result": 999,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_50",
+      "input": {
+        "p1": [
+          -9237,
+          7636
+        ],
+        "p2": [
+          -9640,
+          6055
+        ]
+      },
+      "expected": {
+        "result": 1631,
+        "tolerance": 0
+      }
+    }
+  ]
+}

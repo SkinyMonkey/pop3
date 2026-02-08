@@ -1,0 +1,134 @@
+{
+  "description": "Math_IntSqrt \u2014 captured from popTB.exe runtime via Frida",
+  "function": "int_sqrt",
+  "binary_address": "0x00564000",
+  "source": "frida_capture",
+  "cases": [
+    {
+      "label": "capture_1",
+      "input": {
+        "n": 268424450
+      },
+      "expected": {
+        "result": 16383
+      }
+    },
+    {
+      "label": "capture_2",
+      "input": {
+        "n": 268402689
+      },
+      "expected": {
+        "result": 16383
+      }
+    },
+    {
+      "label": "capture_4",
+      "input": {
+        "n": 268385009
+      },
+      "expected": {
+        "result": 16382
+      }
+    },
+    {
+      "label": "capture_5",
+      "input": {
+        "n": 268385328
+      },
+      "expected": {
+        "result": 16382
+      }
+    },
+    {
+      "label": "capture_6",
+      "input": {
+        "n": 268401281
+      },
+      "expected": {
+        "result": 16382
+      }
+    },
+    {
+      "label": "capture_19",
+      "input": {
+        "n": 268435456
+      },
+      "expected": {
+        "result": 16384
+      }
+    },
+    {
+      "label": "capture_21",
+      "input": {
+        "n": 268427177
+      },
+      "expected": {
+        "result": 16383
+      }
+    },
+    {
+      "label": "capture_23",
+      "input": {
+        "n": 268398857
+      },
+      "expected": {
+        "result": 16382
+      }
+    },
+    {
+      "label": "capture_25",
+      "input": {
+        "n": 268405288
+      },
+      "expected": {
+        "result": 16383
+      }
+    },
+    {
+      "label": "capture_37",
+      "input": {
+        "n": 268433570
+      },
+      "expected": {
+        "result": 16383
+      }
+    },
+    {
+      "label": "capture_39",
+      "input": {
+        "n": 268411396
+      },
+      "expected": {
+        "result": 16383
+      }
+    },
+    {
+      "label": "capture_41",
+      "input": {
+        "n": 268423493
+      },
+      "expected": {
+        "result": 16383
+      }
+    },
+    {
+      "label": "capture_45",
+      "input": {
+        "n": 268432533
+      },
+      "expected": {
+        "result": 16383
+      }
+    },
+    {
+      "label": "capture_47",
+      "input": {
+        "n": 268429130
+      },
+      "expected": {
+        "result": 16383
+      }
+    }
+  ]
+}

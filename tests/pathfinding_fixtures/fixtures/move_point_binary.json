@@ -1,0 +1,790 @@
+{
+  "description": "Math_MovePointByAngle \u2014 captured from popTB.exe runtime via Frida",
+  "function": "move_point",
+  "binary_address": "0x004d4b20",
+  "source": "frida_capture",
+  "cases": [
+    {
+      "label": "capture_1",
+      "input": {
+        "start": [
+          4096,
+          -10496
+        ],
+        "angle": 256,
+        "distance": -4096
+      },
+      "expected": {
+        "result": [
+          1199,
+          -13393
+        ]
+      }
+    },
+    {
+      "label": "capture_6",
+      "input": {
+        "start": [
+          29696,
+          14592
+        ],
+        "angle": 1280,
+        "distance": 16384
+      },
+      "expected": {
+        "result": [
+          18111,
+          3007
+        ]
+      }
+    },
+    {
+      "label": "capture_7",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 91,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10408,
+          5683
+        ]
+      }
+    },
+    {
+      "label": "capture_8",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 155,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10350,
+          5660
+        ]
+      }
+    },
+    {
+      "label": "capture_9",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 219,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10297,
+          5626
+        ]
+      }
+    },
+    {
+      "label": "capture_10",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 283,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10252,
+          5582
+        ]
+      }
+    },
+    {
+      "label": "capture_11",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 347,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10217,
+          5531
+        ]
+      }
+    },
+    {
+      "label": "capture_12",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 411,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10192,
+          5473
+        ]
+      }
+    },
+    {
+      "label": "capture_13",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 475,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10179,
+          5412
+        ]
+      }
+    },
+    {
+      "label": "capture_14",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 539,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10178,
+          5349
+        ]
+      }
+    },
+    {
+      "label": "capture_15",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 603,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10189,
+          5287
+        ]
+      }
+    },
+    {
+      "label": "capture_16",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 667,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10212,
+          5229
+        ]
+      }
+    },
+    {
+      "label": "capture_17",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 731,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10246,
+          5176
+        ]
+      }
+    },
+    {
+      "label": "capture_18",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 795,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10290,
+          5131
+        ]
+      }
+    },
+    {
+      "label": "capture_19",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 859,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10341,
+          5096
+        ]
+      }
+    },
+    {
+      "label": "capture_20",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 923,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10399,
+          5071
+        ]
+      }
+    },
+    {
+      "label": "capture_21",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 987,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10460,
+          5058
+        ]
+      }
+    },
+    {
+      "label": "capture_22",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 1051,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10523,
+          5057
+        ]
+      }
+    },
+    {
+      "label": "capture_23",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 1115,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10585,
+          5068
+        ]
+      }
+    },
+    {
+      "label": "capture_24",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 1179,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10643,
+          5091
+        ]
+      }
+    },
+    {
+      "label": "capture_25",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 1243,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10696,
+          5125
+        ]
+      }
+    },
+    {
+      "label": "capture_26",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 1307,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10741,
+          5169
+        ]
+      }
+    },
+    {
+      "label": "capture_27",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 1371,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10776,
+          5220
+        ]
+      }
+    },
+    {
+      "label": "capture_28",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 1435,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10801,
+          5278
+        ]
+      }
+    },
+    {
+      "label": "capture_29",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 1499,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10814,
+          5339
+        ]
+      }
+    },
+    {
+      "label": "capture_30",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 1563,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10815,
+          5402
+        ]
+      }
+    },
+    {
+      "label": "capture_31",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 1627,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10804,
+          5464
+        ]
+      }
+    },
+    {
+      "label": "capture_32",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 1691,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10781,
+          5522
+        ]
+      }
+    },
+    {
+      "label": "capture_33",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 1755,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10747,
+          5575
+        ]
+      }
+    },
+    {
+      "label": "capture_34",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 1819,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10703,
+          5620
+        ]
+      }
+    },
+    {
+      "label": "capture_35",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 1883,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10652,
+          5655
+        ]
+      }
+    },
+    {
+      "label": "capture_36",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 1947,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10594,
+          5680
+        ]
+      }
+    },
+    {
+      "label": "capture_37",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 2011,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10533,
+          5693
+        ]
+      }
+    },
+    {
+      "label": "capture_38",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 27,
+        "distance": 320
+      },
+      "expected": {
+        "result": [
+          -10470,
+          5694
+        ]
+      }
+    },
+    {
+      "label": "capture_39",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 182,
+        "distance": 480
+      },
+      "expected": {
+        "result": [
+          -10242,
+          5783
+        ]
+      }
+    },
+    {
+      "label": "capture_40",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 246,
+        "distance": 480
+      },
+      "expected": {
+        "result": [
+          -10168,
+          5725
+        ]
+      }
+    },
+    {
+      "label": "capture_41",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 310,
+        "distance": 480
+      },
+      "expected": {
+        "result": [
+          -10106,
+          5654
+        ]
+      }
+    },
+    {
+      "label": "capture_42",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 374,
+        "distance": 480
+      },
+      "expected": {
+        "result": [
+          -10059,
+          5573
+        ]
+      }
+    },
+    {
+      "label": "capture_43",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 438,
+        "distance": 480
+      },
+      "expected": {
+        "result": [
+          -10029,
+          5484
+        ]
+      }
+    },
+    {
+      "label": "capture_44",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 502,
+        "distance": 480
+      },
+      "expected": {
+        "result": [
+          -10017,
+          5390
+        ]
+      }
+    },
+    {
+      "label": "capture_45",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 566,
+        "distance": 480
+      },
+      "expected": {
+        "result": [
+          -10023,
+          5296
+        ]
+      }
+    },
+    {
+      "label": "capture_46",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 630,
+        "distance": 480
+      },
+      "expected": {
+        "result": [
+          -10048,
+          5206
+        ]
+      }
+    },
+    {
+      "label": "capture_47",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 694,
+        "distance": 480
+      },
+      "expected": {
+        "result": [
+          -10089,
+          5121
+        ]
+      }
+    },
+    {
+      "label": "capture_48",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 758,
+        "distance": 480
+      },
+      "expected": {
+        "result": [
+          -10147,
+          5047
+        ]
+      }
+    },
+    {
+      "label": "capture_49",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 822,
+        "distance": 480
+      },
+      "expected": {
+        "result": [
+          -10218,
+          4985
+        ]
+      }
+    },
+    {
+      "label": "capture_50",
+      "input": {
+        "start": [
+          -10496,
+          5376
+        ],
+        "angle": 886,
+        "distance": 480
+      },
+      "expected": {
+        "result": [
+          -10299,
+          4938
+        ]
+      }
+    }
+  ]
+}

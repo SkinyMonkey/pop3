@@ -1,0 +1,547 @@
+{
+  "description": "Math_Atan2 \u2014 captured from popTB.exe runtime via Frida",
+  "function": "atan2",
+  "binary_address": "0x00564074",
+  "source": "frida_capture",
+  "cases": [
+    {
+      "label": "capture_1",
+      "input": {
+        "dx": 14271,
+        "dy": -7871
+      },
+      "expected": {
+        "result": 348,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_2",
+      "input": {
+        "dx": -63,
+        "dy": -94
+      },
+      "expected": {
+        "result": 1857,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_3",
+      "input": {
+        "dx": -83,
+        "dy": -473
+      },
+      "expected": {
+        "result": 1993,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_5",
+      "input": {
+        "dx": -57,
+        "dy": -327
+      },
+      "expected": {
+        "result": 1993,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_6",
+      "input": {
+        "dx": 2856,
+        "dy": 4964
+      },
+      "expected": {
+        "result": 855,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_7",
+      "input": {
+        "dx": 317,
+        "dy": -5726
+      },
+      "expected": {
+        "result": 17,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_8",
+      "input": {
+        "dx": -4788,
+        "dy": 0
+      },
+      "expected": {
+        "result": 1536,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_9",
+      "input": {
+        "dx": 840,
+        "dy": -4788
+      },
+      "expected": {
+        "result": 55,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_10",
+      "input": {
+        "dx": 2394,
+        "dy": -4161
+      },
+      "expected": {
+        "result": 169,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_11",
+      "input": {
+        "dx": 902,
+        "dy": -4800
+      },
+      "expected": {
+        "result": 60,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_12",
+      "input": {
+        "dx": -2009,
+        "dy": 492
+      },
+      "expected": {
+        "result": 1459,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_13",
+      "input": {
+        "dx": 0,
+        "dy": -2068
+      },
+      "expected": {
+        "result": 0,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_14",
+      "input": {
+        "dx": 4000,
+        "dy": 4132
+      },
+      "expected": {
+        "result": 774,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_15",
+      "input": {
+        "dx": 3076,
+        "dy": -5750
+      },
+      "expected": {
+        "result": 159,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_16",
+      "input": {
+        "dx": -6629,
+        "dy": 2173
+      },
+      "expected": {
+        "result": 1434,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_17",
+      "input": {
+        "dx": -4266,
+        "dy": -6976
+      },
+      "expected": {
+        "result": 1870,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_18",
+      "input": {
+        "dx": 2505,
+        "dy": -6689
+      },
+      "expected": {
+        "result": 115,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_19",
+      "input": {
+        "dx": 2886,
+        "dy": -7142
+      },
+      "expected": {
+        "result": 124,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_20",
+      "input": {
+        "dx": 1621,
+        "dy": 3993
+      },
+      "expected": {
+        "result": 900,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_21",
+      "input": {
+        "dx": -3486,
+        "dy": -4309
+      },
+      "expected": {
+        "result": 1827,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_22",
+      "input": {
+        "dx": -3814,
+        "dy": 2024
+      },
+      "expected": {
+        "result": 1378,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_23",
+      "input": {
+        "dx": -224,
+        "dy": -4317
+      },
+      "expected": {
+        "result": 2032,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_24",
+      "input": {
+        "dx": -1956,
+        "dy": -2800
+      },
+      "expected": {
+        "result": 1850,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_25",
+      "input": {
+        "dx": 3952,
+        "dy": -3415
+      },
+      "expected": {
+        "result": 280,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_26",
+      "input": {
+        "dx": 2253,
+        "dy": 243
+      },
+      "expected": {
+        "result": 546,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_27",
+      "input": {
+        "dx": -609,
+        "dy": -2266
+      },
+      "expected": {
+        "result": 1964,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_28",
+      "input": {
+        "dx": 1546,
+        "dy": 518
+      },
+      "expected": {
+        "result": 616,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_29",
+      "input": {
+        "dx": -1760,
+        "dy": -1630
+      },
+      "expected": {
+        "result": 1779,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_30",
+      "input": {
+        "dx": -598,
+        "dy": 2430
+      },
+      "expected": {
+        "result": 1101,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_31",
+      "input": {
+        "dx": 360,
+        "dy": -2502
+      },
+      "expected": {
+        "result": 45,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_32",
+      "input": {
+        "dx": -949,
+        "dy": -1010
+      },
+      "expected": {
+        "result": 1803,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_33",
+      "input": {
+        "dx": 1810,
+        "dy": -1385
+      },
+      "expected": {
+        "result": 300,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_34",
+      "input": {
+        "dx": 813,
+        "dy": -1146
+      },
+      "expected": {
+        "result": 200,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_35",
+      "input": {
+        "dx": -396,
+        "dy": -1405
+      },
+      "expected": {
+        "result": 1959,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_36",
+      "input": {
+        "dx": 4914,
+        "dy": -8505
+      },
+      "expected": {
+        "result": 169,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_37",
+      "input": {
+        "dx": -5548,
+        "dy": -9822
+      },
+      "expected": {
+        "result": 1881,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_38",
+      "input": {
+        "dx": 3768,
+        "dy": 2049
+      },
+      "expected": {
+        "result": 674,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_39",
+      "input": {
+        "dx": 734,
+        "dy": -4289
+      },
+      "expected": {
+        "result": 54,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_40",
+      "input": {
+        "dx": -3252,
+        "dy": 5444
+      },
+      "expected": {
+        "result": 1198,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_41",
+      "input": {
+        "dx": 4584,
+        "dy": -6341
+      },
+      "expected": {
+        "result": 203,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_42",
+      "input": {
+        "dx": -3444,
+        "dy": -2788
+      },
+      "expected": {
+        "result": 1757,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_43",
+      "input": {
+        "dx": 0,
+        "dy": -4431
+      },
+      "expected": {
+        "result": 0,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_44",
+      "input": {
+        "dx": 5195,
+        "dy": -405
+      },
+      "expected": {
+        "result": 488,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_45",
+      "input": {
+        "dx": 9705,
+        "dy": -5210
+      },
+      "expected": {
+        "result": 352,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_46",
+      "input": {
+        "dx": 306,
+        "dy": 4362
+      },
+      "expected": {
+        "result": 1003,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_47",
+      "input": {
+        "dx": 10734,
+        "dy": -4372
+      },
+      "expected": {
+        "result": 387,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_48",
+      "input": {
+        "dx": 584,
+        "dy": 4671
+      },
+      "expected": {
+        "result": 984,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_49",
+      "input": {
+        "dx": 11463,
+        "dy": -4707
+      },
+      "expected": {
+        "result": 386,
+        "tolerance": 0
+      }
+    },
+    {
+      "label": "capture_50",
+      "input": {
+        "dx": -3972,
+        "dy": -828
+      },
+      "expected": {
+        "result": 1602,
+        "tolerance": 0
+      }
+    }
+  ]
+}
