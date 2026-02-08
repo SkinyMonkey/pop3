@@ -696,11 +696,27 @@ fn line_of_sight(region_map: &RegionMap, from: PathNode, to: PathNode) -> bool {
             break;
         }
         let e2 = 2 * err;
-        if e2 > -dz {
+        let step_x = e2 > -dz;
+        let step_z = e2 < dx;
+
+        // Corner-cutting check: when stepping diagonally (both x and z change),
+        // verify both adjacent corner cells are passable. Without this, a
+        // diagonal line can slip between two wall cells that share a corner.
+        if step_x && step_z {
+            let corner_a = PathNode::new(x + sx, z);
+            let corner_b = PathNode::new(x, z + sz);
+            if !corner_a.on_map() || !is_cell_passable(region_map, corner_a)
+                || !corner_b.on_map() || !is_cell_passable(region_map, corner_b)
+            {
+                return false;
+            }
+        }
+
+        if step_x {
             err -= dz;
             x += sx;
         }
-        if e2 < dx {
+        if step_z {
             err += dx;
             z += sz;
         }
@@ -942,6 +958,67 @@ mod tests {
         assert_eq!(optimized.len(), 2);
         assert_eq!(optimized[0], PathNode::new(0, 0));
         assert_eq!(optimized[1], PathNode::new(2, 2));
+    }
+
+    #[test]
+    fn los_rejects_corner_cutting() {
+        // Diagonal LOS from (0,0) to (2,2) should be blocked when
+        // corner cells form an L-shape obstacle.
+        //
+        //   (0,0) .  .       Path tries: (0,0) → (2,2) diagonally
+        //      .  W  .       Wall at (1,0) — blocks corner
+        //      .  .  (2,2)
+        //
+        let mut map = RegionMap::new();
+        map.set_terrain_flags(1, 0x00); // terrain class 1 = unwalkable
+
+        // Place wall at cell (1,0) — this is the corner cell
+        set_wall(&mut map, 1, 0);
+
+        // LOS from (0,0) to (2,2) cuts through the corner at (1,0)/(0,1)
+        // With corner-cutting check, this should be rejected
+        assert!(
+            !line_of_sight(&map, PathNode::new(0, 0), PathNode::new(2, 2)),
+            "LOS should be blocked when diagonal cuts through wall corner at (1,0)"
+        );
+
+        // But LOS along cardinal directions past the wall should still work
+        assert!(line_of_sight(&map, PathNode::new(0, 0), PathNode::new(0, 2)));
+
+        // And LOS on open terrain diagonal should still work
+        let clean_map = RegionMap::new();
+        assert!(line_of_sight(&clean_map, PathNode::new(0, 0), PathNode::new(2, 2)));
+    }
+
+    #[test]
+    fn los_optimizer_preserves_waypoints_at_corners() {
+        // Path goes E then S around a wall corner.
+        // The optimizer should NOT collapse to a diagonal that clips the corner.
+        //
+        //   S → C     S=(0,0), C=(1,0)   (path goes E then S)
+        //   W   G     Wall at (0,1)       G=(1,1)
+        //
+        // Diagonal from S(0,0) to G(1,1) cuts through wall corner at (0,1).
+        // Bresenham only visits (0,0) and (1,1) — both passable — so without
+        // the corner check the optimizer collapses to 2 points.
+        let mut map = RegionMap::new();
+        map.set_terrain_flags(1, 0x00);
+        set_wall(&mut map, 0, 1);
+
+        let nodes = vec![
+            PathNode::new(0, 0),
+            PathNode::new(1, 0),  // east
+            PathNode::new(1, 1),  // south
+        ];
+        let optimized = optimize_path_los(&map, &nodes);
+        // With corner-cutting fix, the optimizer must keep the intermediate
+        // waypoint at (1,0) since the diagonal (0,0)→(1,1) clips wall (0,1).
+        assert!(
+            optimized.len() >= 3,
+            "Optimizer should preserve waypoints to avoid corner-cutting, got {} waypoints: {:?}",
+            optimized.len(),
+            optimized
+        );
     }
 
     #[test]
