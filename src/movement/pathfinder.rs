@@ -551,84 +551,26 @@ fn expand_arm(
     }
 }
 
-/// 4-layer bounding box check for search arm containment.
+/// Bounds check for search arm containment.
 /// Original: ExpandArm @ 0x45eb20, jump tables 0x45f1b8/c8/d8 + rect at 0x45efe3.
 ///
-/// Layer 1 (directional progress): Has arm gone past parent along its facing?
-/// Layer 2 (current-facing half-plane): Prevent backward movement past parent.
-/// Layer 3 (perpendicular half-plane): Prevent lateral drift past parent.
-/// Layer 4 (checkpoint rectangle): [min(parent, checkpoint) - 1, max(parent, checkpoint) + 1].
+/// The original binary has a 4-layer bounding box (directional progress,
+/// facing half-plane, perpendicular half-plane, checkpoint rectangle).
+/// However, the original's outer beeline loop in path_search_execute (0x45d980)
+/// phantom-steps through walls — advancing the position unconditionally even
+/// through blocked cells — so parent ≈ checkpoint during wall-follow, making
+/// the bounding box effectively a no-op.
+///
+/// Our merged architecture has no phantom stepping: wall-follow must handle
+/// obstacles of any size. The visited bitmap (128×128 bits), iteration limit
+/// (1500 steps), and waypoint capacity (260) already prevent infinite loops.
+/// We keep only the anti-loop check from the original (0x45f065).
 ///
 /// Returns true if the arm is within bounds, false if it should stall.
 fn bounds_check_arm(arm: &SearchArm) -> bool {
-    let parent = arm.start_pos;
-    let checkpoint = arm.checkpoint;
-    let pos = arm.pos;
-
-    // Layer 1: Directional progress check (jump table 1 at 0x45f1b8).
-    // Uses the arm's current facing direction.
-    // If the arm has moved past the parent in its facing direction, flag it.
-    let in_bounds = match arm.facing {
-        0 => pos.z <= parent.z, // South: must not go past parent going south
-        1 => pos.x <= parent.x, // East: must not go past parent going east
-        2 => pos.z >= parent.z, // North: must not go past parent going north
-        3 => pos.x >= parent.x, // West: must not go past parent going west
-        _ => true,
-    };
-
-    // Check proximity to parent (±1 slack) — if within 1 cell, consider found
-    if (pos.x - parent.x).abs() <= 1 && (pos.z - parent.z).abs() <= 1 {
-        return true; // Close enough to parent — don't stall
-    }
-
-    if in_bounds {
-        // Layer 2: Current-facing half-plane (jump table 2 at 0x45f1c8).
-        // Prevent arm from moving backwards past parent along current facing.
-        let facing_ok = match arm.facing {
-            0 => pos.z <= parent.z, // South: z must not exceed parent
-            1 => pos.x <= parent.x, // East: x must not exceed parent
-            2 => pos.z >= parent.z, // North: z must not be less than parent
-            3 => pos.x >= parent.x, // West: x must not be less than parent
-            _ => true,
-        };
-        if !facing_ok {
-            return false;
-        }
-
-        // Layer 3: Perpendicular half-plane (jump table 3 at 0x45f1d8).
-        // Prevent lateral drift past parent on the perpendicular axis.
-        let perp_dir = (arm.turn_dir + arm.facing) & 3;
-        let perp_ok = match perp_dir {
-            0 => pos.z >= parent.z, // Perp=South: z must be >= parent
-            1 => pos.x >= parent.x, // Perp=East: x must be >= parent
-            2 => pos.z <= parent.z, // Perp=North: z must be <= parent
-            3 => pos.x <= parent.x, // Perp=West: x must be <= parent
-            _ => true,
-        };
-        if !perp_ok {
-            return false;
-        }
-    }
-
-    // Layer 4: Checkpoint rectangle (0x45efe3).
-    // Bounding box = [min(parent, checkpoint) - 1, max(parent, checkpoint) + 1] per axis.
-    if checkpoint.x != parent.x {
-        let x_min = parent.x.min(checkpoint.x) - 1;
-        let x_max = parent.x.max(checkpoint.x) + 1;
-        if pos.x < x_min || pos.x > x_max {
-            return false;
-        }
-    }
-    if checkpoint.z != parent.z {
-        let z_min = parent.z.min(checkpoint.z) - 1;
-        let z_max = parent.z.max(checkpoint.z) + 1;
-        if pos.z < z_min || pos.z > z_max {
-            return false;
-        }
-    }
-
-    // Anti-loop: exact checkpoint position is rejected (0x45f065)
-    if pos.x == checkpoint.x && pos.z == checkpoint.z {
+    // Anti-loop: exact checkpoint position is rejected (0x45f065).
+    // If the arm has circled back to its last beeline position, stall it.
+    if arm.pos.x == arm.checkpoint.x && arm.pos.z == arm.checkpoint.z {
         return false;
     }
 
@@ -1076,24 +1018,9 @@ mod tests {
     }
 
     #[test]
-    fn bounding_box_stalls_within_rect() {
-        // Arm facing south with checkpoint at (10, 15) and parent at (10, 10).
-        // The bounding box is [min(10,10)-1, max(10,15)+1] = [9, 16] on each axis.
-        let mut arm = SearchArm::new(PathNode::new(10, 10), 0, 1); // facing south
-        arm.checkpoint = PathNode::new(10, 15);
-
-        // Position inside the box should pass
-        arm.pos = PathNode::new(10, 12);
-        assert!(bounds_check_arm(&arm));
-
-        // Position outside the box on z axis should fail
-        arm.pos = PathNode::new(10, 17);
-        assert!(!bounds_check_arm(&arm));
-    }
-
-    #[test]
     fn bounding_box_rejects_exact_checkpoint() {
         // If arm position == checkpoint exactly, it stalls (anti-loop).
+        // This is the only bounds check retained from the original 4-layer system.
         let mut arm = SearchArm::new(PathNode::new(5, 5), 0, 1);
         arm.checkpoint = PathNode::new(5, 10);
 
@@ -1102,13 +1029,23 @@ mod tests {
     }
 
     #[test]
-    fn bounding_box_allows_near_parent() {
-        // Position within ±1 of parent should always pass
+    fn bounding_box_allows_far_positions() {
+        // With the simplified bounds check (anti-loop only), positions far from
+        // start/checkpoint are allowed — the visited bitmap and iteration limit
+        // handle containment instead of a restrictive bounding box.
         let mut arm = SearchArm::new(PathNode::new(10, 10), 0, 1);
-        arm.checkpoint = PathNode::new(10, 12);
+        arm.checkpoint = PathNode::new(10, 15);
 
-        arm.pos = PathNode::new(11, 11); // within ±1 of parent
+        // Far from both parent and checkpoint — still allowed
+        arm.pos = PathNode::new(10, 50);
         assert!(bounds_check_arm(&arm));
+
+        arm.pos = PathNode::new(50, 10);
+        assert!(bounds_check_arm(&arm));
+
+        // Only exact checkpoint match is rejected
+        arm.pos = PathNode::new(10, 15);
+        assert!(!bounds_check_arm(&arm));
     }
 
     #[test]
@@ -1120,5 +1057,313 @@ mod tests {
         let result = pathfind(&map, start, goal);
         // On open terrain, beeline should find the path
         assert!(matches!(result, PathfindResult::Found(_)));
+    }
+
+    // ── Demo test case infrastructure ────────────────────────────────────
+
+    /// Set a cell as unwalkable wall (terrain class 1) at cell coords.
+    fn set_wall(map: &mut RegionMap, x: usize, z: usize) {
+        let tile = TileCoord::new((x * 2) as u8, (z * 2) as u8);
+        map.get_cell_mut(tile).terrain_type = 1;
+    }
+
+    /// Replicate the demo's synthetic test map with all 8 obstacles.
+    fn build_test_map() -> RegionMap {
+        let mut map = RegionMap::new();
+        map.set_terrain_flags(1, 0x00); // terrain class 1 = wall
+
+        // ③ Block 4×3 at (20,50)→(23,52)
+        for z in 50..=52 { for x in 20..=23 { set_wall(&mut map, x, z); } }
+        // ④ Long wall at z=55, x=45..=70
+        for x in 45..=70 { set_wall(&mut map, x, 55); }
+        // ⑤ U-trap: left/right walls + bottom, open top
+        for z in 72..=90 { set_wall(&mut map, 60, z); set_wall(&mut map, 66, z); }
+        for x in 60..=66 { set_wall(&mut map, x, 90); }
+        // ⑥ Corridor: two offset vertical walls with gaps
+        for z in 74..=81 { set_wall(&mut map, 20, z); }
+        for z in 84..=86 { set_wall(&mut map, 20, z); }
+        for z in 74..=76 { set_wall(&mut map, 28, z); }
+        for z in 79..=86 { set_wall(&mut map, 28, z); }
+        // ⑦ Enclosed box (85,38)→(95,48), solid fill
+        for z in 38..=48 { for x in 85..=95 { set_wall(&mut map, x, z); } }
+        // ⑧ L-wall: vertical x=50 z=18..=35, horizontal x=50..=62 z=18
+        for z in 18..=35 { set_wall(&mut map, 50, z); }
+        for x in 50..=62 { set_wall(&mut map, x, 18); }
+        // ⑨ C-shape (open left)
+        for x in 10..=18 { set_wall(&mut map, x, 105); }
+        for z in 105..=120 { set_wall(&mut map, 18, z); }
+        for x in 10..=18 { set_wall(&mut map, x, 120); }
+        // ⑩ Small wall near map edge
+        for z in 62..=63 { set_wall(&mut map, 3, z); }
+
+        map
+    }
+
+    /// Convert cell coords to TileCoord for pathfinder input.
+    fn cell_to_tile(cx: usize, cz: usize) -> TileCoord {
+        TileCoord::new((cx * 2) as u8, (cz * 2) as u8)
+    }
+
+    /// Waypoint → cell coords string.
+    fn wp_cell(wp: &Waypoint) -> (i32, i32) {
+        (wp.tile_x as i32 >> 1, wp.tile_z as i32 >> 1)
+    }
+
+    /// Direction label between two cell-coord pairs.
+    fn dir_label(from: (i32, i32), to: (i32, i32)) -> &'static str {
+        let dx = (to.0 - from.0).signum();
+        let dz = (to.1 - from.1).signum();
+        match (dx, dz) {
+            (1, 0) => "E", (-1, 0) => "W", (0, 1) => "S", (0, -1) => "N",
+            (1, 1) => "SE", (1, -1) => "NE", (-1, 1) => "SW", (-1, -1) => "NW",
+            _ => "?",
+        }
+    }
+
+    /// Print full debug diagnostics for a test case.
+    fn print_debug(
+        name: &str,
+        start: (usize, usize),
+        goal: (usize, usize),
+        debug: &PathfindDebug,
+    ) {
+        println!("\n=== {} ===", name);
+        println!("  Start: ({},{})  Goal: ({},{})", start.0, start.1, goal.0, goal.1);
+        println!("  arm0 steps: {}  arm1 steps: {}", debug.arm0_trace.len(), debug.arm1_trace.len());
+        match &debug.result {
+            PathfindResult::Found(wps) => {
+                println!("  Result: FOUND ({} waypoints)", wps.len());
+                for (i, wp) in wps.iter().enumerate() {
+                    let c = wp_cell(wp);
+                    println!("    wp[{}]: tile=({:#04x},{:#04x}) cell=({},{})",
+                        i, wp.tile_x, wp.tile_z, c.0, c.1);
+                }
+                // Direction chain
+                let dirs: Vec<&str> = wps.windows(2)
+                    .map(|p| dir_label(wp_cell(&p[0]), wp_cell(&p[1])))
+                    .collect();
+                println!("  Dirs: {}", dirs.join(","));
+                // Endpoint check
+                if let (Some(first), Some(last)) = (wps.first(), wps.last()) {
+                    let fc = wp_cell(first);
+                    let lc = wp_cell(last);
+                    let sd = (fc.0 - start.0 as i32).abs() + (fc.1 - start.1 as i32).abs();
+                    let gd = (lc.0 - goal.0 as i32).abs() + (lc.1 - goal.1 as i32).abs();
+                    println!("  Start wp dist: {}  Goal wp dist: {}", sd, gd);
+                }
+            }
+            PathfindResult::NotFound => {
+                println!("  Result: NOT FOUND");
+            }
+        }
+        // Print last 5 positions of each arm trace for context
+        if !debug.arm0_trace.is_empty() {
+            let a0 = &debug.arm0_trace;
+            let start_idx = a0.len().saturating_sub(5);
+            println!("  arm0 tail: {:?}", &a0[start_idx..]);
+        }
+        if !debug.arm1_trace.is_empty() {
+            let a1 = &debug.arm1_trace;
+            let start_idx = a1.len().saturating_sub(5);
+            println!("  arm1 tail: {:?}", &a1[start_idx..]);
+        }
+    }
+
+    // ── Individual demo test cases ───────────────────────────────────────
+
+    #[test]
+    fn demo_case_01_beeline_straight() {
+        let map = build_test_map();
+        let start = (10, 20); let goal = (35, 20);
+        let debug = pathfind_debug(&map, cell_to_tile(start.0, start.1), cell_to_tile(goal.0, goal.1));
+        print_debug("Case 1: Beeline straight", start, goal, &debug);
+        match &debug.result {
+            PathfindResult::Found(wps) => {
+                assert!(wps.len() >= 2 && wps.len() <= 3,
+                    "expected 2-3 wps, got {}", wps.len());
+                let dirs: Vec<&str> = wps.windows(2)
+                    .map(|p| dir_label(wp_cell(&p[0]), wp_cell(&p[1]))).collect();
+                assert!(dirs.iter().any(|d| *d == "E"),
+                    "expected E direction, got {:?}", dirs);
+            }
+            PathfindResult::NotFound => panic!("expected FOUND"),
+        }
+    }
+
+    #[test]
+    fn demo_case_02_beeline_diagonal() {
+        let map = build_test_map();
+        let start = (10, 35); let goal = (30, 45);
+        let debug = pathfind_debug(&map, cell_to_tile(start.0, start.1), cell_to_tile(goal.0, goal.1));
+        print_debug("Case 2: Beeline diagonal", start, goal, &debug);
+        match &debug.result {
+            PathfindResult::Found(wps) => {
+                assert!(wps.len() >= 2 && wps.len() <= 3,
+                    "expected 2-3 wps, got {}", wps.len());
+                let dirs: Vec<&str> = wps.windows(2)
+                    .map(|p| dir_label(wp_cell(&p[0]), wp_cell(&p[1]))).collect();
+                assert!(dirs.iter().any(|d| *d == "SE"),
+                    "expected SE direction, got {:?}", dirs);
+            }
+            PathfindResult::NotFound => panic!("expected FOUND"),
+        }
+    }
+
+    #[test]
+    fn demo_case_03_around_block() {
+        let map = build_test_map();
+        let start = (16, 51); let goal = (28, 51);
+        let debug = pathfind_debug(&map, cell_to_tile(start.0, start.1), cell_to_tile(goal.0, goal.1));
+        print_debug("Case 3: Around block", start, goal, &debug);
+        match &debug.result {
+            PathfindResult::Found(wps) => {
+                assert!(wps.len() >= 3 && wps.len() <= 8,
+                    "expected 3-8 wps, got {}", wps.len());
+                // Check endpoints near start/goal
+                let fc = wp_cell(wps.first().unwrap());
+                let lc = wp_cell(wps.last().unwrap());
+                assert!((fc.0 - 16).abs() + (fc.1 - 51).abs() <= 2,
+                    "start wp {:?} too far from (16,51)", fc);
+                assert!((lc.0 - 28).abs() + (lc.1 - 51).abs() <= 2,
+                    "goal wp {:?} too far from (28,51)", lc);
+            }
+            PathfindResult::NotFound => panic!("expected FOUND"),
+        }
+    }
+
+    #[test]
+    fn demo_case_04_long_wall() {
+        let map = build_test_map();
+        let start = (55, 50); let goal = (55, 60);
+        let debug = pathfind_debug(&map, cell_to_tile(start.0, start.1), cell_to_tile(goal.0, goal.1));
+        print_debug("Case 4: Long wall", start, goal, &debug);
+        match &debug.result {
+            PathfindResult::Found(wps) => {
+                assert!(wps.len() >= 3 && wps.len() <= 8,
+                    "expected 3-8 wps, got {}", wps.len());
+                let fc = wp_cell(wps.first().unwrap());
+                let lc = wp_cell(wps.last().unwrap());
+                assert!((fc.0 - 55).abs() + (fc.1 - 50).abs() <= 2,
+                    "start wp {:?} too far from (55,50)", fc);
+                assert!((lc.0 - 55).abs() + (lc.1 - 60).abs() <= 2,
+                    "goal wp {:?} too far from (55,60)", lc);
+            }
+            PathfindResult::NotFound => panic!("expected FOUND"),
+        }
+    }
+
+    #[test]
+    fn demo_case_05_u_trap() {
+        let map = build_test_map();
+        let start = (63, 70); let goal = (63, 95);
+        let debug = pathfind_debug(&map, cell_to_tile(start.0, start.1), cell_to_tile(goal.0, goal.1));
+        print_debug("Case 5: U-trap", start, goal, &debug);
+        match &debug.result {
+            PathfindResult::Found(wps) => {
+                assert!(wps.len() >= 3 && wps.len() <= 12,
+                    "expected 3-12 wps, got {}", wps.len());
+                let fc = wp_cell(wps.first().unwrap());
+                let lc = wp_cell(wps.last().unwrap());
+                assert!((fc.0 - 63).abs() + (fc.1 - 70).abs() <= 2,
+                    "start wp {:?} too far from (63,70)", fc);
+                assert!((lc.0 - 63).abs() + (lc.1 - 95).abs() <= 2,
+                    "goal wp {:?} too far from (63,95)", lc);
+            }
+            PathfindResult::NotFound => panic!("expected FOUND"),
+        }
+    }
+
+    #[test]
+    fn demo_case_06_corridor() {
+        let map = build_test_map();
+        let start = (15, 80); let goal = (35, 80);
+        let debug = pathfind_debug(&map, cell_to_tile(start.0, start.1), cell_to_tile(goal.0, goal.1));
+        print_debug("Case 6: Corridor", start, goal, &debug);
+        match &debug.result {
+            PathfindResult::Found(wps) => {
+                assert!(wps.len() >= 3 && wps.len() <= 10,
+                    "expected 3-10 wps, got {}", wps.len());
+                let fc = wp_cell(wps.first().unwrap());
+                let lc = wp_cell(wps.last().unwrap());
+                assert!((fc.0 - 15).abs() + (fc.1 - 80).abs() <= 2,
+                    "start wp {:?} too far from (15,80)", fc);
+                assert!((lc.0 - 35).abs() + (lc.1 - 80).abs() <= 2,
+                    "goal wp {:?} too far from (35,80)", lc);
+            }
+            PathfindResult::NotFound => panic!("expected FOUND"),
+        }
+    }
+
+    #[test]
+    fn demo_case_07_enclosed() {
+        let map = build_test_map();
+        let start = (80, 43); let goal = (90, 43);
+        let debug = pathfind_debug(&map, cell_to_tile(start.0, start.1), cell_to_tile(goal.0, goal.1));
+        print_debug("Case 7: Enclosed", start, goal, &debug);
+        assert!(matches!(debug.result, PathfindResult::NotFound),
+            "expected NOT FOUND (goal inside solid box)");
+    }
+
+    #[test]
+    fn demo_case_08_l_wall_corner() {
+        let map = build_test_map();
+        let start = (48, 25); let goal = (55, 25);
+        let debug = pathfind_debug(&map, cell_to_tile(start.0, start.1), cell_to_tile(goal.0, goal.1));
+        print_debug("Case 8: L-wall corner", start, goal, &debug);
+        match &debug.result {
+            PathfindResult::Found(wps) => {
+                assert!(wps.len() >= 3 && wps.len() <= 8,
+                    "expected 3-8 wps, got {}", wps.len());
+                let fc = wp_cell(wps.first().unwrap());
+                let lc = wp_cell(wps.last().unwrap());
+                assert!((fc.0 - 48).abs() + (fc.1 - 25).abs() <= 2,
+                    "start wp {:?} too far from (48,25)", fc);
+                assert!((lc.0 - 55).abs() + (lc.1 - 25).abs() <= 2,
+                    "goal wp {:?} too far from (55,25)", lc);
+            }
+            PathfindResult::NotFound => panic!("expected FOUND"),
+        }
+    }
+
+    #[test]
+    fn demo_case_09_c_shape() {
+        let map = build_test_map();
+        let start = (12, 110); let goal = (25, 110);
+        let debug = pathfind_debug(&map, cell_to_tile(start.0, start.1), cell_to_tile(goal.0, goal.1));
+        print_debug("Case 9: C-shape", start, goal, &debug);
+        match &debug.result {
+            PathfindResult::Found(wps) => {
+                assert!(wps.len() >= 3 && wps.len() <= 10,
+                    "expected 3-10 wps, got {}", wps.len());
+                let fc = wp_cell(wps.first().unwrap());
+                let lc = wp_cell(wps.last().unwrap());
+                assert!((fc.0 - 12).abs() + (fc.1 - 110).abs() <= 2,
+                    "start wp {:?} too far from (12,110)", fc);
+                assert!((lc.0 - 25).abs() + (lc.1 - 110).abs() <= 2,
+                    "goal wp {:?} too far from (25,110)", lc);
+            }
+            PathfindResult::NotFound => panic!("expected FOUND"),
+        }
+    }
+
+    #[test]
+    fn demo_case_10_map_edge() {
+        let map = build_test_map();
+        let start = (3, 55); let goal = (3, 70);
+        let debug = pathfind_debug(&map, cell_to_tile(start.0, start.1), cell_to_tile(goal.0, goal.1));
+        print_debug("Case 10: Map edge", start, goal, &debug);
+        match &debug.result {
+            PathfindResult::Found(wps) => {
+                assert!(wps.len() >= 3 && wps.len() <= 6,
+                    "expected 3-6 wps, got {}", wps.len());
+                let fc = wp_cell(wps.first().unwrap());
+                let lc = wp_cell(wps.last().unwrap());
+                assert!((fc.0 - 3).abs() + (fc.1 - 55).abs() <= 2,
+                    "start wp {:?} too far from (3,55)", fc);
+                assert!((lc.0 - 3).abs() + (lc.1 - 70).abs() <= 2,
+                    "goal wp {:?} too far from (3,70)", lc);
+            }
+            PathfindResult::NotFound => panic!("expected FOUND"),
+        }
     }
 }

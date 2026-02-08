@@ -1,17 +1,19 @@
 //! Pathfinding Demo — Dual-arm wall-following visualizer
 //!
-//! Renders a 128×128 cell grid with terrain coloring, lets you place start/goal
-//! points, and visualizes the pathfinder's search: visited cells colored by arm,
-//! the final path, and obstacle walls.
+//! Two modes:
+//!   Test mode (default) — synthetic map with obstacles and preset test cases
+//!   Level mode — loads game level data for interactive testing
 //!
 //! Controls:
 //!   Left-click    - Set start position
 //!   Right-click   - Set goal position (triggers pathfinding)
+//!   M             - Toggle between test mode and level mode
+//!   1-9, 0        - Select test case (test mode only)
 //!   G             - Toggle cell grid overlay
 //!   R             - Reset (clear path and markers)
 //!   +/-           - Zoom in/out
 //!   Arrow keys    - Pan camera
-//!   N/P           - Next/previous level
+//!   N/P           - Next/previous level (level mode only)
 //!   Escape        - Quit
 
 use std::path::PathBuf;
@@ -30,9 +32,9 @@ use pop3::gpu::buffer::GpuBuffer;
 use pop3::gpu::texture::GpuTexture;
 use pop3::pop::level::{Landscape, LevelRes};
 use pop3::movement::{
-    self, RegionMap, TileCoord, PathfindDebug, PathfindResult,
+    self, RegionMap, TileCoord, Waypoint, PathfindDebug, PathfindResult,
 };
-use pop3::movement::constants::REGION_GRID_SIZE;
+use pop3::movement::constants::{REGION_GRID_SIZE, CELL_HAS_BUILDING};
 
 const MAP_SIZE: usize = 128;
 /// World units per cell
@@ -62,7 +64,82 @@ struct OverlayVertex {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Heightmap → RGBA texture
+// Map modes and test cases
+// ──────────────────────────────────────────────────────────────────────────────
+
+enum MapMode {
+    Test,
+    Level(u8),
+}
+
+struct TestCase {
+    name: &'static str,
+    start: (usize, usize),
+    goal: (usize, usize),
+    expect_found: bool,
+    /// Expected direction(s) that must appear in the path (comma-separated)
+    expect_dirs: &'static str,
+    /// (min, max) inclusive waypoint count
+    expect_wps: (usize, usize),
+    /// Why this path shape is expected — for human/AI verification
+    rationale: &'static str,
+}
+
+const TEST_CASES: &[TestCase] = &[
+    TestCase {
+        name: "Beeline straight", start: (10, 20), goal: (35, 20),
+        expect_found: true, expect_dirs: "E", expect_wps: (2, 3),
+        rationale: "Straight east, no obstacles between start and goal",
+    },
+    TestCase {
+        name: "Beeline diagonal", start: (10, 35), goal: (30, 45),
+        expect_found: true, expect_dirs: "SE", expect_wps: (2, 3),
+        rationale: "Diagonal SE, no obstacles — LOS optimizer reduces to 2 waypoints",
+    },
+    TestCase {
+        name: "Around block", start: (16, 51), goal: (28, 51),
+        expect_found: true, expect_dirs: "", expect_wps: (3, 8),
+        rationale: "East blocked by 4x3 block at x=20..23 — wall-follow around N or S edge",
+    },
+    TestCase {
+        name: "Long wall", start: (55, 50), goal: (55, 60),
+        expect_found: true, expect_dirs: "", expect_wps: (3, 8),
+        rationale: "South blocked by wall z=55 x=45..70 — follow to east or west end, then south",
+    },
+    TestCase {
+        name: "U-trap", start: (63, 70), goal: (63, 95),
+        expect_found: true, expect_dirs: "", expect_wps: (3, 12),
+        rationale: "South into U, bottom wall blocks at z=90 — must escape through side, go around",
+    },
+    TestCase {
+        name: "Corridor", start: (15, 80), goal: (35, 80),
+        expect_found: true, expect_dirs: "", expect_wps: (3, 10),
+        rationale: "Two offset vertical walls — zigzag through gap at z=82 then gap at z=77",
+    },
+    TestCase {
+        name: "Enclosed", start: (80, 43), goal: (90, 43),
+        expect_found: false, expect_dirs: "", expect_wps: (0, 0),
+        rationale: "Goal inside solid 11x11 box — unreachable",
+    },
+    TestCase {
+        name: "L-wall corner", start: (48, 25), goal: (55, 25),
+        expect_found: true, expect_dirs: "", expect_wps: (3, 8),
+        rationale: "East blocked by vertical wall x=50 — follow around L-corner",
+    },
+    TestCase {
+        name: "C-shape", start: (12, 110), goal: (25, 110),
+        expect_found: true, expect_dirs: "", expect_wps: (3, 10),
+        rationale: "East blocked by C's vertical wall x=18 — follow around top or bottom of C",
+    },
+    TestCase {
+        name: "Map edge", start: (3, 55), goal: (3, 70),
+        expect_found: true, expect_dirs: "", expect_wps: (3, 6),
+        rationale: "South blocked by wall at x=3 z=62..63 — small detour near map edge",
+    },
+];
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Terrain textures
 // ──────────────────────────────────────────────────────────────────────────────
 
 fn heightmap_to_rgba(landscape: &Landscape<128>) -> Vec<u8> {
@@ -90,25 +167,324 @@ fn heightmap_to_rgba(landscape: &Landscape<128>) -> Vec<u8> {
     rgba
 }
 
+/// Generate terrain texture from a RegionMap (for test mode).
+/// Walkable = light green, unwalkable = dark gray.
+fn region_map_to_rgba(region_map: &RegionMap) -> Vec<u8> {
+    let mut rgba = vec![0u8; MAP_SIZE * MAP_SIZE * 4];
+    for z in 0..MAP_SIZE {
+        for x in 0..MAP_SIZE {
+            let tile = TileCoord::new((x * 2) as u8, (z * 2) as u8);
+            let idx = (z * MAP_SIZE + x) * 4;
+            if region_map.is_walkable(tile) {
+                rgba[idx] = 140;
+                rgba[idx + 1] = 180;
+                rgba[idx + 2] = 100;
+            } else {
+                rgba[idx] = 40;
+                rgba[idx + 1] = 40;
+                rgba[idx + 2] = 50;
+            }
+            rgba[idx + 3] = 255;
+        }
+    }
+    rgba
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
-// Build region map from landscape (water = unwalkable)
+// Region map builders
 // ──────────────────────────────────────────────────────────────────────────────
 
-fn build_region_map(landscape: &Landscape<128>) -> RegionMap {
+fn set_wall(map: &mut RegionMap, x: usize, z: usize) {
+    let tile = TileCoord::new((x * 2) as u8, (z * 2) as u8);
+    map.get_cell_mut(tile).terrain_type = 1;
+}
+
+/// Build synthetic test map with obstacles exercising every pathfinder phase.
+///
+/// Obstacle layout (cell coords):
+///   ③ Block 4×3      (20,50)→(23,52)     — simple wall-follow
+///   ④ Long wall       z=55, x=45..70      — long follow around end
+///   ⑤ U-trap          x=60/66, z=72..90   — concave trap (open top)
+///   ⑥ Corridor        offset vertical walls — zigzag through gaps
+///   ⑦ Enclosed box    (85,38)→(95,48)     — NOT_FOUND test
+///   ⑧ L-wall          x=50 z=18..35 + z=18 x=50..62 — corner following
+///   ⑨ C-shape         three walls forming C — wall-end detection
+///   ⑩ Edge wall       x=3, z=62..63       — boundary test
+fn build_test_map() -> RegionMap {
     let mut map = RegionMap::new();
-    // Mark water cells (height == 0) as unwalkable
-    map.set_terrain_flags(1, 0x00); // terrain class 1 = water (no walkable bit)
-    for z in (0..MAP_SIZE).step_by(2) {
-        for x in (0..MAP_SIZE).step_by(2) {
-            let tile = TileCoord::new(x as u8, z as u8);
-            // Average the 2×2 tile block height
-            let h = landscape.height[z][x];
-            if h == 0 {
-                map.get_cell_mut(tile).terrain_type = 1; // water
+    map.set_terrain_flags(1, 0x00); // terrain class 1 = wall (unwalkable)
+
+    // ③ Block 4×3 at (20,50)→(23,52)
+    for z in 50..=52 {
+        for x in 20..=23 {
+            set_wall(&mut map, x, z);
+        }
+    }
+
+    // ④ Long wall at z=55, x=45..=70 (26 cells)
+    for x in 45..=70 {
+        set_wall(&mut map, x, 55);
+    }
+
+    // ⑤ U-trap: left/right walls + bottom, open top
+    for z in 72..=90 {
+        set_wall(&mut map, 60, z);
+        set_wall(&mut map, 66, z);
+    }
+    for x in 60..=66 {
+        set_wall(&mut map, x, 90);
+    }
+
+    // ⑥ Corridor: two offset vertical walls with gaps
+    // Wall A at x=20: gap at z=82-83
+    for z in 74..=81 { set_wall(&mut map, 20, z); }
+    for z in 84..=86 { set_wall(&mut map, 20, z); }
+    // Wall B at x=28: gap at z=77-78
+    for z in 74..=76 { set_wall(&mut map, 28, z); }
+    for z in 79..=86 { set_wall(&mut map, 28, z); }
+
+    // ⑦ Enclosed box (85,38)→(95,48), solid fill
+    for z in 38..=48 {
+        for x in 85..=95 {
+            set_wall(&mut map, x, z);
+        }
+    }
+
+    // ⑧ L-wall: vertical x=50 z=18..=35, horizontal x=50..=62 z=18
+    for z in 18..=35 { set_wall(&mut map, 50, z); }
+    for x in 50..=62 { set_wall(&mut map, x, 18); }
+
+    // ⑨ C-shape (open left): top/bottom horizontals + right vertical
+    for x in 10..=18 { set_wall(&mut map, x, 105); }
+    for z in 105..=120 { set_wall(&mut map, 18, z); }
+    for x in 10..=18 { set_wall(&mut map, x, 120); }
+
+    // ⑩ Small wall near map edge for boundary test
+    for z in 62..=63 { set_wall(&mut map, 3, z); }
+
+    map
+}
+
+/// Find the centroid of all land cells (height > 0) in world coordinates.
+fn find_land_center(landscape: &Landscape<128>) -> [f32; 2] {
+    let mut sum_x: f64 = 0.0;
+    let mut sum_z: f64 = 0.0;
+    let mut count: f64 = 0.0;
+    for z in 0..MAP_SIZE {
+        for x in 0..MAP_SIZE {
+            if landscape.height[z][x] > 0 {
+                sum_x += x as f64;
+                sum_z += z as f64;
+                count += 1.0;
             }
         }
     }
-    map
+    if count == 0.0 {
+        return [WORLD_SIZE / 2.0, WORLD_SIZE / 2.0];
+    }
+    [
+        (sum_x / count) as f32 * CELL_SIZE + CELL_SIZE / 2.0,
+        (sum_z / count) as f32 * CELL_SIZE + CELL_SIZE / 2.0,
+    ]
+}
+
+/// Find a suitable location for a building: a w×h block of walkable land.
+fn find_building_site(
+    landscape: &Landscape<128>,
+    center_x: usize, center_z: usize,
+    w: usize, h: usize,
+) -> Option<(usize, usize)> {
+    for radius in 0i32..64 {
+        for dz in -radius..=radius {
+            for dx in -radius..=radius {
+                if dx.abs() != radius && dz.abs() != radius {
+                    continue;
+                }
+                let bx = center_x as i32 + dx;
+                let bz = center_z as i32 + dz;
+                if bx < 2 || bz < 2 || bx + w as i32 >= MAP_SIZE as i32 - 2
+                    || bz + h as i32 >= MAP_SIZE as i32 - 2
+                {
+                    continue;
+                }
+                let mut all_land = true;
+                for oz in 0..h {
+                    for ox in 0..w {
+                        if landscape.height[bz as usize + oz][bx as usize + ox] == 0 {
+                            all_land = false;
+                            break;
+                        }
+                    }
+                    if !all_land { break; }
+                }
+                if all_land {
+                    return Some((bx as usize, bz as usize));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Build region map from game landscape. Returns (map, camera_center).
+fn build_region_map(landscape: &Landscape<128>) -> (RegionMap, [f32; 2]) {
+    let mut map = RegionMap::new();
+    map.set_terrain_flags(1, 0x00); // water
+    map.set_terrain_flags(2, 0x00); // building
+
+    for z in 0..MAP_SIZE {
+        for x in 0..MAP_SIZE {
+            let tile = TileCoord::new((x * 2) as u8, (z * 2) as u8);
+            if landscape.height[z][x] == 0 {
+                map.get_cell_mut(tile).terrain_type = 1;
+            }
+        }
+    }
+
+    let land_center = find_land_center(landscape);
+    let center_cell_x = (land_center[0] / CELL_SIZE) as usize;
+    let center_cell_z = (land_center[1] / CELL_SIZE) as usize;
+    let camera_center;
+    if let Some((bx, bz)) = find_building_site(landscape, center_cell_x, center_cell_z, 4, 3) {
+        for oz in 0..3usize {
+            for ox in 0..4usize {
+                let tile = TileCoord::new(((bx + ox) * 2) as u8, ((bz + oz) * 2) as u8);
+                map.get_cell_mut(tile).terrain_type = 2;
+                map.get_cell_mut(tile).flags_high = CELL_HAS_BUILDING;
+            }
+        }
+        camera_center = [
+            (bx as f32 + 2.0) * CELL_SIZE,
+            (bz as f32 + 1.5) * CELL_SIZE,
+        ];
+        println!("Building placed at cell ({}, {}), size 4×3", bx, bz);
+    } else {
+        camera_center = land_center;
+    }
+
+    (map, camera_center)
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Path analysis helpers
+// ──────────────────────────────────────────────────────────────────────────────
+
+fn wp_to_cell(wp: &Waypoint) -> (i32, i32) {
+    (wp.tile_x as i32 >> 1, wp.tile_z as i32 >> 1)
+}
+
+fn direction_label(from: (i32, i32), to: (i32, i32)) -> &'static str {
+    let dx = (to.0 - from.0).signum();
+    let dz = (to.1 - from.1).signum();
+    match (dx, dz) {
+        (1, 0) => "E", (-1, 0) => "W", (0, 1) => "S", (0, -1) => "N",
+        (1, 1) => "SE", (1, -1) => "NE", (-1, 1) => "SW", (-1, -1) => "NW",
+        _ => "?",
+    }
+}
+
+fn extract_directions(wps: &[Waypoint]) -> String {
+    wps.windows(2)
+        .map(|pair| direction_label(wp_to_cell(&pair[0]), wp_to_cell(&pair[1])))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_waypoint_chain(wps: &[Waypoint]) -> String {
+    if wps.is_empty() { return String::new(); }
+    let mut s = String::new();
+    let first = wp_to_cell(&wps[0]);
+    s.push_str(&format!("({},{})", first.0, first.1));
+    for pair in wps.windows(2) {
+        let from = wp_to_cell(&pair[0]);
+        let to = wp_to_cell(&pair[1]);
+        let dir = direction_label(from, to);
+        s.push_str(&format!(" -{}-> ({},{})", dir, to.0, to.1));
+    }
+    s
+}
+
+fn winning_arm(debug: &PathfindDebug, goal_cell: (i32, i32)) -> &'static str {
+    let dist = |trace: &[(i32, i32)]| -> i32 {
+        trace.last().map_or(i32::MAX, |&(x, z)|
+            (x - goal_cell.0).abs() + (z - goal_cell.1).abs())
+    };
+    if dist(&debug.arm0_trace) <= dist(&debug.arm1_trace) {
+        "arm0 (right-hand)"
+    } else {
+        "arm1 (left-hand)"
+    }
+}
+
+fn verify_test_case(tc: &TestCase, debug: &PathfindDebug) -> (Vec<&'static str>, Vec<String>) {
+    let mut pass = Vec::new();
+    let mut fail: Vec<String> = Vec::new();
+
+    let found = matches!(debug.result, PathfindResult::Found(_));
+    if found == tc.expect_found {
+        pass.push(if found { "found=ok" } else { "not_found=ok" });
+    } else {
+        fail.push(format!("expected {}, got {}",
+            if tc.expect_found { "FOUND" } else { "NOT_FOUND" },
+            if found { "FOUND" } else { "NOT_FOUND" }));
+    }
+
+    if let PathfindResult::Found(ref wps) = debug.result {
+        // Waypoint count
+        if wps.len() >= tc.expect_wps.0 && wps.len() <= tc.expect_wps.1 {
+            pass.push("wps=ok");
+        } else {
+            fail.push(format!("expected {}-{} waypoints, got {}",
+                tc.expect_wps.0, tc.expect_wps.1, wps.len()));
+        }
+
+        // Direction check
+        if !tc.expect_dirs.is_empty() {
+            let dirs = extract_directions(wps);
+            let mut dirs_ok = true;
+            for expected in tc.expect_dirs.split(',') {
+                if !dirs.contains(expected.trim()) {
+                    fail.push(format!("expected dir {} in path, got: {}", expected.trim(), dirs));
+                    dirs_ok = false;
+                }
+            }
+            if dirs_ok { pass.push("dirs=ok"); }
+        }
+
+        // Endpoint proximity
+        if let (Some(first), Some(last)) = (wps.first(), wps.last()) {
+            let fc = wp_to_cell(first);
+            let lc = wp_to_cell(last);
+            let sc = (tc.start.0 as i32, tc.start.1 as i32);
+            let gc = (tc.goal.0 as i32, tc.goal.1 as i32);
+            let sd = (fc.0 - sc.0).abs() + (fc.1 - sc.1).abs();
+            let gd = (lc.0 - gc.0).abs() + (lc.1 - gc.1).abs();
+            if sd <= 2 && gd <= 2 {
+                pass.push("endpoints=ok");
+            } else {
+                if sd > 2 { fail.push(format!("start wp {:?} far from {:?}", fc, sc)); }
+                if gd > 2 { fail.push(format!("goal wp {:?} far from {:?}", lc, gc)); }
+            }
+        }
+    }
+
+    (pass, fail)
+}
+
+fn print_pathfind_result(debug: &PathfindDebug, goal_cell: (i32, i32)) {
+    let a0 = debug.arm0_trace.len();
+    let a1 = debug.arm1_trace.len();
+    match &debug.result {
+        PathfindResult::Found(wps) => {
+            let arm = winning_arm(debug, goal_cell);
+            println!("  Result:    FOUND via {} | arm0: {}, arm1: {}", arm, a0, a1);
+            println!("  Path:      {}", format_waypoint_chain(wps));
+            println!("  Dirs:      {}", extract_directions(wps));
+        }
+        PathfindResult::NotFound => {
+            println!("  Result:    NOT FOUND | arm0: {}, arm1: {}", a0, a1);
+        }
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -117,6 +493,7 @@ fn build_region_map(landscape: &Landscape<128>) -> RegionMap {
 
 struct Simulation {
     region_map: RegionMap,
+    camera_center: [f32; 2],
     start: Option<TileCoord>,
     goal: Option<TileCoord>,
     debug: Option<PathfindDebug>,
@@ -124,9 +501,22 @@ struct Simulation {
 }
 
 impl Simulation {
-    fn new(landscape: &Landscape<128>) -> Self {
+    fn for_test_map() -> Self {
         Self {
-            region_map: build_region_map(landscape),
+            region_map: build_test_map(),
+            camera_center: [WORLD_SIZE / 2.0, WORLD_SIZE / 2.0],
+            start: None,
+            goal: None,
+            debug: None,
+            show_grid: true,
+        }
+    }
+
+    fn for_level(landscape: &Landscape<128>) -> Self {
+        let (region_map, camera_center) = build_region_map(landscape);
+        Self {
+            region_map,
+            camera_center,
             start: None,
             goal: None,
             debug: None,
@@ -135,7 +525,6 @@ impl Simulation {
     }
 
     fn set_start(&mut self, cell_x: usize, cell_z: usize) {
-        // Cell coords to tile coords (tile = cell * 2)
         let tx = ((cell_x * 2) as u8) & 0xFE;
         let tz = ((cell_z * 2) as u8) & 0xFE;
         self.start = Some(TileCoord::new(tx, tz));
@@ -152,16 +541,22 @@ impl Simulation {
         self.try_pathfind();
     }
 
+    fn set_test_case(&mut self, start: (usize, usize), goal: (usize, usize)) {
+        let sx = ((start.0 * 2) as u8) & 0xFE;
+        let sz = ((start.1 * 2) as u8) & 0xFE;
+        self.start = Some(TileCoord::new(sx, sz));
+        let gx = ((goal.0 * 2) as u8) & 0xFE;
+        let gz = ((goal.1 * 2) as u8) & 0xFE;
+        self.goal = Some(TileCoord::new(gx, gz));
+        self.debug = None;
+        self.try_pathfind();
+    }
+
     fn try_pathfind(&mut self) {
         if let (Some(start), Some(goal)) = (self.start, self.goal) {
             let debug = movement::pathfind_debug(&self.region_map, start, goal);
-            let found = matches!(debug.result, PathfindResult::Found(_));
-            println!(
-                "Pathfind: {} | arm0: {} steps, arm1: {} steps",
-                if found { "FOUND" } else { "NOT FOUND" },
-                debug.arm0_trace.len(),
-                debug.arm1_trace.len(),
-            );
+            let goal_cell = ((goal.x as i32) >> 1, (goal.z as i32) >> 1);
+            print_pathfind_result(&debug, goal_cell);
             self.debug = Some(debug);
         }
     }
@@ -177,11 +572,9 @@ fn push_cell_quad(verts: &mut Vec<OverlayVertex>, cx: f32, cz: f32, color: [f32;
     let z0 = cz * CELL_SIZE;
     let x1 = x0 + CELL_SIZE;
     let z1 = z0 + CELL_SIZE;
-    // Triangle 1
     verts.push(OverlayVertex { position: [x0, z0], color });
     verts.push(OverlayVertex { position: [x1, z0], color });
     verts.push(OverlayVertex { position: [x1, z1], color });
-    // Triangle 2
     verts.push(OverlayVertex { position: [x0, z0], color });
     verts.push(OverlayVertex { position: [x1, z1], color });
     verts.push(OverlayVertex { position: [x0, z1], color });
@@ -190,25 +583,20 @@ fn push_cell_quad(verts: &mut Vec<OverlayVertex>, cx: f32, cz: f32, color: [f32;
 fn build_cell_overlay(sim: &Simulation) -> Vec<OverlayVertex> {
     let mut verts = Vec::new();
 
-    // Visited cells from pathfinding debug
     if let Some(debug) = &sim.debug {
-        // Color visited cells: use arm traces to distinguish which arm explored each cell
-        let arm0_color = [0.0, 0.8, 0.9, 0.25]; // Cyan for arm 0 (right-hand)
-        let arm1_color = [0.9, 0.2, 0.8, 0.25]; // Magenta for arm 1 (left-hand)
-        let visited_color = [0.5, 0.5, 0.5, 0.15]; // Gray for cells visited but not in either trace
+        let arm0_color = [0.0, 0.8, 0.9, 0.25];
+        let arm1_color = [0.9, 0.2, 0.8, 0.25];
+        let visited_color = [0.5, 0.5, 0.5, 0.15];
 
-        // Build lookup sets for arm traces
         let arm0_set: std::collections::HashSet<(i32, i32)> =
             debug.arm0_trace.iter().copied().collect();
         let arm1_set: std::collections::HashSet<(i32, i32)> =
             debug.arm1_trace.iter().copied().collect();
 
-        // Draw visited cells
         for z in 0..REGION_GRID_SIZE as i32 {
             for x in 0..REGION_GRID_SIZE as i32 {
                 if debug.visited.is_visited(x, z) {
                     let color = if arm0_set.contains(&(x, z)) && arm1_set.contains(&(x, z)) {
-                        // Both arms visited — blend
                         [0.5, 0.5, 0.9, 0.3]
                     } else if arm0_set.contains(&(x, z)) {
                         arm0_color
@@ -222,8 +610,7 @@ fn build_cell_overlay(sim: &Simulation) -> Vec<OverlayVertex> {
             }
         }
 
-        // Draw arm traces as connected line segments (via thin quads)
-        // Arm 0 trace (cyan line)
+        // Arm 0 trace line (cyan)
         for pair in debug.arm0_trace.windows(2) {
             let (x0, z0) = pair[0];
             let (x1, z1) = pair[1];
@@ -237,7 +624,7 @@ fn build_cell_overlay(sim: &Simulation) -> Vec<OverlayVertex> {
                 [0.0, 1.0, 1.0, 0.8],
             );
         }
-        // Arm 1 trace (magenta line)
+        // Arm 1 trace line (magenta)
         for pair in debug.arm1_trace.windows(2) {
             let (x0, z0) = pair[0];
             let (x1, z1) = pair[1];
@@ -252,7 +639,7 @@ fn build_cell_overlay(sim: &Simulation) -> Vec<OverlayVertex> {
             );
         }
 
-        // Draw final path waypoints (yellow)
+        // Final path (yellow)
         if let PathfindResult::Found(ref wps) = debug.result {
             for pair in wps.windows(2) {
                 let x0 = (pair[0].tile_x as f32 + 1.0) * (CELL_SIZE / 2.0);
@@ -261,7 +648,6 @@ fn build_cell_overlay(sim: &Simulation) -> Vec<OverlayVertex> {
                 let z1 = (pair[1].tile_z as f32 + 1.0) * (CELL_SIZE / 2.0);
                 push_line_quad(&mut verts, x0, z0, x1, z1, CELL_SIZE * 0.12, [1.0, 0.9, 0.0, 0.9]);
             }
-            // Waypoint markers
             for wp in wps {
                 let cx = (wp.tile_x as f32 + 1.0) * (CELL_SIZE / 2.0);
                 let cz = (wp.tile_z as f32 + 1.0) * (CELL_SIZE / 2.0);
@@ -297,28 +683,25 @@ fn build_grid_overlay(sim: &Simulation) -> Vec<OverlayVertex> {
     let grid_color = [1.0, 1.0, 1.0, 0.08];
     let thickness = CELL_SIZE * 0.02;
 
-    // Vertical lines
     for x in 0..=MAP_SIZE {
         let wx = x as f32 * CELL_SIZE;
-        push_line_quad(
-            &mut verts, wx, 0.0, wx, WORLD_SIZE, thickness, grid_color,
-        );
+        push_line_quad(&mut verts, wx, 0.0, wx, WORLD_SIZE, thickness, grid_color);
     }
-    // Horizontal lines
     for z in 0..=MAP_SIZE {
         let wz = z as f32 * CELL_SIZE;
-        push_line_quad(
-            &mut verts, 0.0, wz, WORLD_SIZE, wz, thickness, grid_color,
-        );
+        push_line_quad(&mut verts, 0.0, wz, WORLD_SIZE, wz, thickness, grid_color);
     }
 
-    // Unwalkable cells (darken)
-    let wall_color = [0.0, 0.0, 0.0, 0.4];
-    for z in (0..MAP_SIZE).step_by(2) {
-        for x in (0..MAP_SIZE).step_by(2) {
-            let tile = TileCoord::new(x as u8, z as u8);
+    // Unwalkable cell overlay — water vs building
+    let water_color = [0.0, 0.0, 0.0, 0.4];
+    let building_color = [0.6, 0.35, 0.1, 0.7];
+    for z in 0..MAP_SIZE {
+        for x in 0..MAP_SIZE {
+            let tile = TileCoord::new((x * 2) as u8, (z * 2) as u8);
             if !sim.region_map.is_walkable(tile) {
-                push_cell_quad(&mut verts, (x / 2) as f32, (z / 2) as f32, wall_color);
+                let tc = sim.region_map.terrain_class(tile);
+                let color = if tc == 2 { building_color } else { water_color };
+                push_cell_quad(&mut verts, x as f32, z as f32, color);
             }
         }
     }
@@ -375,15 +758,12 @@ fn push_cell_quad_centered(
 
 struct Camera {
     center: [f32; 2],
-    zoom: f32, // world units per pixel
+    zoom: f32,
 }
 
 impl Camera {
-    fn new() -> Self {
-        Self {
-            center: [WORLD_SIZE / 2.0, WORLD_SIZE / 2.0],
-            zoom: 20.0, // Larger view — ~20 world units per pixel
-        }
+    fn for_position(center: [f32; 2]) -> Self {
+        Self { center, zoom: 3.5 }
     }
 
     fn projection(&self, screen_w: f32, screen_h: f32) -> [[f32; 4]; 4] {
@@ -431,9 +811,9 @@ struct App {
     window: Option<Arc<Window>>,
     state: Option<ViewerState>,
     base_path: PathBuf,
-    level_num: u8,
-    landscape: Landscape<128>,
+    mode: MapMode,
     sim: Simulation,
+    landscape: Option<Landscape<128>>,
 }
 
 struct ViewerState {
@@ -453,27 +833,28 @@ struct ViewerState {
 }
 
 impl App {
-    fn new(base_path: PathBuf, level_num: u8) -> Self {
-        let level = LevelRes::new(&base_path, level_num, None);
-        let sim = Simulation::new(&level.landscape);
+    fn new(base_path: PathBuf) -> Self {
+        let sim = Simulation::for_test_map();
         Self {
             window: None,
             state: None,
             base_path,
-            level_num,
-            landscape: level.landscape,
+            mode: MapMode::Test,
             sim,
+            landscape: None,
         }
     }
 
-    fn load_level(&mut self, level_num: u8) {
-        self.level_num = level_num;
-        let level = LevelRes::new(&self.base_path, level_num, None);
-        self.sim = Simulation::new(&level.landscape);
-        self.landscape = level.landscape;
+    fn terrain_rgba(&self) -> Vec<u8> {
+        match self.mode {
+            MapMode::Test => region_map_to_rgba(&self.sim.region_map),
+            MapMode::Level(_) => heightmap_to_rgba(self.landscape.as_ref().unwrap()),
+        }
+    }
 
+    fn rebuild_gpu(&mut self) {
+        let rgba = self.terrain_rgba();
         if let Some(state) = &mut self.state {
-            let rgba = heightmap_to_rgba(&self.landscape);
             state.terrain_texture = GpuTexture::new_2d(
                 &state.gpu.device, &state.gpu.queue,
                 MAP_SIZE as u32, MAP_SIZE as u32,
@@ -497,12 +878,77 @@ impl App {
                     },
                 ],
             });
-            state.camera = Camera::new();
+            state.camera = Camera::for_position(self.sim.camera_center);
         }
+    }
+
+    fn switch_to_test(&mut self) {
+        self.mode = MapMode::Test;
+        self.sim = Simulation::for_test_map();
+        self.landscape = None;
+        self.rebuild_gpu();
+        self.update_title();
+        println!("Switched to test map (keys 1-9, 0 to select test cases)");
+    }
+
+    fn switch_to_level(&mut self, level_num: u8) {
+        let level = LevelRes::new(&self.base_path, level_num, None);
+        self.sim = Simulation::for_level(&level.landscape);
+        self.landscape = Some(level.landscape);
+        self.mode = MapMode::Level(level_num);
+        self.rebuild_gpu();
+        self.update_title();
+        println!("Loaded level {} (N/P to switch, click to set start/goal)", level_num);
+    }
+
+    fn update_title(&self) {
         if let Some(window) = &self.window {
-            window.set_title(&format!("Pathfinding Demo — Level {}", level_num));
+            let title = match self.mode {
+                MapMode::Test => "Pathfinding Demo — Test Map".to_string(),
+                MapMode::Level(n) => format!("Pathfinding Demo — Level {}", n),
+            };
+            window.set_title(&title);
         }
-        println!("Loaded level {}", level_num);
+    }
+
+    fn select_test_case(&mut self, idx: usize) {
+        if idx >= TEST_CASES.len() { return; }
+        let tc = &TEST_CASES[idx];
+        self.sim.set_test_case(tc.start, tc.goal);
+
+        // Auto-center camera on midpoint with adaptive zoom
+        let mid_x = ((tc.start.0 + tc.goal.0) as f32 / 2.0 + 0.5) * CELL_SIZE;
+        let mid_z = ((tc.start.1 + tc.goal.1) as f32 / 2.0 + 0.5) * CELL_SIZE;
+        if let Some(state) = &mut self.state {
+            let dx = (tc.start.0 as f32 - tc.goal.0 as f32).abs() + 12.0;
+            let dz = (tc.start.1 as f32 - tc.goal.1 as f32).abs() + 12.0;
+            let span = dx.max(dz) * CELL_SIZE;
+            let screen = state.gpu.size.width.min(state.gpu.size.height) as f32;
+            state.camera.center = [mid_x, mid_z];
+            state.camera.zoom = (span / screen).max(2.0);
+        }
+
+        // Enhanced verifiable output
+        println!("[Case {}] {}: ({},{}) -> ({},{})",
+            idx + 1, tc.name, tc.start.0, tc.start.1, tc.goal.0, tc.goal.1);
+        println!("  Rationale: {}", tc.rationale);
+
+        if let Some(debug) = &self.sim.debug {
+            let goal_cell = (tc.goal.0 as i32, tc.goal.1 as i32);
+            print_pathfind_result(debug, goal_cell);
+            let (pass, fail) = verify_test_case(tc, debug);
+            if fail.is_empty() {
+                println!("  Checks:    PASS ({})", pass.join(", "));
+            } else {
+                println!("  Checks:    FAIL — {}", fail.join("; "));
+                if !pass.is_empty() {
+                    println!("             passed: {}", pass.join(", "));
+                }
+            }
+        } else {
+            println!("  Result:    NO DEBUG DATA");
+            println!("  Checks:    FAIL — pathfinder did not run");
+        }
     }
 }
 
@@ -512,11 +958,16 @@ impl ApplicationHandler for App {
             return;
         }
 
+        let title = match self.mode {
+            MapMode::Test => "Pathfinding Demo — Test Map".to_string(),
+            MapMode::Level(n) => format!("Pathfinding Demo — Level {}", n),
+        };
+
         let window = Arc::new(
             event_loop
                 .create_window(
                     WindowAttributes::default()
-                        .with_title(format!("Pathfinding Demo — Level {}", self.level_num))
+                        .with_title(title)
                         .with_inner_size(winit::dpi::LogicalSize::new(1200, 1200)),
                 )
                 .unwrap(),
@@ -526,7 +977,7 @@ impl ApplicationHandler for App {
         let gpu = pollster::block_on(GpuContext::new(window));
         let device = &gpu.device;
 
-        let rgba = heightmap_to_rgba(&self.landscape);
+        let rgba = self.terrain_rgba();
         let terrain_texture = GpuTexture::new_2d(
             device, &gpu.queue, MAP_SIZE as u32, MAP_SIZE as u32,
             wgpu::TextureFormat::Rgba8UnormSrgb, &rgba, "terrain_texture",
@@ -587,7 +1038,6 @@ impl ApplicationHandler for App {
 
         let shader_source = include_str!("../../shaders/pathfinding_demo.wgsl");
 
-        // Terrain pipeline
         let terrain_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("terrain_shader"),
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
@@ -637,7 +1087,6 @@ impl ApplicationHandler for App {
             cache: None,
         });
 
-        // Cell overlay pipeline — TriangleList with alpha blending
         let overlay_vertex_layout = wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<OverlayVertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -711,7 +1160,7 @@ impl ApplicationHandler for App {
             terrain_vertex_buffer,
             cell_buffer,
             cell_vert_count: 0,
-            camera: Camera::new(),
+            camera: Camera::for_position(self.sim.camera_center),
             cursor_pos: [0.0, 0.0],
         });
     }
@@ -760,9 +1209,24 @@ impl ApplicationHandler for App {
                                 println!("Grid: {}", if self.sim.show_grid { "ON" } else { "OFF" });
                             }
                             KeyCode::KeyR => {
-                                self.sim = Simulation::new(&self.landscape);
+                                match self.mode {
+                                    MapMode::Test => self.sim = Simulation::for_test_map(),
+                                    MapMode::Level(_) => {
+                                        if let Some(ls) = &self.landscape {
+                                            self.sim = Simulation::for_level(ls);
+                                        }
+                                    }
+                                }
                                 println!("Reset");
                             }
+                            // Mode toggle
+                            KeyCode::KeyM => {
+                                match self.mode {
+                                    MapMode::Test => self.switch_to_level(3),
+                                    MapMode::Level(_) => self.switch_to_test(),
+                                }
+                            }
+                            // Zoom
                             KeyCode::Equal | KeyCode::NumpadAdd => {
                                 if let Some(state) = &mut self.state {
                                     state.camera.zoom = (state.camera.zoom * 0.8).max(0.5);
@@ -773,6 +1237,7 @@ impl ApplicationHandler for App {
                                     state.camera.zoom = (state.camera.zoom * 1.25).min(200.0);
                                 }
                             }
+                            // Pan
                             KeyCode::ArrowLeft => {
                                 if let Some(state) = &mut self.state {
                                     state.camera.center[0] -= 200.0 * state.camera.zoom;
@@ -793,14 +1258,28 @@ impl ApplicationHandler for App {
                                     state.camera.center[1] += 200.0 * state.camera.zoom;
                                 }
                             }
+                            // Level switching (level mode only)
                             KeyCode::KeyN => {
-                                let next = self.level_num.wrapping_add(1).max(1);
-                                self.load_level(next);
+                                if let MapMode::Level(n) = self.mode {
+                                    self.switch_to_level(n.wrapping_add(1).max(1));
+                                }
                             }
                             KeyCode::KeyP => {
-                                let prev = if self.level_num <= 1 { 25 } else { self.level_num - 1 };
-                                self.load_level(prev);
+                                if let MapMode::Level(n) = self.mode {
+                                    self.switch_to_level(if n <= 1 { 25 } else { n - 1 });
+                                }
                             }
+                            // Test case selection (test mode only)
+                            KeyCode::Digit1 => if matches!(self.mode, MapMode::Test) { self.select_test_case(0); }
+                            KeyCode::Digit2 => if matches!(self.mode, MapMode::Test) { self.select_test_case(1); }
+                            KeyCode::Digit3 => if matches!(self.mode, MapMode::Test) { self.select_test_case(2); }
+                            KeyCode::Digit4 => if matches!(self.mode, MapMode::Test) { self.select_test_case(3); }
+                            KeyCode::Digit5 => if matches!(self.mode, MapMode::Test) { self.select_test_case(4); }
+                            KeyCode::Digit6 => if matches!(self.mode, MapMode::Test) { self.select_test_case(5); }
+                            KeyCode::Digit7 => if matches!(self.mode, MapMode::Test) { self.select_test_case(6); }
+                            KeyCode::Digit8 => if matches!(self.mode, MapMode::Test) { self.select_test_case(7); }
+                            KeyCode::Digit9 => if matches!(self.mode, MapMode::Test) { self.select_test_case(8); }
+                            KeyCode::Digit0 => if matches!(self.mode, MapMode::Test) { self.select_test_case(9); }
                             _ => {}
                         }
                     }
@@ -838,7 +1317,6 @@ impl ViewerState {
             &wgpu::CommandEncoderDescriptor { label: Some("pathfinding_encoder") },
         );
 
-        // Build overlay geometry
         let mut overlay_verts = build_grid_overlay(sim);
         overlay_verts.extend(build_cell_overlay(sim));
         self.cell_vert_count = (overlay_verts.len() as u32).min(MAX_OVERLAY_VERTS as u32);
@@ -867,13 +1345,11 @@ impl ViewerState {
                 ..Default::default()
             });
 
-            // Draw terrain
             pass.set_pipeline(&self.terrain_pipeline);
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_vertex_buffer(0, self.terrain_vertex_buffer.buffer.slice(..));
             pass.draw(0..6, 0..1);
 
-            // Draw cell overlay
             if self.cell_vert_count > 0 {
                 pass.set_pipeline(&self.cell_pipeline);
                 pass.set_bind_group(0, &self.bind_group, &[]);
@@ -900,14 +1376,6 @@ fn cli() -> Command {
                 .value_parser(clap::value_parser!(PathBuf))
                 .help("Path to game install directory"),
         )
-        .arg(
-            Arg::new("level")
-                .long("level")
-                .short('l')
-                .value_parser(clap::value_parser!(u8))
-                .default_value("1")
-                .help("Level number (1-25)"),
-        )
 }
 
 fn main() {
@@ -929,16 +1397,17 @@ fn main() {
             PathBuf::from("data/original_game")
         });
 
-    let level_num = *matches.get_one::<u8>("level").unwrap();
-
     println!("Pathfinding Demo");
+    println!("  Mode:        test map (M to toggle level mode)");
+    println!("  1-9, 0:      select test case");
     println!("  Left-click:  set start");
     println!("  Right-click: set goal (triggers pathfinding)");
     println!("  G:           toggle grid");
     println!("  R:           reset");
     println!("  +/-:         zoom");
     println!("  Arrows:      pan");
-    println!("  N/P:         next/prev level");
+    println!("  M:           toggle test/level mode");
+    println!("  N/P:         next/prev level (level mode)");
     println!();
     println!("  Cyan cells:    arm 0 (right-hand wall-follow)");
     println!("  Magenta cells: arm 1 (left-hand wall-follow)");
@@ -950,6 +1419,6 @@ fn main() {
     env_logger::init_from_env(env);
 
     let event_loop = EventLoop::new().unwrap();
-    let mut app = App::new(base, level_num);
+    let mut app = App::new(base);
     event_loop.run_app(&mut app).unwrap();
 }

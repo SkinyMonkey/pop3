@@ -29,7 +29,7 @@ pub mod waypoint;
 pub mod pathfinder;
 
 // Re-export primary API
-pub use types::{WorldCoord, TileCoord, PersonMovement, UsedTargetsCache};
+pub use types::{WorldCoord, TileCoord, Waypoint, PersonMovement, UsedTargetsCache};
 pub use region::RegionMap;
 pub use segment::{SegmentPool, FailureCache};
 pub use route::{state_goto, route_table_lookup, adjust_target_for_walkability, RouteResult};
