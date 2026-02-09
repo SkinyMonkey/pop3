@@ -25,6 +25,18 @@ pub fn world_to_cell(pos: &WorldCoord, n: f32) -> (f32, f32) {
     (cell_x, cell_y)
 }
 
+/// Convert world coordinates to smooth rendering position.
+/// Unlike `world_to_cell` (which quantizes via >>8), this preserves full i16
+/// precision for smooth sub-cell rendering. Each cell is 512 world units;
+/// cell centers land at N+0.5 (e.g., world 256 → cell 0.5).
+pub fn world_to_render_pos(pos: &WorldCoord, n: f32) -> (f32, f32) {
+    let render_x = (pos.x as u16) as f32 / 512.0;
+    let render_z = (pos.z as u16) as f32 / 512.0;
+    let cell_x = render_z;
+    let cell_y = (n - 1.0) - render_x;
+    (cell_x, cell_y)
+}
+
 /// Convert cell coordinates back to world coordinates.
 /// Inverse of world_to_cell. `n` is landscape size (typically 128.0).
 pub fn cell_to_world(cell_x: f32, cell_y: f32, n: f32) -> WorldCoord {
@@ -58,6 +70,14 @@ pub fn triangle_to_cell(triangle_id: usize, mesh_width: usize, shift_x: usize, s
     let cell_x = ((vis_i + shift_x) % mesh_width) as f32 + 0.5;
     let cell_y = ((vis_j + shift_y) % mesh_width) as f32 + 0.5;
     (cell_x, cell_y)
+}
+
+/// Compute the shortest-path signed delta on a toroidal i16 world.
+/// i16 wrapping_sub naturally gives the correct result because the world
+/// size (65536) equals the i16 range (2^16).
+#[inline]
+pub fn toroidal_delta(from: i16, to: i16) -> i32 {
+    to.wrapping_sub(from) as i32
 }
 
 /// Project a model-space 3D point to screen coordinates via a PVM matrix.
@@ -133,6 +153,108 @@ mod tests {
         // cell_x = 1.0, cell_y = 127 - 1.0 = 126.0
         assert!((cx - 1.0).abs() < 0.01);
         assert!((cy - 126.0).abs() < 0.01);
+    }
+
+    // --- world_to_render_pos tests ---
+
+    #[test]
+    fn render_pos_cell_center() {
+        // World 256 = center of cell 0 → render 0.5
+        let w0 = WorldCoord::new(0x100, 0x100); // 256, 256
+        let (cx, cy) = world_to_render_pos(&w0, 128.0);
+        // z=256 → 256/512 = 0.5
+        assert!((cx - 0.5).abs() < 0.001);
+        // x=256 → render_x = 256/512 = 0.5, cell_y = 127 - 0.5 = 126.5
+        assert!((cy - 126.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn render_pos_sub_cell_precision() {
+        // World 384 = 3/4 through cell 0 (between center and next boundary)
+        // 384 / 512.0 = 0.75
+        let w = WorldCoord::new(0x180, 0x180); // 384, 384
+        let (cx, cy) = world_to_render_pos(&w, 128.0);
+        assert!((cx - 0.75).abs() < 0.001);
+        assert!((cy - (127.0 - 0.75)).abs() < 0.001);
+    }
+
+    #[test]
+    fn render_pos_matches_world_to_cell_at_grid() {
+        // At cell boundaries (multiples of 512), both functions should agree
+        // within the 0.5 offset that world_to_cell adds.
+        // world_to_cell: ((0x2000 >> 8) / 2.0) + 0.5 = (32/2) + 0.5 = 16.5
+        // world_to_render_pos: 0x2000 / 512.0 = 16.0
+        // Difference is exactly 0.5 (the quantization centering offset).
+        let w = WorldCoord::new(0x2000, 0x3000);
+        let (qx, qy) = world_to_cell(&w, 128.0);
+        let (sx, sy) = world_to_render_pos(&w, 128.0);
+        // render_pos is 0.5 less on cell_x axis, 0.5 more on cell_y axis
+        // (because world_to_cell adds +0.5 via the quantization centering)
+        assert!((qx - sx - 0.5).abs() < 0.001); // 24.5 - 24.0 = 0.5
+        assert!((sy - qy - 0.5).abs() < 0.001); // 111.0 - 110.5 = 0.5
+    }
+
+    #[test]
+    fn render_pos_smooth_between_ticks() {
+        // Two positions 48 world units apart (one tick of movement at speed 0x30).
+        // Should produce different render positions (unlike world_to_cell which
+        // would quantize both to the same half-cell).
+        let w1 = WorldCoord::new(0x2000, 0x3000);
+        let w2 = WorldCoord::new(0x2000 + 48, 0x3000);
+        let (cx1, _) = world_to_render_pos(&w1, 128.0);
+        let (cx2, _) = world_to_render_pos(&w2, 128.0);
+        assert!(cx1 == cx2); // same z axis → same cell_x
+        let (_, cy1) = world_to_render_pos(&w1, 128.0);
+        let (_, cy2) = world_to_render_pos(&w2, 128.0);
+        // 48 / 512.0 = 0.09375 cell difference
+        assert!((cy1 - cy2 - 48.0 / 512.0).abs() < 0.001);
+    }
+
+    // --- toroidal_delta tests ---
+
+    #[test]
+    fn toroidal_delta_small_positive() {
+        // 100 → 200: delta = +100
+        assert_eq!(toroidal_delta(100, 200), 100);
+    }
+
+    #[test]
+    fn toroidal_delta_small_negative() {
+        // 200 → 100: delta = -100
+        assert_eq!(toroidal_delta(200, 100), -100);
+    }
+
+    #[test]
+    fn toroidal_delta_across_sign_boundary() {
+        // Unit at 32000 (positive i16), target at -32000 (i16) = 33536 (unsigned).
+        // Real distance is 1536, not 64000.
+        // wrapping_sub: -32000_i16 - 32000_i16 = -64000 wraps to 1536_i16
+        assert_eq!(toroidal_delta(32000, -32000), 1536);
+    }
+
+    #[test]
+    fn toroidal_delta_across_sign_boundary_reverse() {
+        // Target at 32000, unit at -32000: shortest path is -1536
+        assert_eq!(toroidal_delta(-32000, 32000), -1536);
+    }
+
+    #[test]
+    fn toroidal_delta_near_zero_wrap() {
+        // Unit at -100 (65436 unsigned), target at 100.
+        // Direct signed: 100 - (-100) = 200 → correct, no wrap needed.
+        assert_eq!(toroidal_delta(-100, 100), 200);
+    }
+
+    #[test]
+    fn toroidal_delta_exactly_half_world() {
+        // Exactly opposite sides: i16::MIN distance. Direction is ambiguous,
+        // but wrapping_sub consistently picks -32768.
+        assert_eq!(toroidal_delta(0, i16::MIN), i16::MIN as i32);
+    }
+
+    #[test]
+    fn toroidal_delta_zero() {
+        assert_eq!(toroidal_delta(500, 500), 0);
     }
 
     #[test]

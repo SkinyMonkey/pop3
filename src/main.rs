@@ -1341,7 +1341,7 @@ impl App {
             drag_state: DragState::None,
             last_tick: Instant::now(),
             tick_interval: std::time::Duration::from_millis(50),
-            game_ticking: false,
+            game_ticking: true,
         }
     }
 
@@ -1437,7 +1437,7 @@ impl App {
         self.level_objects = extract_level_objects(&level_res);
 
         // Extract person units into the coordinator (they become live entities)
-        self.unit_coordinator.load_level(&level_res.units, level_res.landscape.land_size());
+        self.unit_coordinator.load_level(&level_res.units, &level_res.landscape.height, level_res.landscape.land_size());
         // Remove persons from static markers — they're now rendered by the coordinator
         self.level_objects.retain(|obj| obj.model_type != ModelType::Person);
 
@@ -1590,6 +1590,80 @@ impl App {
         }
         let cmd = self.script_commands[self.script_index].clone();
         self.script_index += 1;
+
+        // Parse wait command: "wait N" — pause for N frames
+        if let Some(val) = cmd.strip_prefix("wait ") {
+            if let Ok(n) = val.trim().parse::<usize>() {
+                if n > 1 {
+                    // Re-insert decremented wait before next command
+                    self.script_commands.insert(self.script_index, format!("wait {}", n - 1));
+                }
+                self.do_render = true;
+                return true;
+            }
+        }
+
+        // Parse click command: "click X Y" — left-click at screen position
+        if let Some(coords) = cmd.strip_prefix("click ") {
+            let parts: Vec<&str> = coords.trim().split_whitespace().collect();
+            if parts.len() == 2 {
+                if let (Ok(x), Ok(y)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>()) {
+                    self.mouse_pos = Point2::new(x, y);
+                    log::info!("[script] click at ({}, {})", x, y);
+                    // Simulate left press + release (selection)
+                    match self.find_unit_at_screen_pos(&self.mouse_pos) {
+                        Some(id) => {
+                            self.unit_coordinator.selection.select_single(id);
+                            log::info!("[script] selected unit {}", id);
+                        }
+                        None => {
+                            self.unit_coordinator.selection.clear();
+                            log::info!("[script] no unit at click, selection cleared");
+                        }
+                    }
+                    self.rebuild_unit_models();
+                    self.do_render = true;
+                    return true;
+                }
+            }
+        }
+
+        // Parse rightclick command: "rightclick X Y" — right-click move order
+        if let Some(coords) = cmd.strip_prefix("rightclick ") {
+            let parts: Vec<&str> = coords.trim().split_whitespace().collect();
+            if parts.len() == 2 {
+                if let (Ok(x), Ok(y)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>()) {
+                    self.mouse_pos = Point2::new(x, y);
+                    log::info!("[script] rightclick at ({}, {})", x, y);
+                    if let Some((cx, cy)) = self.screen_to_cell() {
+                        let target = cell_to_world(cx, cy, self.landscape_mesh.width() as f32);
+                        let walkable = self.unit_coordinator.region_map().is_walkable(target.to_tile());
+                        log::info!("[script] rightclick cell=({:.1}, {:.1}) → world=({}, {}) walkable={}",
+                            cx, cy, target.x, target.z, walkable);
+                        self.unit_coordinator.order_move(target);
+                    } else {
+                        log::warn!("[script] rightclick: screen_to_cell returned None");
+                    }
+                    self.do_render = true;
+                    return true;
+                }
+            }
+        }
+
+        // Parse dump command: log all unit screen positions
+        if cmd.trim() == "dump_units" {
+            let pvm = self.unit_pvm();
+            for unit in &self.unit_coordinator.units {
+                if let Some((sx, sy)) = self.unit_screen_pos(unit, &pvm) {
+                    log::info!("[dump] unit {} tribe={} cell=({:.2}, {:.2}) screen=({:.0}, {:.0})",
+                        unit.id, unit.tribe_index, unit.cell_x, unit.cell_y, sx, sy);
+                } else {
+                    log::info!("[dump] unit {} tribe={} cell=({:.2}, {:.2}) behind camera",
+                        unit.id, unit.tribe_index, unit.cell_x, unit.cell_y);
+                }
+            }
+            return true;
+        }
 
         // Parse zoom command
         if let Some(val) = cmd.strip_prefix("zoom ") {
@@ -2697,7 +2771,7 @@ impl ApplicationHandler for App {
         self.level_objects = extract_level_objects(&level_res2);
 
         // Extract person units into the coordinator (they become live entities)
-        self.unit_coordinator.load_level(&level_res2.units, level_res2.landscape.land_size());
+        self.unit_coordinator.load_level(&level_res2.units, &level_res2.landscape.height, level_res2.landscape.land_size());
         self.level_objects.retain(|obj| obj.model_type != ModelType::Person);
 
         self.rebuild_spawn_model();
@@ -2770,7 +2844,22 @@ impl ApplicationHandler for App {
                         // Right-click: move order
                         if let Some((cx, cy)) = self.screen_to_cell() {
                             let target = cell_to_world(cx, cy, self.landscape_mesh.width() as f32);
+                            let selected = self.unit_coordinator.selection.selected.len();
+                            log::info!("[move-order] click cell=({:.1}, {:.1}) → world=({}, {}) selected={}",
+                                cx, cy, target.x, target.z, selected);
+                            if selected > 0 {
+                                let uid = self.unit_coordinator.selection.selected[0];
+                                if let Some(u) = self.unit_coordinator.units.get(uid) {
+                                    let walkable = self.unit_coordinator.region_map()
+                                        .is_walkable(target.to_tile());
+                                    log::info!("[move-order] unit {} at world=({}, {}) cell=({:.1}, {:.1}) target_walkable={}",
+                                        uid, u.movement.position.x, u.movement.position.z,
+                                        u.cell_x, u.cell_y, walkable);
+                                }
+                            }
                             self.unit_coordinator.order_move(target);
+                        } else {
+                            log::warn!("[move-order] screen_to_cell returned None");
                         }
                     }
                     _ => {}
