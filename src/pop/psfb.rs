@@ -113,7 +113,7 @@ impl ContainerPSFB {
     pub fn get_image(&self, index: usize) -> Option<Image> {
         if let Some(s) = self.sprites.get(index) {
             let offset = s.offset - self.header_size;
-            let mut image = Image::alloc(s.width as usize, s.height as usize);
+            let mut image = Image::new(s.width as usize, s.height as usize, vec![255u8; s.width as usize * s.height as usize]);
             s.to_storage(&mut image, &self.data[offset..]);
             return Some(image);
         }

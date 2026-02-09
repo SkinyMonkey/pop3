@@ -22,6 +22,10 @@ use pop3::view::*;
 
 use pop3::pop::psfb::ContainerPSFB;
 use pop3::pop::types::BinDeserializer;
+use pop3::pop::animation::{
+    AnimationsData, AnimationSequence,
+    build_tribe_atlas, UNIT_IDLE_ANIMS, STORED_DIRECTIONS, NUM_TRIBES,
+};
 
 use pop3::intersect::intersect_iter;
 
@@ -168,98 +172,58 @@ fn make_landscape_model(device: &wgpu::Device, landscape_mesh: &LandscapeMeshS) 
     model_main
 }
 
-/// Extract spawn cell coordinates from level data.
-/// Returns (cell_x, cell_y, tribe_index) for each tribe's shaman (Person subtype 7).
-fn extract_spawn_cells(level_res: &LevelRes) -> Vec<(f32, f32, u8)> {
-    let mut found = [false; 4];
-    let mut cells = Vec::new();
+/// Extract all person unit positions from level data, grouped by subtype.
+/// Returns a Vec of (subtype, cells) where cells is Vec<(cell_x, cell_y, tribe_index)>.
+fn extract_all_unit_cells(level_res: &LevelRes) -> Vec<(u8, Vec<(f32, f32, u8)>)> {
     let n = level_res.landscape.land_size() as f32;
+    let mut by_subtype: std::collections::HashMap<u8, Vec<(f32, f32, u8)>> = std::collections::HashMap::new();
+
     for unit in &level_res.units {
         let tribe = unit.tribe_index() as usize;
-        if unit.model == 1 && unit.subtype == 7 && tribe < 4 && !found[tribe] {
-            found[tribe] = true;
-            // Bevy convention: cell_x from loc_x, cell_z from loc_y
+        // Person model, subtypes 2-7 (Brave..Shaman), valid tribes
+        if unit.model == 1 && unit.subtype >= 2 && unit.subtype <= 7 && tribe < 4 {
+            if unit.loc_x() == 0 && unit.loc_y() == 0 { continue; }
             let bevy_x = ((unit.loc_x() >> 8) / 2) as f32 + 0.5;
             let bevy_z = ((unit.loc_y() >> 8) / 2) as f32 + 0.5;
-            // Faithful grid: x = bevy_z, y = (N-1) - bevy_x
-            // Because faithful loads height[file_col][file_row] then flips first index,
-            // so grid_x maps to file_row (=bevy_z) and grid_y maps to 127-file_col (=127-bevy_x).
             let cell_x = bevy_z;
             let cell_y = (n - 1.0) - bevy_x;
-            cells.push((cell_x, cell_y, unit.tribe_index()));
+            by_subtype.entry(unit.subtype).or_default()
+                .push((cell_x, cell_y, unit.tribe_index()));
         }
     }
-    cells.sort_by_key(|(_, _, t)| *t);
-    cells
+
+    let mut result: Vec<(u8, Vec<(f32, f32, u8)>)> = by_subtype.into_iter().collect();
+    result.sort_by_key(|(st, _)| *st);
+    result
 }
 
-const SHAMAN_SPRITE_START: usize = 7578;
-const SHAMAN_FRAMES_PER_DIR: usize = 8;
-const STORED_DIRECTIONS: usize = 5;
-struct ShamanAtlasInfo {
+/// Per-unit-type rendering state (texture atlas + bind group + model).
+struct UnitTypeRender {
+    subtype: u8,
+    cells: Vec<(f32, f32, u8)>,  // (cell_x, cell_y, tribe_index)
+    #[allow(dead_code)]
+    texture: GpuTexture,  // kept alive for GPU bind group
+    bind_group: wgpu::BindGroup,
+    model: Option<ModelEnvelop<TexModel>>,
     frame_width: u32,
     frame_height: u32,
+    frames_per_dir: u32,
 }
 
-/// Build a 5-row × 8-column sprite atlas for the shaman idle animation.
-/// Layout: rows = 5 stored directions, cols = 8 animation frames.
-/// Returns (atlas_w, atlas_h, rgba_data, atlas_info) or None if unavailable.
-fn build_shaman_atlas(base: &Path, palette: &[u8]) -> Option<(u32, u32, Vec<u8>, ShamanAtlasInfo)> {
-    let hspr_path = base.join("data").join("HSPR0-0.DAT");
-    let container = ContainerPSFB::from_file(&hspr_path)?;
-
-    // First pass: find max frame dimensions
-    let mut max_w: u16 = 0;
-    let mut max_h: u16 = 0;
-    for dir in 0..STORED_DIRECTIONS {
-        for f in 0..SHAMAN_FRAMES_PER_DIR {
-            let idx = SHAMAN_SPRITE_START + dir * SHAMAN_FRAMES_PER_DIR + f;
-            if let Some(info) = container.get_info(idx) {
-                max_w = max_w.max(info.width);
-                max_h = max_h.max(info.height);
-            }
+/// Convert raw palette bytes (4 bytes per entry) to [[u8; 4]; 256].
+fn convert_palette(raw: &[u8]) -> Vec<[u8; 4]> {
+    let mut pal = Vec::with_capacity(256);
+    for i in 0..256 {
+        let off = i * 4;
+        if off + 3 < raw.len() {
+            pal.push([raw[off], raw[off + 1], raw[off + 2], 255]);
+        } else {
+            pal.push([0, 0, 0, 255]);
         }
     }
-    if max_w == 0 || max_h == 0 { return None; }
-
-    let fw = max_w as u32;
-    let fh = max_h as u32;
-    let atlas_w = fw * SHAMAN_FRAMES_PER_DIR as u32;
-    let atlas_h = fh * STORED_DIRECTIONS as u32;
-    let mut rgba = vec![0u8; (atlas_w * atlas_h * 4) as usize];
-
-    // Second pass: decode sprites into atlas cells, centered
-    for dir in 0..STORED_DIRECTIONS {
-        for f in 0..SHAMAN_FRAMES_PER_DIR {
-            let idx = SHAMAN_SPRITE_START + dir * SHAMAN_FRAMES_PER_DIR + f;
-            if let Some(image) = container.get_image(idx) {
-                let info = container.get_info(idx).unwrap();
-                let sw = info.width as u32;
-                let sh = info.height as u32;
-                let ox = (fw - sw) / 2;
-                let oy = (fh - sh) / 2;
-                let cell_x = f as u32 * fw;
-                let cell_y = dir as u32 * fh;
-
-                for y in 0..sh {
-                    for x in 0..sw {
-                        let pal_index = image.data[(y * sw + x) as usize] as usize;
-                        let dst_x = cell_x + ox + x;
-                        let dst_y = cell_y + oy + y;
-                        let off = ((dst_y * atlas_w + dst_x) * 4) as usize;
-                        if pal_index != 0 {
-                            rgba[off] = palette[pal_index * 4];
-                            rgba[off + 1] = palette[pal_index * 4 + 1];
-                            rgba[off + 2] = palette[pal_index * 4 + 2];
-                            rgba[off + 3] = 255;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Some((atlas_w, atlas_h, rgba, ShamanAtlasInfo { frame_width: fw, frame_height: fh }))
+    pal
 }
+
 
 /// Returns (source_direction_row, is_mirrored) for display direction 0-7.
 fn get_source_direction(dir: usize) -> (usize, bool) {
@@ -298,29 +262,24 @@ fn sprite_direction_from_angle(camera_angle_z: i16, unit_facing_game: u16) -> us
     (raw >> 8) as usize
 }
 
-/// Build camera-facing billboard quads for spawn markers.
-/// Each spawn gets a single quad (6 vertices) oriented to face the camera.
-/// `angle_z` controls billboard orientation (face the camera).
-/// Sprite direction is computed from `angle_z` (camera rotation) and each unit's
-/// facing using the game formula from RE_NOTES.
+/// Build camera-facing billboard quads for unit sprites.
+/// Each unit gets a single quad (6 vertices) oriented to face the camera.
+/// `frames_per_dir` and `frame_w`/`frame_h` come from the unit type's atlas.
 fn build_spawn_model(device: &wgpu::Device, cells: &[(f32, f32, u8)],
                      landscape: &LandscapeMesh<128>, curvature_scale: f32,
                      angle_x: i16, angle_z: i16,
-                     atlas_info: Option<&ShamanAtlasInfo>) -> ModelEnvelop<TexModel> {
+                     frame_w: u32, frame_h: u32, frames_per_dir: u32,
+) -> ModelEnvelop<TexModel> {
     let mut model: TexModel = MeshModel::new();
     let step = landscape.step();
     let height_scale = landscape.height_scale();
     let w = landscape.width() as f32;
     let shift = landscape.get_shift_vector();
 
-    // Sprite sizing: use atlas aspect ratio if available
+    // Sprite sizing: use atlas aspect ratio
     let sprite_h = step * 0.6;
-    let half_w = if let Some(info) = atlas_info {
-        let aspect = info.frame_width as f32 / info.frame_height as f32;
-        sprite_h * aspect / 2.0
-    } else {
-        step * 0.6
-    };
+    let aspect = if frame_h > 0 { frame_w as f32 / frame_h as f32 } else { 1.0 };
+    let half_w = sprite_h * aspect / 2.0;
 
     let center = (w - 1.0) * step / 2.0;
 
@@ -339,9 +298,10 @@ fn build_spawn_model(device: &wgpu::Device, cells: &[(f32, f32, u8)],
     let right = Vector3::new(view.x.x, view.y.x, view.z.x);
     let up = Vector3::new(view.x.y, view.y.y, view.z.y);
 
-    let fpd = SHAMAN_FRAMES_PER_DIR as f32;
+    let fpd = frames_per_dir as f32;
+    let total_rows = (NUM_TRIBES * STORED_DIRECTIONS) as f32;
     let uv_scale_x = 1.0 / fpd;
-    let uv_scale_y = 1.0 / STORED_DIRECTIONS as f32;
+    let uv_scale_y = 1.0 / total_rows;
     let uv_off_x = 0.0; // frame 0 (idle)
 
     for &(cell_x, cell_y, tribe_index) in cells {
@@ -366,7 +326,8 @@ fn build_spawn_model(device: &wgpu::Device, cells: &[(f32, f32, u8)],
         let display_dir = sprite_direction_from_angle(angle_z, unit_facing);
         let (src_dir, mirrored) = get_source_direction(display_dir);
 
-        let uv_off_y = src_dir as f32 / STORED_DIRECTIONS as f32;
+        let tribe_row = tribe_index as usize * STORED_DIRECTIONS + src_dir;
+        let uv_off_y = tribe_row as f32 / total_rows;
         let (u_left, u_right) = if mirrored {
             (uv_off_x + uv_scale_x, uv_off_x)
         } else {
@@ -1214,14 +1175,10 @@ struct App {
     objects_group0_bind_group: Option<wgpu::BindGroup>,
     objects_group1_bind_group: Option<wgpu::BindGroup>,
 
-    // Spawn markers (shaman sprites)
+    // Person unit sprites (per-type atlas + model)
     spawn_pipeline: Option<wgpu::RenderPipeline>,
-    spawn_group1_bind_group: Option<wgpu::BindGroup>,
     sprite_group1_layout: Option<wgpu::BindGroupLayout>,
-    model_spawn: Option<ModelEnvelop<TexModel>>,
-    spawn_cells: Vec<(f32, f32, u8)>,  // (cell_x, cell_y, tribe_index)
-    sprite_texture: Option<GpuTexture>,
-    shaman_atlas_info: Option<ShamanAtlasInfo>,
+    unit_renders: Vec<UnitTypeRender>,
 
     // Level object markers
     objects_marker_pipeline: Option<wgpu::RenderPipeline>,
@@ -1333,12 +1290,8 @@ impl App {
             objects_group0_bind_group: None,
             objects_group1_bind_group: None,
             spawn_pipeline: None,
-            spawn_group1_bind_group: None,
             sprite_group1_layout: None,
-            model_spawn: None,
-            spawn_cells: Vec::new(),
-            sprite_texture: None,
-            shaman_atlas_info: None,
+            unit_renders: Vec::new(),
             objects_marker_pipeline: None,
             model_objects: None,
             level_objects: Vec::new(),
@@ -1425,7 +1378,12 @@ impl App {
     }
 
     fn center_on_tribe0_shaman(&mut self) {
-        if let Some(&(cx, cy, _)) = self.spawn_cells.iter().find(|(_, _, t)| *t == 0) {
+        // Find tribe 0 shaman (subtype 7) in unit_renders
+        let shaman_cell = self.unit_renders.iter()
+            .find(|ur| ur.subtype == 7)
+            .and_then(|ur| ur.cells.iter().find(|(_, _, t)| *t == 0))
+            .copied();
+        if let Some((cx, cy, _)) = shaman_cell {
             let n = self.landscape_mesh.width() as i32;
             let v = self.camera_focus_vertex() as i32;
             let sx = ((cx as i32 - v) % n + n) % n;
@@ -1434,7 +1392,7 @@ impl App {
             self.landscape_mesh.set_shift(sx as usize, sy as usize);
             self.rebuild_spawn_model();
         } else {
-            log::warn!("[center] no tribe 0 shaman in spawn_cells (len={})", self.spawn_cells.len());
+            log::warn!("[center] no tribe 0 shaman in unit_renders");
         }
     }
 
@@ -1465,36 +1423,17 @@ impl App {
         // Rebuild all landscape variants
         self.rebuild_landscape_variants(&level_res);
 
-        // Rebuild sprite atlas with new palette
-        if let Some(ref gpu) = self.gpu {
-            if let Some((w, h, data, info)) = build_shaman_atlas(&base, &level_res.params.palette) {
-                if let Some(ref sprite_tex) = self.sprite_texture {
-                    if sprite_tex.size.width == w && sprite_tex.size.height == h {
-                        sprite_tex.update(&gpu.queue, &data);
-                    } else {
-                        let new_tex = GpuTexture::new_2d(
-                            &gpu.device, &gpu.queue, w, h,
-                            wgpu::TextureFormat::Rgba8UnormSrgb, &data, "shaman_atlas",
-                        );
-                        let sampler = GpuTexture::create_sampler(&gpu.device, true);
-                        let layout = self.sprite_group1_layout.as_ref().unwrap();
-                        self.spawn_group1_bind_group = Some(gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("spawn_sprite_bg1"),
-                            layout,
-                            entries: &[
-                                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&new_tex.view) },
-                                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
-                            ],
-                        }));
-                        self.sprite_texture = Some(new_tex);
-                    }
-                }
-                self.shaman_atlas_info = Some(info);
-            }
-        }
+        // Rebuild per-unit-type sprite atlases with new palette
+        self.rebuild_unit_atlases(&base, &level_res.params.palette);
 
-        // Rebuild spawn markers and object markers
-        self.spawn_cells = extract_spawn_cells(&level_res);
+        // Rebuild unit cells and object markers
+        let unit_cells = extract_all_unit_cells(&level_res);
+        for ur in &mut self.unit_renders {
+            ur.cells = unit_cells.iter()
+                .find(|(st, _)| *st == ur.subtype)
+                .map(|(_, c)| c.clone())
+                .unwrap_or_default();
+        }
         self.level_objects = extract_level_objects(&level_res);
 
         // Extract person units into the coordinator (they become live entities)
@@ -1741,13 +1680,72 @@ impl App {
     fn rebuild_spawn_model(&mut self) {
         if let Some(ref gpu) = self.gpu {
             let cs = if self.curvature_enabled { self.curvature_scale } else { 0.0 };
-            self.model_spawn = Some(build_spawn_model(
-                &gpu.device, &self.spawn_cells, &self.landscape_mesh, cs,
-                self.camera.angle_x, self.camera.angle_z,
-                self.shaman_atlas_info.as_ref(),
-            ));
+            for ur in &mut self.unit_renders {
+                if !ur.cells.is_empty() {
+                    ur.model = Some(build_spawn_model(
+                        &gpu.device, &ur.cells, &self.landscape_mesh, cs,
+                        self.camera.angle_x, self.camera.angle_z,
+                        ur.frame_width, ur.frame_height, ur.frames_per_dir,
+                    ));
+                } else {
+                    ur.model = None;
+                }
+            }
         }
         self.rebuild_object_markers();
+    }
+
+    /// Rebuild all unit type atlases (e.g. on level change with new palette).
+    fn rebuild_unit_atlases(&mut self, base: &Path, raw_palette: &[u8]) {
+        let gpu = match self.gpu.as_ref() {
+            Some(g) => g,
+            None => return,
+        };
+        let layout = match self.sprite_group1_layout.as_ref() {
+            Some(l) => l,
+            None => return,
+        };
+
+        let palette = convert_palette(raw_palette);
+        let hspr_path = base.join("data").join("HSPR0-0.DAT");
+        let container = match ContainerPSFB::from_file(&hspr_path) {
+            Some(c) => c,
+            None => return,
+        };
+        let anim_data = AnimationsData::from_path(&base.join("data"));
+        let sequences = AnimationSequence::from_data(&anim_data);
+        let sampler = GpuTexture::create_sampler(&gpu.device, true);
+
+        self.unit_renders.clear();
+        for &(subtype, anim_idx) in &UNIT_IDLE_ANIMS {
+            if let Some((atlas_w, atlas_h, rgba, fw, fh, max_frames)) =
+                build_tribe_atlas(&sequences, &container, &palette, anim_idx, None)
+            {
+                let tex = GpuTexture::new_2d(
+                    &gpu.device, &gpu.queue, atlas_w, atlas_h,
+                    wgpu::TextureFormat::Rgba8UnormSrgb, &rgba,
+                    &format!("unit_atlas_st{}", subtype),
+                );
+                let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(&format!("unit_bg1_st{}", subtype)),
+                    layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&tex.view) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                    ],
+                });
+                self.unit_renders.push(UnitTypeRender {
+                    subtype,
+                    cells: Vec::new(),
+                    texture: tex,
+                    bind_group,
+                    model: None,
+                    frame_width: fw,
+                    frame_height: fh,
+                    frames_per_dir: max_frames,
+                });
+            }
+        }
     }
 
     fn rebuild_unit_models(&mut self) {
@@ -2076,15 +2074,15 @@ impl App {
                 }
             }
 
-            // Draw spawn markers (shaman sprites)
-            if let (Some(ref spawn_pipeline), Some(ref spawn_bg1)) =
-                (&self.spawn_pipeline, &self.spawn_group1_bind_group)
-            {
+            // Draw person unit sprites (per-type atlas)
+            if let Some(ref spawn_pipeline) = self.spawn_pipeline {
                 render_pass.set_pipeline(spawn_pipeline);
                 render_pass.set_bind_group(0, self.objects_group0_bind_group.as_ref().unwrap(), &[]);
-                render_pass.set_bind_group(1, spawn_bg1, &[]);
-                if let Some(ref model_spawn) = self.model_spawn {
-                    model_spawn.draw(&mut render_pass);
+                for ur in &self.unit_renders {
+                    if let Some(ref model) = ur.model {
+                        render_pass.set_bind_group(1, &ur.bind_group, &[]);
+                        model.draw(&mut render_pass);
+                    }
                 }
             }
 
@@ -2328,30 +2326,7 @@ impl ApplicationHandler for App {
             "level_objects_pipeline",
         );
 
-        // Load shaman sprite atlas (5 dirs × 8 frames, palette-converted to RGBA sRGB)
-        let (sprite_texture, shaman_atlas_info) = match build_shaman_atlas(&base, &level_res.params.palette) {
-            Some((w, h, data, info)) => {
-                let tex = GpuTexture::new_2d(device, &gpu.queue, w, h,
-                    wgpu::TextureFormat::Rgba8UnormSrgb, &data, "shaman_atlas");
-                (Some(tex), Some(info))
-            }
-            None => (None, None),
-        };
-        let sprite_sampler = GpuTexture::create_sampler(device, true);
-
-        let spawn_group1_bind_group = if let Some(ref tex) = sprite_texture {
-            Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("spawn_sprite_bg1"),
-                layout: &sprite_group1_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&tex.view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sprite_sampler) },
-                ],
-            }))
-        } else {
-            log::warn!("HSPR0-0.DAT not found or frame 7578 missing — spawn sprites disabled");
-            None
-        };
+        // Unit sprite atlases are built after self.gpu is set (see below)
 
         // Load 3D objects (bank "0"), shapes, and BL320 texture atlas for building meshes
         let objects_3d = Object3D::from_file_all(&base, "0");
@@ -2578,13 +2553,6 @@ impl ApplicationHandler for App {
             (None, None, None)
         };
 
-        // Empty spawn model (will be populated when level loads)
-        let model_spawn = {
-            let model: TexModel = MeshModel::new();
-            let m = vec![(RenderType::Triangles, model)];
-            ModelEnvelop::<TexModel>::new(device, m)
-        };
-
         // Overlay text pipeline
         let overlay_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("overlay_bg_layout"),
@@ -2693,10 +2661,7 @@ impl ApplicationHandler for App {
         self.objects_group0_bind_group = Some(objects_group0_bind_group);
         self.objects_group1_bind_group = Some(objects_group1_bind_group);
         self.spawn_pipeline = Some(spawn_pipeline);
-        self.spawn_group1_bind_group = spawn_group1_bind_group;
         self.sprite_group1_layout = Some(sprite_group1_layout);
-        self.sprite_texture = sprite_texture;
-        self.shaman_atlas_info = shaman_atlas_info;
         self.objects_marker_pipeline = Some(objects_marker_pipeline);
         self.objects_3d = objects_3d;
         self.shapes = shapes;
@@ -2705,7 +2670,6 @@ impl ApplicationHandler for App {
         self.sky_pipeline = sky_pipeline;
         self.sky_bind_group = sky_bind_group;
         self.sky_uniform_buffer = sky_uniform_buffer;
-        self.model_spawn = Some(model_spawn);
         self.model_main = Some(model_main);
         self.overlay_pipeline = Some(overlay_pipeline);
         self.overlay_bind_group = Some(overlay_bind_group);
@@ -2719,8 +2683,17 @@ impl ApplicationHandler for App {
         let level_res2 = LevelRes::new(&base2, self.level_num, level_type2);
         self.rebuild_landscape_variants(&level_res2);
 
-        // Build spawn markers and object markers for initial level
-        self.spawn_cells = extract_spawn_cells(&level_res2);
+        // Build per-unit-type sprite atlases
+        self.rebuild_unit_atlases(&base2, &level_res2.params.palette);
+
+        // Extract all person unit positions, assign to unit_renders
+        let unit_cells = extract_all_unit_cells(&level_res2);
+        for ur in &mut self.unit_renders {
+            ur.cells = unit_cells.iter()
+                .find(|(st, _)| *st == ur.subtype)
+                .map(|(_, c)| c.clone())
+                .unwrap_or_default();
+        }
         self.level_objects = extract_level_objects(&level_res2);
 
         // Extract person units into the coordinator (they become live entities)

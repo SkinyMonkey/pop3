@@ -7,3 +7,7 @@
 data
 .mcp.json
 .worktrees/
+tmp
+.idea
+CLAUDE.md
+settings.local.json
