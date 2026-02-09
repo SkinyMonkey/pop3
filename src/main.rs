@@ -1799,7 +1799,7 @@ impl App {
         self.unit_renders.clear();
         for &(subtype, anim_idx) in &UNIT_IDLE_ANIMS {
             if let Some((atlas_w, atlas_h, rgba, fw, fh, max_frames)) =
-                build_tribe_atlas(&sequences, &container, &palette, anim_idx, None)
+                build_tribe_atlas(&sequences, &container, &palette, anim_idx, Some(None))
             {
                 let tex = GpuTexture::new_2d(
                     &gpu.device, &gpu.queue, atlas_w, atlas_h,

@@ -925,7 +925,7 @@ impl ApplicationHandler for App {
 
         let (atlas_w, atlas_h, rgba, fw, fh, max_frames) = build_tribe_atlas(
             &self.sequences, &self.container, &self.palette,
-            initial_anim, None,
+            initial_anim, Some(None),
         ).expect("Failed to build initial animation atlas");
         let atlas = SpriteAtlas { frame_width: fw, frame_height: fh, frames_per_dir: max_frames };
 

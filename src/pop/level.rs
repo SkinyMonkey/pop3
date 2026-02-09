@@ -7,6 +7,8 @@ use crate::pop::units::{UnitRaw, TribeConfigRaw};
 
 /******************************************************************************/
 
+const LEVEL_UNIT_SLOTS: usize = 2000;
+
 pub struct LevelPaths {
     pub palette: PathBuf,
     pub disp0: PathBuf,
@@ -139,10 +141,10 @@ impl LevelRes {
             tribes.push(TribeConfigRaw::from_reader(&mut file).unwrap());
         }
         let sunlight = Sunlight::from_reader(&mut file);
-        //read units (up to 5500 * 100)
-        let units = UnitRaw::from_reader_vec(&mut file);
-        //read 0x96
-        file.seek(std::io::SeekFrom::Current(0x96)).unwrap();
+        // DAT unit section is fixed-size: 2000 slots * 55 bytes each.
+        // Do not read UnitRaw entries until EOF, because trailing non-unit bytes
+        // in the DAT file can be misinterpreted as extra bogus units.
+        let units = read_fixed_unit_slots(&mut file, LEVEL_UNIT_SLOTS);
         let params = GlobeTextureParams::from_level(&paths);
         LevelRes {
             paths,
@@ -153,6 +155,21 @@ impl LevelRes {
             units,
         }
     }
+}
+
+fn read_fixed_unit_slots<R: Read>(reader: &mut R, count: usize) -> Vec<UnitRaw> {
+    let mut units = Vec::with_capacity(count);
+    for idx in 0..count {
+        let unit = UnitRaw::from_reader(reader).unwrap_or_else(|| {
+            panic!(
+                "Level DAT is truncated while reading unit slot {}/{}",
+                idx + 1,
+                count
+            )
+        });
+        units.push(unit);
+    }
+    units
 }
 
 pub fn read_level(base: &Path, num: u8) -> (PathBuf, String) {
@@ -224,6 +241,45 @@ fn read_disp(path: &Path) -> Vec<i8> {
         }
     }
     disp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_fixed_unit_slots;
+    use crate::pop::types::BinDeserializer;
+    use crate::pop::units::UnitRaw;
+    use std::io::Cursor;
+
+    fn unit_raw_bytes(subtype: u8, model: u8, tribe_index: u8, loc_x: u16, loc_y: u16, angle: u32) -> [u8; 55] {
+        let mut bytes = [0u8; 55];
+        bytes[0] = subtype;
+        bytes[1] = model;
+        bytes[2] = tribe_index;
+        bytes[3..5].copy_from_slice(&loc_x.to_le_bytes());
+        bytes[5..7].copy_from_slice(&loc_y.to_le_bytes());
+        bytes[7..11].copy_from_slice(&angle.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn read_fixed_unit_slots_reads_exact_slot_count() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&unit_raw_bytes(7, 1, 0, 0x1234, 0x5678, 0x9ABC_DEF0));
+        bytes.extend_from_slice(&unit_raw_bytes(2, 1, 1, 0x0102, 0x0304, 0x0506_0708));
+        // Extra valid UnitRaw + trailing noise should not be consumed.
+        bytes.extend_from_slice(&unit_raw_bytes(5, 1, 2, 0x2222, 0x3333, 0x4444_5555));
+        bytes.extend_from_slice(&[0xAA; 13]);
+
+        let mut cursor = Cursor::new(bytes);
+        let units = read_fixed_unit_slots(&mut cursor, 2);
+        assert_eq!(units.len(), 2);
+        assert_eq!(units[0].subtype, 7);
+        assert_eq!(units[1].subtype, 2);
+
+        // The next entry is still available in the stream.
+        let next = UnitRaw::from_reader(&mut cursor).expect("expected unread third unit");
+        assert_eq!(next.subtype, 5);
+    }
 }
 
 pub fn read_pal(paths: &LevelPaths) -> Vec<u8> {
