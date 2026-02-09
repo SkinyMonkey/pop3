@@ -45,6 +45,10 @@ use pop3::gpu::buffer::GpuBuffer;
 use pop3::gpu::texture::GpuTexture;
 use pop3::envelop::*;
 
+use pop3::game_state::tick::{GameWorld, StdTimeSource, TickSubsystems};
+use pop3::game_state::state_machine::GameState;
+use pop3::game_state::traits::NoOp;
+
 /******************************************************************************/
 
 fn obj_colors() -> Vec<Vector3<u8>> {
@@ -1246,9 +1250,8 @@ struct App {
     model_unit_markers: Option<ModelEnvelop<ColorModel>>,
     model_selection_rings: Option<ModelEnvelop<ColorModel>>,
     drag_state: DragState,
-    last_tick: Instant,
-    tick_interval: std::time::Duration,
-    game_ticking: bool,
+    game_world: GameWorld,
+    game_time: StdTimeSource,
 }
 
 impl App {
@@ -1339,9 +1342,12 @@ impl App {
             model_unit_markers: None,
             model_selection_rings: None,
             drag_state: DragState::None,
-            last_tick: Instant::now(),
-            tick_interval: std::time::Duration::from_millis(50),
-            game_ticking: true,
+            game_world: {
+                let mut w = GameWorld::new(12); // 12 ticks/sec (original default)
+                w.state = GameState::InGame;     // start with simulation on
+                w
+            },
+            game_time: StdTimeSource::new(),
         }
     }
 
@@ -2948,11 +2954,13 @@ impl ApplicationHandler for App {
                                 self.rebuild_spawn_model();
                             },
                             KeyCode::F5 => {
-                                self.game_ticking = !self.game_ticking;
-                                if self.game_ticking {
-                                    self.last_tick = Instant::now();
+                                if self.game_world.state == GameState::InGame {
+                                    self.game_world.state = GameState::Frontend;
+                                    log::info!("game simulation OFF");
+                                } else {
+                                    self.game_world.state = GameState::InGame;
+                                    log::info!("game simulation ON");
                                 }
-                                log::info!("game ticking {}", if self.game_ticking { "on" } else { "off" });
                             },
                             KeyCode::Space => {
                                 self.center_on_tribe0_shaman();
@@ -2976,13 +2984,22 @@ impl ApplicationHandler for App {
                 }
             },
             WindowEvent::RedrawRequested => {
-                // Tick game simulation (20Hz when enabled)
-                if self.game_ticking {
-                    let now = Instant::now();
-                    if now - self.last_tick >= self.tick_interval {
-                        self.unit_coordinator.tick();
+                // Tick game simulation via GameWorld tick loop
+                {
+                    let (mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h, mut i, mut j, mut k) =
+                        (NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp);
+                    let mut subs = TickSubsystems {
+                        terrain: &mut a, objects: &mut b, water: &mut c,
+                        network: &mut d, actions: &mut e, game_time: &mut f,
+                        single_player: &mut g, tutorial: &mut h, ai: &mut i,
+                        population: &mut j, mana: &mut k,
+                    };
+                    let ticks = self.game_world.simulation_tick(&self.game_time, &mut subs);
+                    if ticks > 0 {
+                        for _ in 0..ticks {
+                            self.unit_coordinator.tick();
+                        }
                         self.rebuild_unit_models();
-                        self.last_tick = now;
                         self.do_render = true;
                     }
                 }
