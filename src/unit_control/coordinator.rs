@@ -102,8 +102,17 @@ impl UnitCoordinator {
                 attacker_unit: None,
                 alive: true,
             });
+            // Initialize idle state with a random timer (matches Person_Init calling Person_SetState)
+            let idx = self.units.len() - 1;
+            enter_state(&mut self.units[idx], PersonState::Idle, &mut self.rng);
         }
         log::info!("[unit-ctrl] loaded {} person units", self.units.len());
+        for unit in &self.units {
+            log::debug!("[unit-ctrl] unit {} sub={} tribe={} state={:?} timer={} pos=({}, {}) hp={}/{}",
+                unit.id, unit.subtype, unit.tribe_index, unit.state, unit.state_timer,
+                unit.movement.position.x, unit.movement.position.z,
+                unit.health, unit.max_health);
+        }
     }
 
     /// Issue move orders to all selected units targeting `target_world`.
@@ -126,6 +135,8 @@ impl UnitCoordinator {
                 } else {
                     unit.state = PersonState::GoToPoint;
                     unit.target_unit = None; // Cancel combat
+                    // Restore subtype speed (enter_idle sets it to 0)
+                    unit.movement.speed = person_type_defaults(unit.subtype).speed;
                 }
                 log::info!("[move-order] unit {} result={:?} state={:?} target=({}, {})",
                     unit_id, result, unit.state,

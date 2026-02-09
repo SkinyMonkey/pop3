@@ -95,6 +95,7 @@ pub fn person_type_defaults(subtype: u8) -> PersonTypeDefaults {
 /// Enter a new state, saving the previous state and running entry logic.
 /// Mirrors the preamble + switch of Person_SetState (0x004fd5d0).
 pub fn enter_state(unit: &mut Unit, new_state: PersonState, rng: &mut GameRng) {
+    log::debug!("[state] unit {} {:?} → {:?}", unit.id, unit.state, new_state);
     unit.prev_state = unit.state;
     unit.state = new_state;
     unit.state_counter = 0;
@@ -196,14 +197,10 @@ pub fn tick_state(unit: &mut Unit) -> TickResult {
     }
 }
 
-/// Idle: countdown timer, transition to Wander when expired.
-fn tick_idle(unit: &mut Unit) -> TickResult {
-    if unit.state_timer > 0 {
-        unit.state_timer -= 1;
-        TickResult::Continue
-    } else {
-        TickResult::Transition(PersonState::Wander)
-    }
+/// Idle: stay idle until commanded.
+/// (The original binary's idle→wander cycle is more complex — deferred.)
+fn tick_idle(_unit: &mut Unit) -> TickResult {
+    TickResult::Continue
 }
 
 /// Moving/GoToPoint/GoToMarker: check if movement completed.
@@ -403,15 +400,12 @@ mod tests {
     }
 
     #[test]
-    fn idle_to_wander_transition() {
+    fn idle_stays_idle() {
         let mut unit = make_unit(2, 0);
         unit.state = PersonState::Idle;
-        unit.state_timer = 2;
+        unit.state_timer = 0;
         assert!(matches!(tick_state(&mut unit), TickResult::Continue));
-        assert_eq!(unit.state_timer, 1);
         assert!(matches!(tick_state(&mut unit), TickResult::Continue));
-        assert_eq!(unit.state_timer, 0);
-        assert!(matches!(tick_state(&mut unit), TickResult::Transition(PersonState::Wander)));
     }
 
     #[test]
