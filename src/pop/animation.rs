@@ -87,6 +87,25 @@ impl AnimationsData {
     }
 }
 
+use crate::pop::psfb::ContainerPSFB;
+
+/******************************************************************************/
+
+pub const DIRS_PER_ANIM: usize = 8;
+pub const STORED_DIRECTIONS: usize = 5;
+pub const NUM_TRIBES: usize = 4;
+
+/// Idle animation indices from g_PersonAnimationTable (RE'd from original binary)
+/// Format: (subtype, animation_index)
+pub const UNIT_IDLE_ANIMS: [(u8, usize); 6] = [
+    (2, 15),  // Brave
+    (3, 16),  // Warrior
+    (4, 17),  // Preacher
+    (5, 18),  // Spy
+    (6, 19),  // Firewarrior
+    (7, 20),  // Shaman
+];
+
 /******************************************************************************/
 
 pub enum ElementRotate {
@@ -273,6 +292,231 @@ impl AnimationSequence {
         }
         frames
     }
+}
+
+/******************************************************************************/
+// Sprite compositing helpers (used by main renderer and unit_viewer)
+/******************************************************************************/
+
+/// Check if an element should be rendered given the current tribe and unit combo.
+/// Layer 0 (base): always render
+/// Layer 1 (tribe): render if element's tribe matches selected tribe
+/// Layer 2+ (type): render only if (uvar5, tribe) matches selected unit combo
+pub fn should_render_element(
+    elem: &AnimationElement,
+    tribe: u8,
+    unit_combo: Option<(u16, u16)>,
+) -> bool {
+    if elem.is_hidden() {
+        return false;
+    }
+    if elem.is_common() {
+        return true;
+    }
+    if elem.is_tribe_specific() {
+        return elem.get_tribe() == tribe;
+    }
+    if elem.is_type_specific() {
+        return match unit_combo {
+            Some((layer, high)) => elem.uvar5 == layer && elem.tribe as u16 == high,
+            None => false,
+        };
+    }
+    true
+}
+
+/// Discover available unit combos (layer_type, element_tribe) from an animation's elements.
+pub fn discover_unit_combos(
+    sequences: &[AnimationSequence],
+    base: usize,
+) -> Vec<(u16, u16)> {
+    let mut combos: Vec<(u16, u16)> = Vec::new();
+    for dir in 0..STORED_DIRECTIONS {
+        let seq_idx = base + dir;
+        if seq_idx >= sequences.len() { continue; }
+        for frame in &sequences[seq_idx].frames {
+            for elem in &frame.sprites {
+                if elem.is_type_specific() {
+                    let combo = (elem.uvar5, elem.tribe as u16);
+                    if !combos.contains(&combo) {
+                        combos.push(combo);
+                    }
+                }
+            }
+        }
+    }
+    combos.sort();
+    combos
+}
+
+/// Composite a single animation frame's elements into an RGBA bitmap.
+pub fn composite_frame(
+    elements: &[AnimationElement],
+    container: &ContainerPSFB,
+    palette: &[[u8; 4]],
+    tribe: u8,
+    unit_combo: Option<(u16, u16)>,
+    frame_width: usize,
+    frame_height: usize,
+    offset_x: i32,
+    offset_y: i32,
+) -> Vec<u8> {
+    let fw = frame_width;
+    let fh = frame_height;
+    let mut rgba = vec![0u8; fw * fh * 4];
+
+    for elem in elements {
+        if !should_render_element(elem, tribe, unit_combo) {
+            continue;
+        }
+
+        let sprite_index = elem.sprite_index;
+        let image = match container.get_image(sprite_index) {
+            Some(img) => img,
+            None => continue,
+        };
+        let info = match container.get_info(sprite_index) {
+            Some(i) => i,
+            None => continue,
+        };
+
+        let sw = info.width as usize;
+        let sh = info.height as usize;
+
+        let h_flip = matches!(elem.get_rotate(), ElementRotate::RotateHorizontal);
+        let v_flip = matches!(elem.get_rotate(), ElementRotate::RotateVertical);
+
+        let ox = (elem.coord_x as i32 - offset_x) as isize;
+        let oy = (elem.coord_y as i32 - offset_y) as isize;
+
+        for y in 0..sh {
+            for x in 0..sw {
+                let src_x = if h_flip { sw - 1 - x } else { x };
+                let src_y = if v_flip { sh - 1 - y } else { y };
+                let src = image.data[src_y * sw + src_x];
+                if src == 255 { continue; }
+
+                let dst_x = ox + x as isize;
+                let dst_y = oy + y as isize;
+                if dst_x < 0 || dst_y < 0 || dst_x >= fw as isize || dst_y >= fh as isize {
+                    continue;
+                }
+
+                let dst_off = (dst_y as usize * fw + dst_x as usize) * 4;
+                let c = palette.get(src as usize).unwrap_or(&[255, 0, 255, 255]);
+                rgba[dst_off] = c[0];
+                rgba[dst_off + 1] = c[1];
+                rgba[dst_off + 2] = c[2];
+                rgba[dst_off + 3] = 255;
+            }
+        }
+    }
+
+    rgba
+}
+
+/// Build a sprite atlas for an animation with all 4 tribes.
+/// Layout: rows = 4 tribes × 5 stored directions, cols = frames.
+/// Returns (atlas_w, atlas_h, rgba, frame_w, frame_h, frames_per_dir) or None.
+/// `unit_combo_override`: `None` = auto-detect first combo, `Some(x)` = use `x` as the combo.
+pub fn build_tribe_atlas(
+    sequences: &[AnimationSequence],
+    container: &ContainerPSFB,
+    palette: &[[u8; 4]],
+    anim_index: usize,
+    unit_combo_override: Option<Option<(u16, u16)>>,
+) -> Option<(u32, u32, Vec<u8>, u32, u32, u32)> {
+    let base = anim_index * DIRS_PER_ANIM;
+
+    // Count max frames per direction
+    let mut max_frames = 0usize;
+    for dir in 0..STORED_DIRECTIONS {
+        let seq_idx = base + dir;
+        if seq_idx >= sequences.len() { continue; }
+        max_frames = max_frames.max(sequences[seq_idx].frames.len());
+    }
+    if max_frames == 0 { return None; }
+
+    // Compute bounding box across all elements in all directions
+    let mut min_x: i32 = 0;
+    let mut min_y: i32 = 0;
+    let mut max_x: i32 = 1;
+    let mut max_y: i32 = 1;
+
+    for dir in 0..STORED_DIRECTIONS {
+        let seq_idx = base + dir;
+        if seq_idx >= sequences.len() { continue; }
+        for frame in &sequences[seq_idx].frames {
+            for elem in &frame.sprites {
+                if elem.is_hidden() { continue; }
+                if let Some(info) = container.get_info(elem.sprite_index) {
+                    let ex = elem.coord_x as i32;
+                    let ey = elem.coord_y as i32;
+                    min_x = min_x.min(ex);
+                    min_y = min_y.min(ey);
+                    max_x = max_x.max(ex + info.width as i32);
+                    max_y = max_y.max(ey + info.height as i32);
+                }
+            }
+        }
+    }
+
+    let fw = ((max_x - min_x) as u32).max(1).min(512);
+    let fh = ((max_y - min_y) as u32).max(1).min(512);
+    let total_rows = (NUM_TRIBES * STORED_DIRECTIONS) as u32;
+    let atlas_w = fw * max_frames as u32;
+    let atlas_h = fh * total_rows;
+
+    if atlas_w == 0 || atlas_h == 0 { return None; }
+
+    let mut rgba = vec![0u8; (atlas_w * atlas_h * 4) as usize];
+
+    // Resolve unit combo: override takes precedence, otherwise auto-detect first combo
+    let unit_combo = match unit_combo_override {
+        Some(combo) => combo,
+        None => {
+            let combos = discover_unit_combos(sequences, base);
+            combos.first().copied()
+        }
+    };
+
+    for tribe in 0..NUM_TRIBES {
+        for dir in 0..STORED_DIRECTIONS {
+            let seq_idx = base + dir;
+            if seq_idx >= sequences.len() { continue; }
+
+            let dir_frames = &sequences[seq_idx].frames;
+            if dir_frames.is_empty() { continue; }
+            for f in 0..max_frames {
+                let frame = &dir_frames[f % dir_frames.len()];
+
+                let frame_rgba = composite_frame(
+                    &frame.sprites,
+                    container,
+                    palette,
+                    tribe as u8,
+                    unit_combo,
+                    fw as usize,
+                    fh as usize,
+                    min_x,
+                    min_y,
+                );
+
+                let cell_x = f as u32 * fw;
+                let row = (tribe * STORED_DIRECTIONS + dir) as u32;
+                let cell_y = row * fh;
+                for y in 0..fh {
+                    let src_row = (y * fw * 4) as usize;
+                    let dst_row = ((cell_y + y) * atlas_w + cell_x) as usize * 4;
+                    let len = (fw * 4) as usize;
+                    rgba[dst_row..dst_row + len]
+                        .copy_from_slice(&frame_rgba[src_row..src_row + len]);
+                }
+            }
+        }
+    }
+
+    Some((atlas_w, atlas_h, rgba, fw, fh, max_frames as u32))
 }
 
 /******************************************************************************/

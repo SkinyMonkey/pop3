@@ -33,7 +33,11 @@ use pop3::gpu::texture::GpuTexture;
 
 use pop3::pop::psfb::ContainerPSFB;
 use pop3::pop::types::BinDeserializer;
-use pop3::pop::animation::{AnimationsData, AnimationSequence, AnimationElement, ElementRotate};
+use pop3::pop::animation::{
+    AnimationsData, AnimationSequence,
+    discover_unit_combos, build_tribe_atlas,
+    NUM_TRIBES,
+};
 
 /******************************************************************************/
 // Bitmap font (8x8, ASCII 32..127)
@@ -155,7 +159,7 @@ fn build_font_texture() -> Vec<u8> {
         for y in 0..8 {
             let byte = ((bits >> (56 - y * 8)) & 0xFF) as u8;
             for x in 0..8 {
-                if byte & (1 << (7 - x)) != 0 {
+                if byte & (1 << x) != 0 {
                     let px = col * 8 + x;
                     let py = row * 8 + y;
                     data[py * FONT_TEX_W as usize + px] = 255;
@@ -209,236 +213,13 @@ fn load_palette(path: &Path) -> Option<Vec<[u8; 4]>> {
 }
 
 /******************************************************************************/
-// VELE layer filtering helpers
-/******************************************************************************/
-
-/// Discover available unit combos (layer_type, element_tribe) from an animation's elements.
-/// Layer 2+ elements represent unit-specific features (weapons, headgear, etc.)
-fn discover_unit_combos(
-    sequences: &[AnimationSequence],
-    base: usize,
-) -> Vec<(u16, u16)> {
-    let mut combos: Vec<(u16, u16)> = Vec::new();
-    for dir in 0..STORED_DIRECTIONS {
-        let seq_idx = base + dir;
-        if seq_idx >= sequences.len() { continue; }
-        for frame in &sequences[seq_idx].frames {
-            for elem in &frame.sprites {
-                if elem.is_type_specific() {
-                    let combo = (elem.uvar5, elem.tribe as u16);
-                    if !combos.contains(&combo) {
-                        combos.push(combo);
-                    }
-                }
-            }
-        }
-    }
-    combos.sort();
-    combos
-}
-
-/// Check if an element should be rendered given the current tribe and unit combo.
-/// Layer 0 (base): always render
-/// Layer 1 (tribe): render if element's tribe matches selected tribe
-/// Layer 2+ (type): render only if (uvar5, tribe) matches selected unit combo
-fn should_render_element(
-    elem: &AnimationElement,
-    tribe: u8,
-    unit_combo: Option<(u16, u16)>,
-) -> bool {
-    if elem.is_hidden() {
-        return false;
-    }
-    if elem.is_common() {
-        return true;
-    }
-    if elem.is_tribe_specific() {
-        return elem.get_tribe() == tribe;
-    }
-    if elem.is_type_specific() {
-        return match unit_combo {
-            Some((layer, high)) => elem.uvar5 == layer && elem.tribe as u16 == high,
-            None => false,
-        };
-    }
-    true
-}
-
-/******************************************************************************/
 // Composite frame atlas building
 /******************************************************************************/
 
 struct SpriteAtlas {
-    rgba: Vec<u8>,
-    atlas_width: u32,
-    atlas_height: u32,
     frame_width: u32,
     frame_height: u32,
     frames_per_dir: u32,
-}
-
-/// Composite a single animation frame's elements into an RGBA bitmap.
-fn composite_frame(
-    elements: &[AnimationElement],
-    container: &ContainerPSFB,
-    palette: &[[u8; 4]],
-    tribe: u8,
-    unit_combo: Option<(u16, u16)>,
-    frame_width: usize,
-    frame_height: usize,
-    offset_x: i32,
-    offset_y: i32,
-) -> Vec<u8> {
-    let fw = frame_width;
-    let fh = frame_height;
-    let mut rgba = vec![0u8; fw * fh * 4];
-
-    for elem in elements {
-        if !should_render_element(elem, tribe, unit_combo) {
-            continue;
-        }
-
-        let sprite_index = elem.sprite_index;
-        let image = match container.get_image(sprite_index) {
-            Some(img) => img,
-            None => continue,
-        };
-        let info = match container.get_info(sprite_index) {
-            Some(i) => i,
-            None => continue,
-        };
-
-        let sw = info.width as usize;
-        let sh = info.height as usize;
-
-        let h_flip = matches!(elem.get_rotate(), ElementRotate::RotateHorizontal);
-        let v_flip = matches!(elem.get_rotate(), ElementRotate::RotateVertical);
-
-        // Element position = coord offset - bounding box min
-        let ox = (elem.coord_x as i32 - offset_x) as isize;
-        let oy = (elem.coord_y as i32 - offset_y) as isize;
-
-        for y in 0..sh {
-            for x in 0..sw {
-                let src_x = if h_flip { sw - 1 - x } else { x };
-                let src_y = if v_flip { sh - 1 - y } else { y };
-                let src = image.data[src_y * sw + src_x];
-                if src == 0 { continue; }
-
-                let dst_x = ox + x as isize;
-                let dst_y = oy + y as isize;
-                if dst_x < 0 || dst_y < 0 || dst_x >= fw as isize || dst_y >= fh as isize {
-                    continue;
-                }
-
-                let dst_off = (dst_y as usize * fw + dst_x as usize) * 4;
-                let c = palette.get(src as usize).unwrap_or(&[255, 0, 255, 255]);
-                rgba[dst_off] = c[0];
-                rgba[dst_off + 1] = c[1];
-                rgba[dst_off + 2] = c[2];
-                rgba[dst_off + 3] = 255;
-            }
-        }
-    }
-
-    rgba
-}
-
-/// Build a texture atlas for an animation.
-/// Layout: rows = stored directions (0..5), cols = frames
-fn build_atlas(
-    sequences: &[AnimationSequence],
-    container: &ContainerPSFB,
-    palette: &[[u8; 4]],
-    anim_index: usize,
-    tribe: u8,
-    unit_combo: Option<(u16, u16)>,
-) -> Option<SpriteAtlas> {
-    let base = anim_index * DIRS_PER_ANIM;
-
-    // Count frames per direction
-    let mut max_frames = 0usize;
-
-    for dir in 0..STORED_DIRECTIONS {
-        let seq_idx = base + dir;
-        if seq_idx >= sequences.len() { continue; }
-        max_frames = max_frames.max(sequences[seq_idx].frames.len());
-    }
-
-    if max_frames == 0 { return None; }
-
-    // Compute bounding box across all elements in all directions
-    let mut min_x: i32 = 0;
-    let mut min_y: i32 = 0;
-    let mut max_x: i32 = 1;
-    let mut max_y: i32 = 1;
-
-    for dir in 0..STORED_DIRECTIONS {
-        let seq_idx = base + dir;
-        if seq_idx >= sequences.len() { continue; }
-        for frame in &sequences[seq_idx].frames {
-            for elem in &frame.sprites {
-                if elem.is_hidden() { continue; }
-                if let Some(info) = container.get_info(elem.sprite_index) {
-                    let ex = elem.coord_x as i32;
-                    let ey = elem.coord_y as i32;
-                    min_x = min_x.min(ex);
-                    min_y = min_y.min(ey);
-                    max_x = max_x.max(ex + info.width as i32);
-                    max_y = max_y.max(ey + info.height as i32);
-                }
-            }
-        }
-    }
-
-    let fw = ((max_x - min_x) as u32).max(1).min(512);
-    let fh = ((max_y - min_y) as u32).max(1).min(512);
-    let atlas_w = fw * max_frames as u32;
-    let atlas_h = fh * STORED_DIRECTIONS as u32;
-
-    if atlas_w == 0 || atlas_h == 0 { return None; }
-
-    let mut rgba = vec![0u8; (atlas_w * atlas_h * 4) as usize];
-
-    for dir in 0..STORED_DIRECTIONS {
-        let seq_idx = base + dir;
-        if seq_idx >= sequences.len() { continue; }
-
-        for (f, frame) in sequences[seq_idx].frames.iter().enumerate() {
-            if f >= max_frames { break; }
-
-            let frame_rgba = composite_frame(
-                &frame.sprites,
-                container,
-                palette,
-                tribe,
-                unit_combo,
-                fw as usize,
-                fh as usize,
-                min_x,
-                min_y,
-            );
-
-            // Blit into atlas
-            let cell_x = f as u32 * fw;
-            let cell_y = dir as u32 * fh;
-            for y in 0..fh {
-                let src_row = (y * fw * 4) as usize;
-                let dst_row = ((cell_y + y) * atlas_w + cell_x) as usize * 4;
-                let len = (fw * 4) as usize;
-                rgba[dst_row..dst_row + len].copy_from_slice(&frame_rgba[src_row..src_row + len]);
-            }
-        }
-    }
-
-    Some(SpriteAtlas {
-        rgba,
-        atlas_width: atlas_w,
-        atlas_height: atlas_h,
-        frame_width: fw,
-        frame_height: fh,
-        frames_per_dir: max_frames as u32,
-    })
 }
 
 /******************************************************************************/
@@ -645,12 +426,12 @@ impl TextRenderer {
                 let y0 = 1.0 - (cursor_y / screen_h) * 2.0;
                 let y1 = 1.0 - ((cursor_y + char_h) / screen_h) * 2.0;
 
-                vertices.push(SpriteVertex { position: [x0, y1], uv: [u0, v1] });
-                vertices.push(SpriteVertex { position: [x1, y1], uv: [u1, v1] });
-                vertices.push(SpriteVertex { position: [x1, y0], uv: [u1, v0] });
-                vertices.push(SpriteVertex { position: [x0, y1], uv: [u0, v1] });
-                vertices.push(SpriteVertex { position: [x1, y0], uv: [u1, v0] });
-                vertices.push(SpriteVertex { position: [x0, y0], uv: [u0, v0] });
+                vertices.push(SpriteVertex { position: [x0, y1], uv: [u0, v0] });
+                vertices.push(SpriteVertex { position: [x1, y1], uv: [u1, v0] });
+                vertices.push(SpriteVertex { position: [x1, y0], uv: [u1, v1] });
+                vertices.push(SpriteVertex { position: [x0, y1], uv: [u0, v0] });
+                vertices.push(SpriteVertex { position: [x1, y0], uv: [u1, v1] });
+                vertices.push(SpriteVertex { position: [x0, y0], uv: [u0, v1] });
 
                 cursor_x += char_w;
             }
@@ -797,16 +578,23 @@ impl ViewerState {
 
         // Discover available unit combos
         let combos = discover_unit_combos(sequences, base);
+        // Clamp combo index to new animation's combo list
+        let combo_idx = combo_idx.and_then(|i| if i < combos.len() { Some(i) } else { None });
         let unit_combo = combo_idx.and_then(|i| combos.get(i).copied());
 
-        if let Some(atlas) = build_atlas(sequences, container, palette, anim_index, tribe, unit_combo) {
+        // Use the shared build_tribe_atlas with explicit combo override
+        let combo_override = Some(unit_combo);
+        if let Some((atlas_w, atlas_h, rgba, fw, fh, max_frames)) =
+            build_tribe_atlas(sequences, container, palette, anim_index, combo_override)
+        {
+            let atlas = SpriteAtlas { frame_width: fw, frame_height: fh, frames_per_dir: max_frames };
             self.sprite_atlas = GpuTexture::new_2d(
                 &self.gpu.device,
                 &self.gpu.queue,
-                atlas.atlas_width,
-                atlas.atlas_height,
+                atlas_w,
+                atlas_h,
                 wgpu::TextureFormat::Rgba8UnormSrgb,
-                &atlas.rgba,
+                &rgba,
                 "sprite_atlas",
             );
 
@@ -877,13 +665,14 @@ impl ViewerState {
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let proj = ortho_projection(
-            self.gpu.size.width as f32 / 2.0,
-            self.gpu.size.height as f32 / 2.0,
+            self.gpu.size.width as f32 / 1.5,
+            self.gpu.size.height as f32 / 1.5,
         );
 
         let fpd = self.atlas.frames_per_dir;
         let uv_scale_x = 1.0 / fpd as f32;
-        let uv_scale_y = 1.0 / STORED_DIRECTIONS as f32;
+        let total_rows = (NUM_TRIBES * STORED_DIRECTIONS) as f32;
+        let uv_scale_y = 1.0 / total_rows;
         let frame_uv_x = self.current_frame as f32 / fpd as f32;
 
         let ca = self.camera_angle.cos();
@@ -897,7 +686,7 @@ impl ViewerState {
 
         for dir in 0..NUM_DIRECTIONS {
             let (source_dir, mirrored) = get_source_direction(dir);
-            let frame_uv_y = source_dir as f32 / STORED_DIRECTIONS as f32;
+            let frame_uv_y = (self.current_tribe as usize * STORED_DIRECTIONS + source_dir) as f32 / total_rows;
 
             let uniforms = SpriteUniforms {
                 projection: rot_proj,
@@ -1075,10 +864,15 @@ impl ViewerState {
                 };
                 self.rebuild_atlas(sequences, container, palette, prev, self.current_tribe, self.current_combo_idx);
             }
-            // Cycle tribe
+            // Cycle tribe (UV-only, no atlas rebuild needed since atlas has all 4 tribes)
             KeyCode::KeyT => {
-                let next_tribe = (self.current_tribe + 1) % 4;
-                self.rebuild_atlas(sequences, container, palette, self.current_anim, next_tribe, self.current_combo_idx);
+                self.current_tribe = (self.current_tribe + 1) % 4;
+                let tribe_name = TRIBE_NAMES.get(self.current_tribe as usize).unwrap_or(&"?");
+                println!("Tribe: {} ({})", self.current_tribe, tribe_name);
+                self.info_text = format_anim_info(
+                    self.current_anim, self.total_anims, self.current_tribe,
+                    self.current_combo_idx, &self.unit_combos, self.atlas.frames_per_dir,
+                );
             }
             // Cycle unit features overlay
             KeyCode::KeyU => {
@@ -1129,10 +923,11 @@ impl ApplicationHandler for App {
         let initial_tribe = self.initial_tribe;
         let total_anims = self.sequences.len() / DIRS_PER_ANIM;
 
-        let atlas = build_atlas(
+        let (atlas_w, atlas_h, rgba, fw, fh, max_frames) = build_tribe_atlas(
             &self.sequences, &self.container, &self.palette,
-            initial_anim, initial_tribe, None,
+            initial_anim, None,
         ).expect("Failed to build initial animation atlas");
+        let atlas = SpriteAtlas { frame_width: fw, frame_height: fh, frames_per_dir: max_frames };
 
         let base = initial_anim * DIRS_PER_ANIM;
         let initial_combos = discover_unit_combos(&self.sequences, base);
@@ -1140,10 +935,10 @@ impl ApplicationHandler for App {
         let sprite_atlas = GpuTexture::new_2d(
             device,
             &gpu.queue,
-            atlas.atlas_width,
-            atlas.atlas_height,
+            atlas_w,
+            atlas_h,
             wgpu::TextureFormat::Rgba8UnormSrgb,
-            &atlas.rgba,
+            &rgba,
             "sprite_atlas",
         );
 
