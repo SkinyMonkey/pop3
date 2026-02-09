@@ -3,6 +3,7 @@
 // Provides the bridge between user input (selection, move orders) and
 // the movement system (pathfinding, per-tick position updates).
 
+use crate::game_state::rng::GameRng;
 use crate::movement::{
     RegionMap, SegmentPool, FailureCache, UsedTargetsCache,
     PersonMovement, WorldCoord, RouteResult,
@@ -11,22 +12,13 @@ use crate::movement::{
 };
 use crate::pop::units::{ModelType, UnitRaw};
 use super::unit::Unit;
+use super::person_state::{
+    PersonState, person_type_defaults, enter_state, tick_state, TickResult,
+    calculate_melee_damage, apply_damage,
+    COMBAT_DETECT_RANGE, COMBAT_MELEE_RANGE, COMBAT_ATTACK_INTERVAL,
+};
 use super::selection::{SelectionState, DragState};
 use super::coords::{world_to_render_pos, toroidal_delta, cell_to_world};
-
-/// Default movement speeds per unit subtype.
-/// From the game's speed table at 0x5A0974 (stride 26).
-fn default_speed(subtype: u8) -> u16 {
-    match subtype {
-        2 => 0x30, // Brave
-        3 => 0x28, // Warrior
-        4 => 0x28, // Religious
-        5 => 0x30, // Spy
-        6 => 0x28, // Firewarrior
-        7 => 0x30, // Shaman
-        _ => 0x30, // Default
-    }
-}
 
 pub struct UnitCoordinator {
     pub units: Vec<Unit>,
@@ -40,6 +32,9 @@ pub struct UnitCoordinator {
     used_targets: UsedTargetsCache,
 
     landscape_size: f32,
+
+    // State machine RNG (same LCG as original binary)
+    pub rng: GameRng,
 }
 
 impl UnitCoordinator {
@@ -53,6 +48,7 @@ impl UnitCoordinator {
             failure_cache: FailureCache::new(),
             used_targets: UsedTargetsCache::new(),
             landscape_size: 128.0,
+            rng: GameRng::new(0x1234),
         }
     }
 
@@ -80,11 +76,12 @@ impl UnitCoordinator {
                 continue;
             }
 
+            let defaults = person_type_defaults(raw.subtype);
             let mut movement = PersonMovement::default();
             movement.position = WorldCoord::new(raw.loc_x() as i16, raw.loc_y() as i16);
             movement.facing_angle = (raw.angle() & 0x7FF) as u16;
             movement.unit_type = raw.subtype;
-            movement.speed = default_speed(raw.subtype);
+            movement.speed = defaults.speed;
 
             let (cx, cy) = world_to_render_pos(&movement.position, self.landscape_size);
             self.units.push(Unit {
@@ -95,17 +92,27 @@ impl UnitCoordinator {
                 movement,
                 cell_x: cx,
                 cell_y: cy,
+                state: PersonState::Idle,
+                prev_state: PersonState::Idle,
+                state_timer: 0,
+                state_counter: 0,
+                health: defaults.max_health,
+                max_health: defaults.max_health,
+                target_unit: None,
+                attacker_unit: None,
+                alive: true,
             });
         }
         log::info!("[unit-ctrl] loaded {} person units", self.units.len());
     }
 
     /// Issue move orders to all selected units targeting `target_world`.
+    /// Transitions units into GoToPoint state and calls state_goto.
     pub fn order_move(&mut self, target_world: WorldCoord) {
         self.used_targets.clear();
         for &unit_id in &self.selection.selected {
             if let Some(unit) = self.units.get_mut(unit_id) {
-                let was_moving = unit.movement.is_moving();
+                if !unit.alive { continue; }
                 let result = state_goto(
                     &self.region_map,
                     &mut self.segment_pool,
@@ -114,64 +121,217 @@ impl UnitCoordinator {
                     target_world,
                     &mut self.used_targets,
                 );
-                // The original binary sets MOVING unconditionally, but without
-                // the full person state machine to catch NoRoute, clear it here.
                 if result == RouteResult::NoRoute {
-                    unit.movement.flags1 &= !0x1000; // Clear MOVING
+                    unit.movement.flags1 &= !0x1000;
+                } else {
+                    unit.state = PersonState::GoToPoint;
+                    unit.target_unit = None; // Cancel combat
                 }
-                let is_moving = unit.movement.is_moving();
-                log::info!("[move-order] unit {} state_goto: was_moving={} → is_moving={} result={:?} target=({}, {}) next_wp=({}, {}) flags=0x{:08x} seg_idx={}",
-                    unit_id, was_moving, is_moving, result,
-                    unit.movement.target_pos.x, unit.movement.target_pos.z,
-                    unit.movement.next_waypoint.x, unit.movement.next_waypoint.z,
-                    unit.movement.flags1, unit.movement.segment_index);
+                log::info!("[move-order] unit {} result={:?} state={:?} target=({}, {})",
+                    unit_id, result, unit.state,
+                    unit.movement.target_pos.x, unit.movement.target_pos.z);
             }
         }
     }
 
-    /// Advance all moving units by one tick.
+    /// Advance all units by one tick: state machine + movement + combat + drowning.
     pub fn tick(&mut self) {
-        for unit in &mut self.units {
-            if !unit.movement.is_moving() {
-                continue;
+        let unit_count = self.units.len();
+
+        // Phase 1: State machine tick + movement for each unit
+        for i in 0..unit_count {
+            let unit = &mut self.units[i];
+            if !unit.alive { continue; }
+
+            // Run state machine tick
+            let result = tick_state(unit);
+            if let TickResult::Transition(new_state) = result {
+                enter_state(unit, new_state, &mut self.rng);
             }
 
-            // Step 1: Waypoint advancement
-            process_route_movement(&mut self.segment_pool, &mut unit.movement);
+            // Process movement for moving states
+            if unit.movement.is_moving() {
+                Self::advance_movement(&mut self.segment_pool, unit, self.landscape_size);
+            }
 
-            // Step 2: Compute facing angle toward next waypoint
+            // Update rendering cache
+            let (cx, cy) = world_to_render_pos(&unit.movement.position, self.landscape_size);
+            unit.cell_x = cx;
+            unit.cell_y = cy;
+        }
+
+        // Phase 2: Drowning detection
+        for i in 0..unit_count {
+            let unit = &self.units[i];
+            if !unit.alive { continue; }
+            if unit.state == PersonState::Drowning || unit.state == PersonState::Dead { continue; }
+
+            let tile = unit.movement.position.to_tile();
+            if !self.region_map.is_walkable(tile) {
+                let unit = &mut self.units[i];
+                enter_state(unit, PersonState::Drowning, &mut self.rng);
+            }
+        }
+
+        // Phase 3: Combat detection — idle/wander units auto-engage nearby enemies
+        self.detect_combat();
+
+        // Phase 4: Process combat damage for fighting units
+        self.process_combat();
+    }
+
+    /// Move a unit one step along its path (waypoint advancement + position update).
+    fn advance_movement(segment_pool: &mut SegmentPool, unit: &mut Unit, _landscape_size: f32) {
+        // Waypoint advancement for pathfind-routed movement
+        if unit.state == PersonState::GoToPoint || unit.state == PersonState::GoToMarker
+            || unit.state == PersonState::Moving
+        {
+            process_route_movement(segment_pool, &mut unit.movement);
+        }
+
+        // Compute facing angle toward next waypoint (for routed movement)
+        // or use existing facing_angle (for wander/flee)
+        if unit.state == PersonState::GoToPoint || unit.state == PersonState::GoToMarker
+            || unit.state == PersonState::Moving
+        {
             let dx = toroidal_delta(unit.movement.position.x, unit.movement.next_waypoint.x);
             let dz = toroidal_delta(unit.movement.position.z, unit.movement.next_waypoint.z);
-
-            log::trace!("[tick] unit {} pos=({}, {}) wp=({}, {}) dx={} dz={} speed={} seg={}",
-                unit.id, unit.movement.position.x, unit.movement.position.z,
-                unit.movement.next_waypoint.x, unit.movement.next_waypoint.z,
-                dx, dz, unit.movement.speed, unit.movement.segment_index);
 
             // Check arrival at destination
             if dx.abs() < 0x48 && dz.abs() < 0x48 {
                 if unit.movement.segment_index == 0 {
-                    // Direct walk completed — snap to target
                     unit.movement.position = unit.movement.target_pos;
                     unit.movement.flags1 &= !0x1000; // Clear MOVING
                 }
-                // If segment_index != 0, process_route_movement handles waypoint advance
-            } else {
-                // Face toward waypoint and advance.
-                // atan2's dy parameter uses screen-y convention (+y = south),
-                // so negate dz (world +z = north). Original: NEG EAX at 0x424ae5.
-                unit.movement.facing_angle = atan2(dx, -dz);
-                move_point_by_angle(
-                    &mut unit.movement.position,
-                    unit.movement.facing_angle,
-                    unit.movement.speed as i16,
-                );
+                return;
+            }
+            unit.movement.facing_angle = atan2(dx, -dz);
+        }
+
+        // Advance position by speed in facing direction
+        move_point_by_angle(
+            &mut unit.movement.position,
+            unit.movement.facing_angle,
+            unit.movement.speed as i16,
+        );
+    }
+
+    /// Detect nearby enemies and enter combat for idle/wandering units.
+    fn detect_combat(&mut self) {
+        // Collect (unit_index, target_index) pairs to avoid borrow issues
+        let mut engagements: Vec<(usize, usize)> = Vec::new();
+
+        for i in 0..self.units.len() {
+            let unit = &self.units[i];
+            if !unit.alive { continue; }
+            // Only idle/wandering units auto-engage
+            if unit.state != PersonState::Idle && unit.state != PersonState::Wander { continue; }
+
+            let mut best_dist = COMBAT_DETECT_RANGE as i32 + 1;
+            let mut best_target: Option<usize> = None;
+
+            for j in 0..self.units.len() {
+                if i == j { continue; }
+                let other = &self.units[j];
+                if !other.alive { continue; }
+                if other.tribe_index == unit.tribe_index { continue; } // Same tribe
+                if other.state == PersonState::Dead { continue; }
+
+                let dx = toroidal_delta(unit.movement.position.x, other.movement.position.x) as i32;
+                let dz = toroidal_delta(unit.movement.position.z, other.movement.position.z) as i32;
+                let dist = dx.abs() + dz.abs(); // Manhattan distance (fast approximation)
+
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_target = Some(j);
+                }
             }
 
-            // Step 3: Update rendering cache (smooth sub-cell precision)
-            let (cx, cy) = world_to_render_pos(&unit.movement.position, self.landscape_size);
-            unit.cell_x = cx;
-            unit.cell_y = cy;
+            if let Some(target) = best_target {
+                engagements.push((i, target));
+            }
+        }
+
+        // Apply engagements
+        for (attacker_idx, target_idx) in engagements {
+            let target_id = self.units[target_idx].id;
+            let target_pos = self.units[target_idx].movement.position;
+            let unit = &mut self.units[attacker_idx];
+            unit.target_unit = Some(target_id);
+            enter_state(unit, PersonState::Fighting, &mut self.rng);
+
+            // Face toward target
+            let dx = toroidal_delta(unit.movement.position.x, target_pos.x);
+            let dz = toroidal_delta(unit.movement.position.z, target_pos.z);
+            unit.movement.facing_angle = atan2(dx, -dz);
+        }
+    }
+
+    /// Process melee damage for fighting units.
+    fn process_combat(&mut self) {
+        // Collect damage events: (target_index, damage, attacker_tribe)
+        let mut damage_events: Vec<(usize, u16, u8)> = Vec::new();
+
+        for i in 0..self.units.len() {
+            let unit = &self.units[i];
+            if !unit.alive || unit.state != PersonState::Fighting { continue; }
+
+            let target_id = match unit.target_unit {
+                Some(id) => id,
+                None => continue,
+            };
+
+            // Find target by ID
+            let target_idx = match self.units.iter().position(|u| u.id == target_id) {
+                Some(idx) => idx,
+                None => continue,
+            };
+
+            let target = &self.units[target_idx];
+            if !target.alive || target.health == 0 {
+                continue; // Target already dead, tick_fighting will transition to Idle
+            }
+
+            // Check melee range
+            let dx = toroidal_delta(unit.movement.position.x, target.movement.position.x) as i32;
+            let dz = toroidal_delta(unit.movement.position.z, target.movement.position.z) as i32;
+            let dist = dx.abs() + dz.abs();
+
+            if dist <= COMBAT_MELEE_RANGE as i32 {
+                // Attack rate: only deal damage every COMBAT_ATTACK_INTERVAL ticks
+                // Use state_timer as attack cooldown
+                if self.units[i].state_timer == 0 {
+                    let damage = calculate_melee_damage(&self.units[i]);
+                    damage_events.push((target_idx, damage, self.units[i].tribe_index));
+                    self.units[i].state_timer = COMBAT_ATTACK_INTERVAL;
+                } else {
+                    self.units[i].state_timer -= 1;
+                }
+            }
+            // If out of melee range but within detect range, unit stays in Fighting
+            // (could add chase behavior later)
+        }
+
+        // Apply damage
+        for (target_idx, damage, _attacker_tribe) in damage_events {
+            let target = &mut self.units[target_idx];
+            apply_damage(target, damage);
+            if target.health == 0 {
+                enter_state(target, PersonState::Dead, &mut self.rng);
+            }
+        }
+
+        // Clear target for units whose target died
+        for i in 0..self.units.len() {
+            if self.units[i].state != PersonState::Fighting { continue; }
+            if let Some(target_id) = self.units[i].target_unit {
+                if let Some(target) = self.units.iter().find(|u| u.id == target_id) {
+                    if !target.alive || target.state == PersonState::Dead {
+                        self.units[i].target_unit = None;
+                        // tick_fighting will transition to Idle on next tick
+                    }
+                }
+            }
         }
     }
 

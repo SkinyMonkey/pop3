@@ -6,6 +6,7 @@
 pub mod coords;
 pub mod unit;
 pub mod selection;
+pub mod person_state;
 pub mod coordinator;
 
 pub use unit::{Unit, UnitId};

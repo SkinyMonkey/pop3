@@ -63,6 +63,7 @@ mod tests {
     use crate::pop::units::ModelType;
 
     fn make_unit(id: usize, cx: f32, cy: f32) -> Unit {
+        use super::super::person_state::PersonState;
         Unit {
             id,
             model_type: ModelType::Person,
@@ -71,6 +72,15 @@ mod tests {
             movement: PersonMovement::default(),
             cell_x: cx,
             cell_y: cy,
+            state: PersonState::Idle,
+            prev_state: PersonState::Idle,
+            state_timer: 0,
+            state_counter: 0,
+            health: 1400,
+            max_health: 1400,
+            target_unit: None,
+            attacker_unit: None,
+            alive: true,
         }
     }
 
