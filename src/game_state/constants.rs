@@ -124,8 +124,16 @@ pub const NET_PACKET_STATE_SYNC_SIZE: usize = 0x55;
 /// Celebration/victory dance state.
 pub const PERSON_STATE_CELEBRATE: u8 = 0x29;
 
-/// Angel of Death subtype.
-pub const PERSON_SUBTYPE_AOD: u8 = 0x08;
+// --- Person Subtypes ---
+
+pub const PERSON_SUBTYPE_WILD: u8 = 1;
+pub const PERSON_SUBTYPE_BRAVE: u8 = 2;
+pub const PERSON_SUBTYPE_WARRIOR: u8 = 3;
+pub const PERSON_SUBTYPE_PREACHER: u8 = 4;
+pub const PERSON_SUBTYPE_SPY: u8 = 5;
+pub const PERSON_SUBTYPE_FIREWARRIOR: u8 = 6;
+pub const PERSON_SUBTYPE_SHAMAN: u8 = 7;
+pub const PERSON_SUBTYPE_AOD: u8 = 8;
 
 // --- RNG ---
 

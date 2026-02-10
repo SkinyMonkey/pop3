@@ -24,8 +24,11 @@ use pop3::pop::psfb::ContainerPSFB;
 use pop3::pop::types::BinDeserializer;
 use pop3::pop::animation::{
     AnimationsData, AnimationSequence,
-    build_tribe_atlas, UNIT_IDLE_ANIMS, STORED_DIRECTIONS, NUM_TRIBES,
+    build_tribe_atlas, build_direct_sprite_atlas,
+    UNIT_IDLE_ANIMS, STORED_DIRECTIONS, NUM_TRIBES,
+    SHAMAN_IDLE_SPRITES, SHAMAN_FRAMES_PER_DIR,
 };
+use pop3::game_state::constants::*;
 
 use pop3::intersect::intersect_iter;
 
@@ -184,8 +187,8 @@ fn extract_all_unit_cells(level_res: &LevelRes) -> Vec<(u8, Vec<(f32, f32, u8)>)
 
     for unit in &level_res.units {
         let tribe = unit.tribe_index() as usize;
-        // Person model, subtypes 2-7 (Brave..Shaman), valid tribes
-        if unit.model == 1 && unit.subtype >= 2 && unit.subtype <= 7 && tribe < 4 {
+        // Person model, subtypes Brave..Shaman, valid tribes
+        if unit.model == 1 && unit.subtype >= PERSON_SUBTYPE_BRAVE && unit.subtype <= PERSON_SUBTYPE_SHAMAN && tribe < 4 {
             if unit.loc_x() == 0 && unit.loc_y() == 0 { continue; }
             let bevy_x = ((unit.loc_x() >> 8) / 2) as f32 + 0.5;
             let bevy_z = ((unit.loc_y() >> 8) / 2) as f32 + 0.5;
@@ -1384,9 +1387,8 @@ impl App {
     }
 
     fn center_on_tribe0_shaman(&mut self) {
-        // Find tribe 0 shaman (subtype 7) in unit_renders
         let shaman_cell = self.unit_renders.iter()
-            .find(|ur| ur.subtype == 7)
+            .find(|ur| ur.subtype == PERSON_SUBTYPE_SHAMAN)
             .and_then(|ur| ur.cells.iter().find(|(_, _, t)| *t == 0))
             .copied();
         if let Some((cx, cy, _)) = shaman_cell {
@@ -1798,9 +1800,13 @@ impl App {
 
         self.unit_renders.clear();
         for &(subtype, anim_idx) in &UNIT_IDLE_ANIMS {
-            if let Some((atlas_w, atlas_h, rgba, fw, fh, max_frames)) =
+            // Shamans use direct per-tribe sprites, not VELE compositing
+            let atlas_result = if subtype == PERSON_SUBTYPE_SHAMAN {
+                build_direct_sprite_atlas(&container, &palette, &SHAMAN_IDLE_SPRITES, SHAMAN_FRAMES_PER_DIR)
+            } else {
                 build_tribe_atlas(&sequences, &container, &palette, anim_idx, Some(None), None)
-            {
+            };
+            if let Some((atlas_w, atlas_h, rgba, fw, fh, max_frames)) = atlas_result {
                 let tex = GpuTexture::new_2d(
                     &gpu.device, &gpu.queue, atlas_w, atlas_h,
                     wgpu::TextureFormat::Rgba8UnormSrgb, &rgba,
