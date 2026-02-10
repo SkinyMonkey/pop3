@@ -38,6 +38,19 @@
 - `data/plscv0X.dat` - Cover/overlay textures (0x6000 bytes)
 - `data/plstxXXX.dat` - Level terrain textures (0x40000 bytes)
 
+### Sky Rendering
+
+See [sky_rendering.md](sky_rendering.md) for full documentation.
+
+| Address    | Name                    | Description                              |
+|------------|-------------------------|------------------------------------------|
+| 0x00494280 | UI_ClearScreenBuffer    | Entry point — loads skylens, dispatches sky render |
+| 0x004dc0e0 | Sky_RenderOrchestrator  | Sets up camera, parallax, dispatches to mode |
+| 0x004dcc30 | Sky_RenderTiled         | Mode 0: 16×16 tile perspective renderer  |
+| 0x004dd710 | Sky_RenderSimple        | Mode 1: direct scanline copy (512×384)   |
+| 0x004dd790 | Sky_RenderParallax      | Mode 2: gradient with dithered palette   |
+| 0x004dd880 | Sky_RenderFlatFill      | Mode 3: solid color debug fill           |
+
 ### Frame Rendering
 
 | Address    | Name              | Description                              |

@@ -95,12 +95,11 @@ fn load_sky_rgba(variant: &SkyVariant) -> SkyImage {
         println!();
     }
 
-    // Game adds 0x70 to every sky byte, then uses result as direct palette index
-    // (the interp table from FUN_004dc3f0 is for mode 2's flat gradient, not texture mode)
+    // sky0 files contain absolute palette indices (100-127 = 0x64-0x7F).
+    // Note: MSKY files (512x512) use relative 0-15 needing +0x70, sky0 files do not.
     let mut rgba = vec![0u8; pixel_count * 4];
     for (i, &idx) in indices.iter().enumerate() {
-        let pal_idx = idx.wrapping_add(0x70) as usize;
-        let off = pal_idx * 4;
+        let off = idx as usize * 4;
         if off + 2 < pal.len() {
             rgba[i * 4]     = pal[off];
             rgba[i * 4 + 1] = pal[off + 1];

@@ -2516,28 +2516,30 @@ impl ApplicationHandler for App {
         // Sky texture and pipeline
         let sky_data = std::fs::read(&level_res.paths.sky).ok();
         let (sky_pipeline, sky_bind_group, sky_uniform_buffer) = if let Some(sky_raw) = sky_data {
-            // sky0-{key}.dat is 512x512 palette indices (262144 bytes).
-            // sky0-0.dat is 307200 bytes (600x512); just take first 512 rows.
-            let sky_size = 512usize;
-            let pixel_count = sky_size * sky_size;
-            let sky_indices = if sky_raw.len() >= pixel_count {
-                &sky_raw[..pixel_count]
-            } else {
-                &sky_raw[..]
-            };
+            // sky0-{c}.dat is 640x480 raw 8-bit palette indices (307200 bytes).
+            // Values are already absolute palette indices (100-127 = 0x64-0x7F).
+            // Note: MSKY files (512x512) use relative 0-15 needing +0x70, but
+            // sky0 files do NOT need the offset.
+            let src_w = 640usize;
+            let src_h = sky_raw.len() / src_w;
             let pal = &level_res.params.palette;
-            // Game adds 0x70 to every sky byte, then uses result as direct palette index
-            let mut sky_rgb = vec![0u8; sky_size * sky_size * 3];
-            for (i, &idx) in sky_indices.iter().enumerate() {
-                let pal_idx = idx.wrapping_add(0x70) as usize * 4;
-                sky_rgb[i * 3]     = pal[pal_idx];
-                sky_rgb[i * 3 + 1] = pal[pal_idx + 1];
-                sky_rgb[i * 3 + 2] = pal[pal_idx + 2];
+            log::info!("Sky: {}x{} ({} bytes), pal {} bytes",
+                src_w, src_h, sky_raw.len(), pal.len());
+            let mut sky_rgb = vec![0u8; src_w * src_h * 3];
+            for y in 0..src_h {
+                for x in 0..src_w {
+                    let idx = sky_raw[y * src_w + x] as usize;
+                    let pal_off = idx * 4;
+                    let dst = (y * src_w + x) * 3;
+                    sky_rgb[dst]     = pal[pal_off];
+                    sky_rgb[dst + 1] = pal[pal_off + 1];
+                    sky_rgb[dst + 2] = pal[pal_off + 2];
+                }
             }
             let sky_rgba = rgb_to_rgba(&sky_rgb);
             let sky_tex = GpuTexture::new_2d(
                 device, &gpu.queue,
-                sky_size as u32, sky_size as u32,
+                src_w as u32, src_h as u32,
                 wgpu::TextureFormat::Rgba8Unorm,
                 &sky_rgba, "sky_texture",
             );
