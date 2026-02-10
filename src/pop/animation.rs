@@ -4,6 +4,7 @@ use std::io::Read;
 use core::mem::size_of;
 
 use crate::pop::types::{BinDeserializer, from_reader, ImageInfo};
+use crate::game_state::constants::*;
 
 /******************************************************************************/
 
@@ -98,12 +99,12 @@ pub const NUM_TRIBES: usize = 4;
 /// Idle animation indices from g_PersonAnimationTable (RE'd from original binary)
 /// Format: (subtype, animation_index)
 pub const UNIT_IDLE_ANIMS: [(u8, usize); 6] = [
-    (2, 15),  // Brave
-    (3, 16),  // Warrior
-    (4, 17),  // Preacher
-    (5, 18),  // Spy
-    (6, 19),  // Firewarrior
-    (7, 20),  // Shaman
+    (PERSON_SUBTYPE_BRAVE,       15),
+    (PERSON_SUBTYPE_WARRIOR,     16),
+    (PERSON_SUBTYPE_PREACHER,    17),
+    (PERSON_SUBTYPE_SPY,         18),
+    (PERSON_SUBTYPE_FIREWARRIOR, 19),
+    (PERSON_SUBTYPE_SHAMAN,      20),
 ];
 
 /******************************************************************************/
@@ -565,6 +566,92 @@ pub fn build_tribe_atlas(
     }
 
     Some((atlas_w, atlas_h, rgba, fw, fh, max_frames as u32))
+}
+
+/******************************************************************************/
+
+/// Per-tribe shaman sprite start indices (idle animation).
+/// Shamans use complete pre-rendered per-tribe sprites, not VELE compositing.
+pub const SHAMAN_IDLE_SPRITES: [u16; 4] = [7578, 7618, 7658, 7698];
+pub const SHAMAN_FRAMES_PER_DIR: usize = 8;
+
+/// Build a sprite atlas from direct PSFB sprite indices (non-composited).
+/// Used for shamans which have complete per-tribe sprites, not VELE layers.
+/// Layout matches `build_tribe_atlas`: rows = 4 tribes × 5 directions, cols = frames.
+pub fn build_direct_sprite_atlas(
+    container: &ContainerPSFB,
+    palette: &[[u8; 4]],
+    tribe_sprite_starts: &[u16; 4],
+    frames_per_dir: usize,
+) -> Option<(u32, u32, Vec<u8>, u32, u32, u32)> {
+    if frames_per_dir == 0 { return None; }
+
+    // First pass: find max sprite dimensions across all tribes/directions/frames
+    let mut max_w: u32 = 0;
+    let mut max_h: u32 = 0;
+    for tribe in 0..NUM_TRIBES {
+        let start = tribe_sprite_starts[tribe] as usize;
+        for dir in 0..STORED_DIRECTIONS {
+            for f in 0..frames_per_dir {
+                let idx = start + dir * frames_per_dir + f;
+                if let Some(info) = container.get_info(idx) {
+                    max_w = max_w.max(info.width as u32);
+                    max_h = max_h.max(info.height as u32);
+                }
+            }
+        }
+    }
+    if max_w == 0 || max_h == 0 { return None; }
+
+    let fw = max_w;
+    let fh = max_h;
+    let total_rows = (NUM_TRIBES * STORED_DIRECTIONS) as u32;
+    let atlas_w = fw * frames_per_dir as u32;
+    let atlas_h = fh * total_rows;
+    let mut rgba = vec![0u8; (atlas_w * atlas_h * 4) as usize];
+
+    for tribe in 0..NUM_TRIBES {
+        let start = tribe_sprite_starts[tribe] as usize;
+        for dir in 0..STORED_DIRECTIONS {
+            for f in 0..frames_per_dir {
+                let idx = start + dir * frames_per_dir + f;
+                let image = match container.get_image(idx) {
+                    Some(img) => img,
+                    None => continue,
+                };
+                let info = match container.get_info(idx) {
+                    Some(i) => i,
+                    None => continue,
+                };
+
+                let sw = info.width as u32;
+                let sh = info.height as u32;
+                // Center sprite in cell
+                let ox = (fw - sw) / 2;
+                let oy = (fh - sh) / 2;
+                let cell_x = f as u32 * fw;
+                let row = (tribe * STORED_DIRECTIONS + dir) as u32;
+                let cell_y = row * fh;
+
+                for y in 0..sh {
+                    for x in 0..sw {
+                        let src = image.data[(y * sw + x) as usize];
+                        if src == 255 { continue; } // transparent
+                        let dst_x = cell_x + ox + x;
+                        let dst_y = cell_y + oy + y;
+                        let dst_off = ((dst_y * atlas_w + dst_x) * 4) as usize;
+                        let c = palette.get(src as usize).unwrap_or(&[255, 0, 255, 255]);
+                        rgba[dst_off] = c[0];
+                        rgba[dst_off + 1] = c[1];
+                        rgba[dst_off + 2] = c[2];
+                        rgba[dst_off + 3] = 255;
+                    }
+                }
+            }
+        }
+    }
+
+    Some((atlas_w, atlas_h, rgba, fw, fh, frames_per_dir as u32))
 }
 
 /******************************************************************************/
