@@ -100,9 +100,14 @@ fn load_sky_rgba(variant: &SkyVariant) -> SkyImage {
         println!();
     }
 
+    // 640×480 files have absolute palette indices (100-127).
+    // 512×512 files have relative indices (1-14) needing +0x70 → palette 0x71-0x7E.
+    let pal_offset: u8 = if width == 640 { 0 } else { 0x70 };
+
     let mut rgba = vec![0u8; pixel_count * 4];
     for (i, &idx) in indices.iter().enumerate() {
-        let off = idx as usize * 4;
+        let pal_idx = idx.wrapping_add(pal_offset) as usize;
+        let off = pal_idx * 4;
         if off + 2 < pal.len() {
             rgba[i * 4]     = pal[off];
             rgba[i * 4 + 1] = pal[off + 1];

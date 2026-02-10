@@ -14,18 +14,34 @@ most configurations.
 
 ## Data Files
 
-### sky0-{c}.dat — Sky Texture (640×480)
+### sky0-{c}.dat — Sky Texture (two formats)
+
+Files named `sky0-{c}.dat` exist in **two formats** distinguished by file size:
+
+**Format A — 640×480 (sky0-0.dat only)**
 
 | Property | Value |
 |----------|-------|
 | Size | 307,200 bytes (640 × 480) |
-| Format | Raw 8-bit palette indices |
-| Value range | 100–127 (28 unique values, palette entries 0x64–0x7F) |
-| Variants | 0–9, a–z (per level theme, suffix `c` from `Palette_InitializePaths`) |
-| Loaded at | Path stored in `DAT_0059ebf0` |
+| Format | Raw 8-bit **absolute** palette indices |
+| Value range | 100–127 (0x64–0x7F), 28 unique values |
+| Palette offset | None — indices are direct palette lookups |
 
 Used by **Mode 1** (simple scanline renderer) for direct 640×480 framebuffer fill.
-**Important:** These are absolute palette indices — no offset is needed to look up colors.
+Only `sky0-0.dat` uses this format.
+
+**Format B — 512×512 (sky0-1.dat through sky0-z.dat)**
+
+| Property | Value |
+|----------|-------|
+| Size | 262,144 bytes (512 × 512) |
+| Format | Raw 8-bit **relative** indices |
+| Value range | 1–14 (relative indices into sky sub-palette) |
+| Palette offset | **+0x70** → palette entries 0x71–0x7E |
+
+Same format as MSKY files. Used by **Mode 0** (tiled perspective renderer). The
+values are relative indices into the sky sub-palette at palette positions 0x70–0x7F,
+mapped by `Sky_BuildPaletteLUT`.
 
 ### MSKY0-{c}.DAT — Sky Texture (512×512)
 
@@ -37,8 +53,7 @@ Used by **Mode 1** (simple scanline renderer) for direct 640×480 framebuffer fi
 | Variants | 0–9, a, b (per level theme) |
 | Referenced via | `DAT_00599ed4` (sky texture pointer) |
 
-Used by **Mode 0** (tiled perspective renderer). The 16 values are indices into the
-sky sub-palette at palette positions 0x70–0x7F, mapped by `Sky_BuildPaletteLUT`.
+Same format as sky0 Format B. Used by **Mode 0** (tiled perspective renderer).
 
 ### skylens.dat — Hemisphere Lens Distortion Table
 
@@ -402,8 +417,8 @@ The project has a basic sky implementation:
 - **`shaders/sky.wgsl`** — Fullscreen quad with horizontal yaw scrolling only (no lens distortion,
   no perspective projection).
 - **`src/bin/sky_viewer.rs`** — Standalone viewer cycling through sky variants.
-- **`src/main.rs`** — Uses `sky0-{c}.dat` (640×480), uses absolute palette indices directly
-  (no offset — sky0 files already contain indices 0x64–0x7F), renders as flat textured quad.
+- **`src/main.rs`** — Uses `sky0-{c}.dat`, auto-detects format by file size: 640×480 uses
+  absolute indices, 512×512 applies +0x70 offset. Renders as flat textured quad.
 
 ### Not yet implemented
 
