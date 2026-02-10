@@ -8,11 +8,11 @@
 //!   Space       - Pause/Resume
 //!   Up/Down     - Animation speed
 //!   Left/Right  - Frame step (when paused)
-//!   Tab/N/P     - Cycle animation (global index)
-//!   +/-         - Jump 10 animations forward/backward
+//!   Tab/N/P     - Cycle animation (skips static poses)
+//!   +/-         - Jump ~10 animations forward/backward
+//!   1-4         - Quick jump (15=Brave, 20=Shaman, 21=BraveWalk, 26=ShamanWalk)
 //!   T           - Cycle tribe (0-3)
 //!   U           - Cycle unit features overlay
-//!   Q/E         - Rotate camera
 //!   Escape      - Quit
 
 use std::path::{Path, PathBuf};
@@ -35,7 +35,7 @@ use pop3::pop::psfb::ContainerPSFB;
 use pop3::pop::types::BinDeserializer;
 use pop3::pop::animation::{
     AnimationsData, AnimationSequence,
-    discover_unit_combos, build_tribe_atlas,
+    discover_unit_combos, build_tribe_atlas, compute_global_bbox,
     NUM_TRIBES,
 };
 
@@ -177,7 +177,7 @@ fn build_font_texture() -> Vec<u8> {
 const STORED_DIRECTIONS: usize = 5;
 const NUM_DIRECTIONS: usize = 8;
 const DIRS_PER_ANIM: usize = 8;
-const DEFAULT_SPEED: f32 = 0.12;
+const DEFAULT_SPEED: f32 = 0.1;
 const DEFAULT_ANIM: usize = 15; // Brave Idle (from g_PersonAnimationTable)
 
 const TRIBE_NAMES: &[&str] = &["Blue", "Red", "Yellow", "Green"];
@@ -195,6 +195,30 @@ fn get_source_direction(dir: usize) -> (usize, bool) {
         7 => (1, true),
         _ => (0, false),
     }
+}
+
+/// A static pose has ≤1 frame in direction 0 (single-frame self-loop in VFRA).
+fn is_static_pose(sequences: &[AnimationSequence], anim_index: usize) -> bool {
+    let base = anim_index * DIRS_PER_ANIM;
+    if base >= sequences.len() { return true; }
+    sequences[base].frames.len() <= 1
+}
+
+/// Find the next non-static animation in direction `delta` (+1 or -1).
+fn find_next_animated(
+    sequences: &[AnimationSequence],
+    from: usize,
+    delta: i32,
+    total: usize,
+) -> usize {
+    let mut idx = from;
+    for _ in 0..total {
+        idx = (idx as i32 + delta).rem_euclid(total as i32) as usize;
+        if !is_static_pose(sequences, idx) {
+            return idx;
+        }
+    }
+    from
 }
 
 /******************************************************************************/
@@ -217,8 +241,6 @@ fn load_palette(path: &Path) -> Option<Vec<[u8; 4]>> {
 /******************************************************************************/
 
 struct SpriteAtlas {
-    frame_width: u32,
-    frame_height: u32,
     frames_per_dir: u32,
 }
 
@@ -489,6 +511,7 @@ struct App {
     sequences: Vec<AnimationSequence>,
     initial_anim: usize,
     initial_tribe: u8,
+    global_bbox: (i32, i32, i32, i32),
 }
 
 struct ViewerState {
@@ -519,8 +542,8 @@ struct ViewerState {
     anim_timer: f32,
     anim_speed: f32,
     paused: bool,
-    camera_angle: f32,
     last_instant: std::time::Instant,
+
 }
 
 impl App {
@@ -530,6 +553,7 @@ impl App {
         sequences: Vec<AnimationSequence>,
         initial_anim: usize,
         initial_tribe: u8,
+        global_bbox: (i32, i32, i32, i32),
     ) -> Self {
         Self {
             window: None,
@@ -539,6 +563,7 @@ impl App {
             sequences,
             initial_anim,
             initial_tribe,
+            global_bbox,
         }
     }
 }
@@ -573,6 +598,7 @@ impl ViewerState {
         anim_index: usize,
         tribe: u8,
         combo_idx: Option<usize>,
+        global_bbox: (i32, i32, i32, i32),
     ) {
         let base = anim_index * DIRS_PER_ANIM;
 
@@ -582,12 +608,12 @@ impl ViewerState {
         let combo_idx = combo_idx.and_then(|i| if i < combos.len() { Some(i) } else { None });
         let unit_combo = combo_idx.and_then(|i| combos.get(i).copied());
 
-        // Use the shared build_tribe_atlas with explicit combo override
+        // Use the shared build_tribe_atlas with explicit combo override and global bbox
         let combo_override = Some(unit_combo);
-        if let Some((atlas_w, atlas_h, rgba, fw, fh, max_frames)) =
-            build_tribe_atlas(sequences, container, palette, anim_index, combo_override)
+        if let Some((atlas_w, atlas_h, rgba, _fw, _fh, max_frames)) =
+            build_tribe_atlas(sequences, container, palette, anim_index, combo_override, Some(global_bbox))
         {
-            let atlas = SpriteAtlas { frame_width: fw, frame_height: fh, frames_per_dir: max_frames };
+            let atlas = SpriteAtlas { frames_per_dir: max_frames };
             self.sprite_atlas = GpuTexture::new_2d(
                 &self.gpu.device,
                 &self.gpu.queue,
@@ -622,26 +648,8 @@ impl ViewerState {
                 self.bind_groups.push(bg);
             }
 
-            // Rebuild vertex buffers with new aspect ratio
-            let sprite_scale = 80.0;
-            let aspect = atlas.frame_width as f32 / atlas.frame_height as f32;
-            let hw = sprite_scale * aspect;
-            let hh = sprite_scale;
-            let radius = 200.0;
-
-            self.vertex_buffers.clear();
-            for dir in 0..NUM_DIRECTIONS {
-                let angle = dir as f32 * std::f32::consts::TAU / NUM_DIRECTIONS as f32;
-                let cx = angle.sin() * radius;
-                let cy = angle.cos() * radius;
-                let quad = make_quad(cx, cy, hw, hh);
-                let buf = GpuBuffer::new_vertex(
-                    &self.gpu.device,
-                    bytemuck::cast_slice(&quad),
-                    &format!("quad_{}", dir),
-                );
-                self.vertex_buffers.push(buf);
-            }
+            // Vertex buffers use fixed-size quads (built once in resumed()),
+            // so no rebuild needed here.
 
             self.info_text = format_anim_info(anim_index, self.total_anims, tribe, combo_idx, &combos, atlas.frames_per_dir);
             println!("{}", self.info_text);
@@ -675,21 +683,12 @@ impl ViewerState {
         let uv_scale_y = 1.0 / total_rows;
         let frame_uv_x = self.current_frame as f32 / fpd as f32;
 
-        let ca = self.camera_angle.cos();
-        let sa = self.camera_angle.sin();
-        let rot_proj = [
-            [proj[0][0] * ca + proj[1][0] * sa, proj[0][1] * ca + proj[1][1] * sa, 0.0, 0.0],
-            [proj[1][0] * ca - proj[0][0] * sa, proj[1][1] * ca - proj[0][1] * sa, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ];
-
         for dir in 0..NUM_DIRECTIONS {
             let (source_dir, mirrored) = get_source_direction(dir);
             let frame_uv_y = (self.current_tribe as usize * STORED_DIRECTIONS + source_dir) as f32 / total_rows;
 
             let uniforms = SpriteUniforms {
-                projection: rot_proj,
+                projection: proj,
                 uv_offset: [frame_uv_x, frame_uv_y],
                 uv_scale: [uv_scale_x, uv_scale_y],
                 mirror: [if mirrored { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
@@ -715,11 +714,11 @@ impl ViewerState {
             ("Space:      Pause/Resume", white),
             ("N/P/Tab:    Change anim", white),
             ("+/-:        Jump 10 anims", white),
+            ("1-4:        Quick anims", white),
             ("T:          Cycle tribe", white),
             ("U:          Cycle unit features", white),
             ("Up/Down:    Speed", white),
             ("Left/Right: Frame step (paused)", white),
-            ("Q/E:        Rotate", white),
             ("Escape:     Quit", white),
         ];
 
@@ -801,6 +800,7 @@ impl ViewerState {
                 self.current_frame = (self.current_frame + 1) % self.atlas.frames_per_dir.max(1);
             }
         }
+
     }
 
     fn handle_key(
@@ -809,6 +809,7 @@ impl ViewerState {
         sequences: &[AnimationSequence],
         container: &ContainerPSFB,
         palette: &[[u8; 4]],
+        global_bbox: (i32, i32, i32, i32),
     ) {
         match key {
             KeyCode::Space => {
@@ -820,7 +821,7 @@ impl ViewerState {
                 println!("Speed: {:.2}s/frame", self.anim_speed);
             }
             KeyCode::ArrowDown => {
-                self.anim_speed = (self.anim_speed + 0.02).min(1.0);
+                self.anim_speed = (self.anim_speed + 0.02).min(0.5);
                 println!("Speed: {:.2}s/frame", self.anim_speed);
             }
             KeyCode::ArrowRight if self.paused => {
@@ -836,33 +837,27 @@ impl ViewerState {
                 };
                 println!("Frame {}/{}", self.current_frame, self.atlas.frames_per_dir);
             }
-            // Cycle animation forward
+            // Cycle animation forward (skip static poses)
             KeyCode::Tab | KeyCode::KeyN => {
-                let next = (self.current_anim + 1) % self.total_anims;
-                self.rebuild_atlas(sequences, container, palette, next, self.current_tribe, self.current_combo_idx);
+                let next = find_next_animated(sequences, self.current_anim, 1, self.total_anims);
+                self.rebuild_atlas(sequences, container, palette, next, self.current_tribe, self.current_combo_idx, global_bbox);
             }
-            // Cycle animation backward
+            // Cycle animation backward (skip static poses)
             KeyCode::KeyP => {
-                let prev = if self.current_anim == 0 {
-                    self.total_anims - 1
-                } else {
-                    self.current_anim - 1
-                };
-                self.rebuild_atlas(sequences, container, palette, prev, self.current_tribe, self.current_combo_idx);
+                let prev = find_next_animated(sequences, self.current_anim, -1, self.total_anims);
+                self.rebuild_atlas(sequences, container, palette, prev, self.current_tribe, self.current_combo_idx, global_bbox);
             }
-            // Jump 10 animations forward
+            // Jump ~10 animations forward (skip static poses)
             KeyCode::Equal => {
-                let next = (self.current_anim + 10) % self.total_anims;
-                self.rebuild_atlas(sequences, container, palette, next, self.current_tribe, self.current_combo_idx);
+                let target = (self.current_anim + 10) % self.total_anims;
+                let next = find_next_animated(sequences, target.max(1) - 1, 1, self.total_anims);
+                self.rebuild_atlas(sequences, container, palette, next, self.current_tribe, self.current_combo_idx, global_bbox);
             }
-            // Jump 10 animations backward
+            // Jump ~10 animations backward (skip static poses)
             KeyCode::Minus => {
-                let prev = if self.current_anim < 10 {
-                    self.total_anims - (10 - self.current_anim)
-                } else {
-                    self.current_anim - 10
-                };
-                self.rebuild_atlas(sequences, container, palette, prev, self.current_tribe, self.current_combo_idx);
+                let target = (self.current_anim + self.total_anims - 10) % self.total_anims;
+                let prev = find_next_animated(sequences, target + 1, -1, self.total_anims);
+                self.rebuild_atlas(sequences, container, palette, prev, self.current_tribe, self.current_combo_idx, global_bbox);
             }
             // Cycle tribe (UV-only, no atlas rebuild needed since atlas has all 4 tribes)
             KeyCode::KeyT => {
@@ -885,13 +880,20 @@ impl ViewerState {
                         Some(i) => Some(i + 1),
                     }
                 };
-                self.rebuild_atlas(sequences, container, palette, self.current_anim, self.current_tribe, next_combo);
+                self.rebuild_atlas(sequences, container, palette, self.current_anim, self.current_tribe, next_combo, global_bbox);
             }
-            KeyCode::KeyQ => {
-                self.camera_angle += 0.1;
+            // Quick-jump to known animations
+            KeyCode::Digit1 => {
+                self.rebuild_atlas(sequences, container, palette, 15, self.current_tribe, self.current_combo_idx, global_bbox);
             }
-            KeyCode::KeyE => {
-                self.camera_angle -= 0.1;
+            KeyCode::Digit2 => {
+                self.rebuild_atlas(sequences, container, palette, 20, self.current_tribe, self.current_combo_idx, global_bbox);
+            }
+            KeyCode::Digit3 => {
+                self.rebuild_atlas(sequences, container, palette, 21, self.current_tribe, self.current_combo_idx, global_bbox);
+            }
+            KeyCode::Digit4 => {
+                self.rebuild_atlas(sequences, container, palette, 26, self.current_tribe, self.current_combo_idx, global_bbox);
             }
             _ => {}
         }
@@ -909,7 +911,7 @@ impl ApplicationHandler for App {
                 .create_window(
                     WindowAttributes::default()
                         .with_title("Unit Animation Viewer")
-                        .with_inner_size(winit::dpi::LogicalSize::new(900, 700)),
+                        .with_inner_size(winit::dpi::LogicalSize::new(800, 600)),
                 )
                 .unwrap(),
         );
@@ -923,11 +925,11 @@ impl ApplicationHandler for App {
         let initial_tribe = self.initial_tribe;
         let total_anims = self.sequences.len() / DIRS_PER_ANIM;
 
-        let (atlas_w, atlas_h, rgba, fw, fh, max_frames) = build_tribe_atlas(
+        let (atlas_w, atlas_h, rgba, _fw, _fh, max_frames) = build_tribe_atlas(
             &self.sequences, &self.container, &self.palette,
-            initial_anim, Some(None),
+            initial_anim, Some(None), Some(self.global_bbox),
         ).expect("Failed to build initial animation atlas");
-        let atlas = SpriteAtlas { frame_width: fw, frame_height: fh, frames_per_dir: max_frames };
+        let atlas = SpriteAtlas { frames_per_dir: max_frames };
 
         let base = initial_anim * DIRS_PER_ANIM;
         let initial_combos = discover_unit_combos(&self.sequences, base);
@@ -1035,10 +1037,9 @@ impl ApplicationHandler for App {
             "sprite_pipeline",
         );
 
-        let sprite_scale = 80.0;
-        let aspect = atlas.frame_width as f32 / atlas.frame_height as f32;
-        let hw = sprite_scale * aspect;
-        let hh = sprite_scale;
+        // Fixed-size quads (matching bevy_demo5's fixed Rectangle::new(100, 100))
+        let hw = 130.0;  // 260×340 default quad size
+        let hh = 170.0;
         let radius = 200.0;
 
         let mut vertex_buffers = Vec::new();
@@ -1081,7 +1082,6 @@ impl ApplicationHandler for App {
             anim_timer: 0.0,
             anim_speed: DEFAULT_SPEED,
             paused: false,
-            camera_angle: 0.0,
             last_instant: std::time::Instant::now(),
         });
     }
@@ -1104,7 +1104,7 @@ impl ApplicationHandler for App {
                             return;
                         }
                         if let Some(state) = &mut self.state {
-                            state.handle_key(key, &self.sequences, &self.container, &self.palette);
+                            state.handle_key(key, &self.sequences, &self.container, &self.palette, self.global_bbox);
                         }
                     }
                 }
@@ -1187,6 +1187,12 @@ fn main() {
     println!("Loaded {} animation sequences ({} animations)",
         sequences.len(), sequences.len() / 8);
 
+    // Compute global bounding box across ALL animations for consistent sizing
+    let global_bbox = compute_global_bbox(&sequences, &container);
+    let (gx0, gy0, gx1, gy1) = global_bbox;
+    println!("Global bbox: {}x{} (x: {}..{}, y: {}..{})",
+        gx1 - gx0, gy1 - gy0, gx0, gx1, gy0, gy1);
+
     let env = env_logger::Env::default()
         .filter_or("F_LOG_LEVEL", "info")
         .write_style_or("F_LOG_STYLE", "always");
@@ -1195,17 +1201,17 @@ fn main() {
     println!("\nUnit Animation Viewer");
     println!("---------------------");
     println!("Space:       Pause/Resume");
-    println!("N/P/Tab:     Change anim");
-    println!("+/-:         Jump 10 anims");
+    println!("N/P/Tab:     Change anim (skips static)");
+    println!("+/-:         Jump ~10 anims");
+    println!("1-4:         Quick anims (Brave/Shaman/BraveWalk/ShamanWalk)");
     println!("T:           Cycle tribe color (Blue/Red/Yellow/Green)");
     println!("U:           Cycle unit features");
     println!("Up/Down:     Speed");
     println!("Left/Right:  Frame step (paused)");
-    println!("Q/E:         Rotate");
     println!("Escape:      Quit");
     println!();
 
     let event_loop = EventLoop::new().unwrap();
-    let mut app = App::new(container, palette, sequences, initial_anim, initial_tribe);
+    let mut app = App::new(container, palette, sequences, initial_anim, initial_tribe, global_bbox);
     event_loop.run_app(&mut app).unwrap();
 }

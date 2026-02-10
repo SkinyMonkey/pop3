@@ -415,38 +415,19 @@ pub fn composite_frame(
     rgba
 }
 
-/// Build a sprite atlas for an animation with all 4 tribes.
-/// Layout: rows = 4 tribes × 5 stored directions, cols = frames.
-/// Returns (atlas_w, atlas_h, rgba, frame_w, frame_h, frames_per_dir) or None.
-/// `unit_combo_override`: `None` = auto-detect first combo, `Some(x)` = use `x` as the combo.
-pub fn build_tribe_atlas(
+/// Compute a bounding box across ALL animations for consistent frame sizing.
+/// Returns (min_x, min_y, max_x, max_y) encompassing all non-hidden elements.
+pub fn compute_global_bbox(
     sequences: &[AnimationSequence],
     container: &ContainerPSFB,
-    palette: &[[u8; 4]],
-    anim_index: usize,
-    unit_combo_override: Option<Option<(u16, u16)>>,
-) -> Option<(u32, u32, Vec<u8>, u32, u32, u32)> {
-    let base = anim_index * DIRS_PER_ANIM;
-
-    // Count max frames per direction
-    let mut max_frames = 0usize;
-    for dir in 0..STORED_DIRECTIONS {
-        let seq_idx = base + dir;
-        if seq_idx >= sequences.len() { continue; }
-        max_frames = max_frames.max(sequences[seq_idx].frames.len());
-    }
-    if max_frames == 0 { return None; }
-
-    // Compute bounding box across all elements in all directions
+) -> (i32, i32, i32, i32) {
     let mut min_x: i32 = 0;
     let mut min_y: i32 = 0;
     let mut max_x: i32 = 1;
     let mut max_y: i32 = 1;
 
-    for dir in 0..STORED_DIRECTIONS {
-        let seq_idx = base + dir;
-        if seq_idx >= sequences.len() { continue; }
-        for frame in &sequences[seq_idx].frames {
+    for seq in sequences {
+        for frame in &seq.frames {
             for elem in &frame.sprites {
                 if elem.is_hidden() { continue; }
                 if let Some(info) = container.get_info(elem.sprite_index) {
@@ -461,6 +442,82 @@ pub fn build_tribe_atlas(
         }
     }
 
+    (min_x, min_y, max_x, max_y)
+}
+
+/// Build a sprite atlas for an animation with all 4 tribes.
+/// Layout: rows = 4 tribes × 5 stored directions, cols = frames.
+/// Returns (atlas_w, atlas_h, rgba, frame_w, frame_h, frames_per_dir) or None.
+/// `unit_combo_override`: `None` = auto-detect first combo, `Some(x)` = use `x` as the combo.
+/// `bbox_override`: when `Some`, use the provided (min_x, min_y, max_x, max_y) instead of
+/// computing a per-animation bounding box. Pass a global bbox for consistent sizing across animations.
+pub fn build_tribe_atlas(
+    sequences: &[AnimationSequence],
+    container: &ContainerPSFB,
+    palette: &[[u8; 4]],
+    anim_index: usize,
+    unit_combo_override: Option<Option<(u16, u16)>>,
+    bbox_override: Option<(i32, i32, i32, i32)>,
+) -> Option<(u32, u32, Vec<u8>, u32, u32, u32)> {
+    let base = anim_index * DIRS_PER_ANIM;
+
+    // Count max frames per direction
+    let mut max_frames = 0usize;
+    for dir in 0..STORED_DIRECTIONS {
+        let seq_idx = base + dir;
+        if seq_idx >= sequences.len() { continue; }
+        max_frames = max_frames.max(sequences[seq_idx].frames.len());
+    }
+    if max_frames == 0 { return None; }
+
+    // Resolve unit combo BEFORE bounding box so we can filter elements
+    let unit_combo = match unit_combo_override {
+        Some(combo) => combo,
+        None => {
+            let combos = discover_unit_combos(sequences, base);
+            combos.first().copied()
+        }
+    };
+
+    let (min_x, min_y, max_x, max_y) = if let Some(bbox) = bbox_override {
+        bbox
+    } else {
+        // Compute bounding box across rendered elements only.
+        // Type-specific elements (uvar5 > 1) are excluded when unit_combo is None,
+        // matching bevy_demo5 which filters elements before compositing.
+        let mut min_x: i32 = 0;
+        let mut min_y: i32 = 0;
+        let mut max_x: i32 = 1;
+        let mut max_y: i32 = 1;
+
+        for dir in 0..STORED_DIRECTIONS {
+            let seq_idx = base + dir;
+            if seq_idx >= sequences.len() { continue; }
+            for frame in &sequences[seq_idx].frames {
+                for elem in &frame.sprites {
+                    if elem.is_hidden() { continue; }
+                    if elem.is_type_specific() {
+                        match unit_combo {
+                            Some((layer, high)) => {
+                                if elem.uvar5 != layer || elem.tribe as u16 != high { continue; }
+                            }
+                            None => continue,
+                        }
+                    }
+                    if let Some(info) = container.get_info(elem.sprite_index) {
+                        let ex = elem.coord_x as i32;
+                        let ey = elem.coord_y as i32;
+                        min_x = min_x.min(ex);
+                        min_y = min_y.min(ey);
+                        max_x = max_x.max(ex + info.width as i32);
+                        max_y = max_y.max(ey + info.height as i32);
+                    }
+                }
+            }
+        }
+        (min_x, min_y, max_x, max_y)
+    };
+
     let fw = ((max_x - min_x) as u32).max(1).min(512);
     let fh = ((max_y - min_y) as u32).max(1).min(512);
     let total_rows = (NUM_TRIBES * STORED_DIRECTIONS) as u32;
@@ -470,15 +527,6 @@ pub fn build_tribe_atlas(
     if atlas_w == 0 || atlas_h == 0 { return None; }
 
     let mut rgba = vec![0u8; (atlas_w * atlas_h * 4) as usize];
-
-    // Resolve unit combo: override takes precedence, otherwise auto-detect first combo
-    let unit_combo = match unit_combo_override {
-        Some(combo) => combo,
-        None => {
-            let combos = discover_unit_combos(sequences, base);
-            combos.first().copied()
-        }
-    };
 
     for tribe in 0..NUM_TRIBES {
         for dir in 0..STORED_DIRECTIONS {
