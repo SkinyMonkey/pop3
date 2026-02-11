@@ -85,8 +85,10 @@ fn sample_dome(screen_uv: vec2<f32>) -> vec4<f32> {
 }
 
 // Mode 1: Simple scrolling (matches Sky_RenderSimple).
-// Original: tex_u = (origin_u >> 16) + origin_v_offset*2 + x
+// Original: tex_u = (origin_u >> 16) + angle*2 + x
 //           tex_v = (origin_v >> 18) + y * 2
+// Demo note: the original cross-term (angle*2) is not modeled explicitly here;
+// motion is driven by params.u_origin/params.v_origin.
 // Note the 2x vertical scale — the 512×512 texture is sampled at double
 // density vertically to fill the 384-line viewport.
 fn sample_simple(screen_uv: vec2<f32>) -> vec4<f32> {

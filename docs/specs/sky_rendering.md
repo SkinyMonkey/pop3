@@ -5,7 +5,7 @@
 The sky in Populous: The Beginning is rendered as a **textured hemisphere** projected
 onto the framebuffer before terrain drawing. The system uses a 512×512 paletted
 texture sampled through a pre-computed lens distortion table (`skylens.dat`), with
-the camera yaw driving parallax rotation. The entire sky fills the screen each
+camera yaw influencing sky alignment/parallax. The entire sky fills the screen each
 frame; terrain is then drawn on top, overdrawing sky pixels below the horizon.
 
 The sky renderer supports **4 modes** selected at runtime based on hardware flags
@@ -48,8 +48,8 @@ mapped by `Sky_BuildPaletteLUT`.
 | Property | Value |
 |----------|-------|
 | Size | 262,144 bytes (512 × 512) |
-| Format | Raw 8-bit indices, values 0–15 |
-| Value range | 0–15 (relative indices into sky sub-palette) |
+| Format | Raw 8-bit relative indices (same encoding as sky0 Format B) |
+| Value range | 1–14 in observed data (0 = transparent/background, 15 unused) |
 | Variants | 0–9, a, b (per level theme) |
 | Referenced via | `DAT_00599ed4` (sky texture pointer) |
 
@@ -145,7 +145,7 @@ Derived from rotation state, consumed by tile renderer.
 |---------|------|------|-------------|
 | 0x0086514C | `i32` | screen_width_copy | Copy of screen width |
 | 0x00865150 | `i32` | screen_height_copy | Copy of screen height |
-| 0x00865154 | `i32` | sky_center_x | `start + (visible_width / 2)` |
+| 0x00865154 | `i32` | sky_center_x | `camera_yaw + (screen_width - camera_yaw) / 2` |
 | 0x00865158 | `i32` | sky_center_y | Always 0 |
 | 0x0086515C | `i32` | u_scale | `0x2800000 / visible_width` |
 | 0x00865160 | `i32` | v_scale | `0xC80000 / visible_height` |
@@ -218,9 +218,10 @@ renderer.
 
 6. **Texture pointer**: Copies `g_sky_texture_ptr` to render context.
 
-7. **Camera rotation delta**: Reads per-level camera parameters from the spell
-   data table at `0x885784` (sin offset, cos offset, tilt). Calls
-   `Sky_UpdateRotation` to apply camera delta to the rotation accumulator.
+7. **Camera rotation feed**: Reads per-level values from spell data table
+   `0x885784` and passes them to `Sky_UpdateRotation`. These values are constant
+   per level; after first-frame target initialization, frame-to-frame deltas are
+   typically zero, so rotation accumulators usually remain unchanged.
 
 8. **Derive params**: Calls `Sky_ComputeParams` to convert rotation state into
    the UV origin + sin/cos values used by the tile renderer.
@@ -258,9 +259,9 @@ arithmetic for toroidal panning.
 1. Compute deltas from previous target: `dx = new_yaw - old_yaw`, `du = new_u - old_u`,
    `dv = new_v - old_v`
 2. Wrap deltas to prevent jumps: yaw wraps at ±0x400 (±1024), U/V wrap at ±0x8000
-3. Rotate the U/V deltas by the current angle using sin/cos lookup:
-   - `u_acc += du * cos(angle) + dv * sin(angle)`
-   - `v_acc += dv * cos(angle) - du * sin(angle)`
+3. Rotate the U/V deltas using sin/cos lookup at `lookup = (angle - new_yaw) & 0x7FF`:
+   - `u_acc += du * cos(lookup) + dv * sin(lookup)`
+   - `v_acc += dv * cos(lookup) - du * sin(lookup)`
    (64-bit multiply, result >> 16 for fixed-point)
 4. Update angle: `angle = (angle + dx/2) & 0x7FF`
 
@@ -339,10 +340,17 @@ without perspective correction.
 
 **Algorithm:** For each scanline `y` in `[clip_top, clip_bottom)`:
 - For each pixel `x` in `[clip_right-1, clip_left]` (right to left):
-  - `tex_u = (origin_u >> 16) + origin_v_offset * 2 + x`
+  - `tex_u = (origin_u >> 16) + angle * 2 + x`
   - `tex_v = (origin_v >> 18) + y * 2`
   - `pixel = texture[(tex_u & 0x1FF) + (tex_v & 0x1FF) * 512]`
   - Write pixel to `framebuffer[y * stride + x]`
+
+`angle` is loaded from render params offset `+0x08` (raw rotation angle), not from
+`v_origin`.
+
+In original runtime behavior, `origin_u` and `angle` often remain 0 (constant
+spell inputs, no accumulator drift), so Mode 1 effectively samples
+`tex_u = x & 0x1FF`, `tex_v = y * 2` (static sky).
 
 ### Sky_RenderParallax (Mode 2) @ 0x004dd790
 
@@ -410,23 +418,46 @@ render avoids needing to track the exact horizon boundary.
 
 ## Current Rust Implementation Status
 
-The project has a basic sky implementation:
+Current sky work is centered on the standalone dome demo:
 
-- **`src/pop/level.rs:build_sky_interp_table()`** — Matches `Sky_BuildPaletteLUT` (0x004dc3f0).
-  Sorts 13 sky palette entries by luminance and builds 256-entry quantization table.
-- **`shaders/sky.wgsl`** — Fullscreen quad with horizontal yaw scrolling only (no lens distortion,
-  no perspective projection).
-- **`src/bin/sky_viewer.rs`** — Standalone viewer cycling through sky variants.
-- **`src/main.rs`** — Uses `sky0-{c}.dat`, auto-detects format by file size: 640×480 uses
-  absolute indices, 512×512 applies +0x70 offset. Renders as flat textured quad.
+- **`shaders/sky_dome.wgsl`** — 4-mode shader approximation (dome/simple/parallax/flat).
+- **`src/bin/sky_dome_demo.rs` (`SkyCamera`)** — rotation state with
+  `update_rotation()` and `to_params()`.
+- **`src/bin/sky_dome_demo.rs` (`SkyDomeParams`)** — 32-byte GPU uniform matching
+  shader layout.
+- **`src/bin/sky_dome_demo.rs`** — standalone viewer with mode switching and
+  theme cycling.
+- **Format auto-detection by file size** — `307200` → 640×480 (absolute palette
+  indices), `262144` → 512×512 (relative indices + `0x70` offset).
+- **Continuous drift + yaw-driven panning** are enabled for visual motion
+  (enhancement relative to original behavior).
 
 ### Not yet implemented
 
-- Hemisphere lens distortion (skylens.dat)
-- Perspective-correct tile-based rendering (Mode 0)
-- Parallax gradient mode (Mode 2)
-- Camera rotation accumulation (`Sky_UpdateRotation`)
-- MSKY 512×512 texture support (used by Mode 0)
+- `skylens.dat` integration for true Mode 0 vertical distortion
+- Original viewport-center Mode 0 parallax (`sky_center_x`-driven center shift)
+- Viewport-computed fixed-point scales (`0x2800000/visible_width`,
+  `0xC80000/visible_height`) instead of hardcoded demo scales
+
+## Implementation Notes
+
+These notes document intentional differences between the current demo and
+original game behavior:
+
+1. **Sky panning is an enhancement**:
+   Original per-level spell values are constant; after first-frame initialization,
+   `u_accumulator`, `v_accumulator`, and `angle` usually stay at 0.
+   The demo intentionally adds continuous drift (`rate = 0.003`) and yaw-driven
+   panning for visual motion.
+2. **Mode 0 parallax mechanism differs**:
+   Original Mode 0 parallax primarily comes from shifting projection center
+   (`sky_center_x`) from camera yaw. The demo pans UVs via `SkyCamera.u_acc`.
+3. **Dome projection is an approximation**:
+   Original uses horizontal depth term plus `skylens.dat` vertical distortion.
+   The demo uses radial `sx² + sy²` hemisphere curvature.
+4. **Scale values are currently hardcoded**:
+   Demo uses `u_scale = 2.5`, `v_scale = 1.8`, `horizon = 1.5` rather than
+   viewport-derived fixed-point values from original code.
 
 ## Renamed Functions
 
