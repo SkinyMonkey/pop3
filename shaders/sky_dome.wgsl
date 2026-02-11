@@ -1,12 +1,10 @@
-// sky_dome.wgsl — Sky hemisphere projection faithful to the original game.
+// sky_dome.wgsl — Sky hemisphere projection demo.
 //
-// Implements the perspective projection from Sky_RenderTiled (0x004dcc30):
-//   1. Map screen pixel to view-space offset from center
-//   2. Scale by lens factors (u_scale, v_scale)
-//   3. Apply hemisphere depth: depth = horizon - (sx^2 >> 12)
-//   4. Compute perspective divisor
-//   5. Rotate UV by camera angle
-//   6. Sample 512x512 sky texture with wrapping
+// Approximates the 4 rendering modes from the original game:
+//   Mode 0: Hemisphere dome projection (Sky_RenderTiled)
+//   Mode 1: Simple scrolling (Sky_RenderSimple)
+//   Mode 2: Vertical gradient parallax (Sky_RenderParallax)
+//   Mode 3: Flat fill (Sky_RenderFlatFill)
 
 struct SkyDomeParams {
     // Camera rotation
@@ -49,34 +47,32 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return out;
 }
 
-// Mode 0: Hemisphere projection (matches Sky_RenderTiled)
+// Mode 0: Hemisphere dome projection (approximates Sky_RenderTiled).
+//
+// Original uses depth = horizon - sx² with only horizontal curvature and
+// skylens.dat for vertical distortion. We approximate with radial hemisphere:
+// depth = horizon - r² where r² = sx² + sy², giving proper dome curvature.
+// Perspective = horizon / (horizon - depth), clamped to 1.0 (matching original
+// 0x10000 clamp in 16.16 fixed-point). The projected (sx, sy) vector is rotated
+// by camera angle to produce final UV.
 fn sample_dome(screen_uv: vec2<f32>) -> vec4<f32> {
-    // Map screen UV to centered coordinates (-0.5 .. +0.5)
     let cx = screen_uv.x - 0.5;
     let cy = screen_uv.y - 0.5;
 
-    // Scale by lens factors
     let sx = cx * params.u_scale;
     let sy = cy * params.v_scale;
 
-    // Hemisphere depth: depth = horizon - sx^2 / curvature_divisor
-    // In the original: depth = horizon - (sx*sx >> 12)
-    // We normalize: the divisor 4096 (>>12) relative to the scale
-    let depth = params.horizon - (sx * sx * 0.25);
+    // Radial hemisphere: curvature from both axes
+    let r_sq = sx * sx + sy * sy;
+    let depth = params.horizon - r_sq * 0.25;
 
-    // Perspective divisor: perspective = horizon / (horizon - depth)
-    // When depth approaches horizon, clamp to avoid division by zero
-    let denom = params.horizon - depth;
-    let perspective = select(
-        params.horizon / denom,
-        64.0,
-        abs(denom) < 0.001
-    );
+    // Perspective: clamped to 1.0 (original clamps to 0x10000 in 16.16 = 1.0)
+    let denom = max(params.horizon - depth, 0.01);
+    let perspective = min(params.horizon / denom, 1.0);
 
-    // Rotate and project UV — both sx and sy contribute after perspective scaling.
-    // This is a 2D rotation of the perspective-projected (sx, sy) vector by camera angle.
-    let proj_x = sx * perspective * 0.5;
-    let proj_y = sy * perspective * 0.5;
+    // 2D rotation of perspective-projected screen vector by camera angle
+    let proj_x = sx * perspective;
+    let proj_y = sy * perspective;
 
     let u = params.u_origin
           + proj_x * params.cos_angle
@@ -88,36 +84,54 @@ fn sample_dome(screen_uv: vec2<f32>) -> vec4<f32> {
     return textureSample(sky_texture, sky_sampler, vec2<f32>(u, v));
 }
 
-// Mode 1: Simple scrolling (matches Sky_RenderSimple)
+// Mode 1: Simple scrolling (matches Sky_RenderSimple).
+// Original: tex_u = (origin_u >> 16) + origin_v_offset*2 + x
+//           tex_v = (origin_v >> 18) + y * 2
+// Note the 2x vertical scale — the 512×512 texture is sampled at double
+// density vertically to fill the 384-line viewport.
 fn sample_simple(screen_uv: vec2<f32>) -> vec4<f32> {
     let u = screen_uv.x + params.u_origin;
-    let v = screen_uv.y + params.v_origin;
+    let v = screen_uv.y * 2.0 + params.v_origin;
     return textureSample(sky_texture, sky_sampler, vec2<f32>(u, v));
 }
 
-// Mode 2: Vertical gradient parallax (matches Sky_RenderParallax)
+// Mode 2: Vertical gradient parallax (matches Sky_RenderParallax).
+// Original fills each scanline with a SINGLE color derived from a vertical
+// brightness gradient through the palette LUT, with 4×4 ordered dithering
+// to reduce banding. We approximate by sampling the texture along the
+// vertical center, dithered.
 fn sample_parallax(screen_uv: vec2<f32>) -> vec4<f32> {
-    // Dither matrix (4x4 Bayer, normalized)
+    // Original dither matrix from g_dither_matrix (0x0056d2f0):
+    // 00 20 08 28 30 10 38 18 0C 2C 04 24 3C 1C 34 14
+    // Normalized to [0, 1) range (divide by 64)
     let dither = array<f32, 16>(
-        0.0/64.0, 32.0/64.0,  8.0/64.0, 40.0/64.0,
-       48.0/64.0, 16.0/64.0, 56.0/64.0, 24.0/64.0,
-       12.0/64.0, 44.0/64.0,  4.0/64.0, 36.0/64.0,
-       60.0/64.0, 28.0/64.0, 52.0/64.0, 20.0/64.0
+         0.0/64.0, 32.0/64.0,  8.0/64.0, 40.0/64.0,
+        48.0/64.0, 16.0/64.0, 56.0/64.0, 24.0/64.0,
+        12.0/64.0, 44.0/64.0,  4.0/64.0, 36.0/64.0,
+        60.0/64.0, 28.0/64.0, 52.0/64.0, 20.0/64.0
     );
 
-    // Vertical gradient with dither
-    let t = screen_uv.y;
+    // Pixel coordinates for dither lookup
+    let tex_size = vec2<f32>(textureDimensions(sky_texture, 0));
+    let px = vec2<i32>(screen_uv * tex_size);
+    let dither_idx = (px.y & 3) * 4 + (px.x & 3);
+    let dither_val = dither[dither_idx];
 
-    // Sample at dithered position (use texture as color ramp)
-    let u = params.u_origin + 0.5;
-    let v = t;
-    return textureSample(sky_texture, sky_sampler, vec2<f32>(u, v));
+    // Vertical gradient: t goes from 0 (top = dark/zenith) to 1 (bottom = bright/horizon)
+    // Apply dither to break banding — original adds dither to brightness then quantizes
+    let t = clamp(screen_uv.y + dither_val * 0.04, 0.0, 1.0);
+
+    // Sample texture center column at dithered V — the sky texture's vertical
+    // center naturally provides a brightness gradient from dark (top) to bright (bottom)
+    return textureSample(sky_texture, sky_sampler, vec2<f32>(0.5, t));
 }
 
-// Mode 3: Flat fill (matches Sky_RenderFlatFill — palette 0x7E)
+// Mode 3: Flat fill (matches Sky_RenderFlatFill).
+// Original fills entire sky with palette index 0x7E (next-to-brightest sky color).
+// We sample the brightest area of the texture as approximation.
 fn sample_flat() -> vec4<f32> {
-    // Sample center of texture for a representative sky color
-    return textureSample(sky_texture, sky_sampler, vec2<f32>(0.5, 0.5));
+    // Sample near bottom-center — the brightest sky color in the gradient
+    return textureSample(sky_texture, sky_sampler, vec2<f32>(0.5, 0.9));
 }
 
 @fragment
