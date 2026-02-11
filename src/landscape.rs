@@ -6,6 +6,7 @@ use cgmath::{Vector4, Vector3, Vector2};
 
 use crate::model::{Triangle, VertexModel, MeshModel};
 use crate::envelop::GpuModel;
+use crate::pop::objects::Shape;
 
 pub type LandscapeModel = MeshModel<Vector2<u8>, u16>;
 
@@ -112,6 +113,184 @@ impl<const N: usize> LandscapeMesh<N> {
 
     pub fn height_at(&self, x: usize, y: usize) -> u16 {
         self.heights[y % N][x % N]
+    }
+
+    pub fn set_height_at(&mut self, x: usize, y: usize, h: u16) {
+        self.heights[y % N][x % N] = h;
+    }
+
+    /// Bilinear height interpolation at fractional cell position.
+    /// cell_x/cell_y are in cell units (0.0 to N-1). Handles toroidal wrapping.
+    /// Returns height in world units (already multiplied by height_scale).
+    ///
+    /// Matches the original game's Terrain_GetHeightAtPoint (0x004E8E50).
+    /// Uses "/" diagonal split consistent with gen_mesh() triangle layout.
+    pub fn interpolate_height_at(&self, cell_x: f32, cell_y: f32) -> f32 {
+        let ix = cell_x.floor() as i32;
+        let iy = cell_y.floor() as i32;
+        let fx = cell_x - ix as f32; // fractional 0..1
+        let fy = cell_y - iy as f32;
+
+        let x0 = ((ix % N as i32 + N as i32) as usize) % N;
+        let y0 = ((iy % N as i32 + N as i32) as usize) % N;
+        let x1 = (x0 + 1) % N;
+        let y1 = (y0 + 1) % N;
+
+        let h00 = self.heights[y0][x0] as f32;
+        let h10 = self.heights[y0][x1] as f32;
+        let h01 = self.heights[y1][x0] as f32;
+        let h11 = self.heights[y1][x1] as f32;
+
+        // "/" diagonal split: same as gen_mesh() triangle layout
+        let h = if fx + fy <= 1.0 {
+            // Lower-left triangle: (0,0)-(0,1)-(1,0)
+            h00 + (h10 - h00) * fx + (h01 - h00) * fy
+        } else {
+            // Upper-right triangle: (1,1)-(0,1)-(1,0)
+            h11 + (h01 - h11) * (1.0 - fx) + (h10 - h11) * (1.0 - fy)
+        };
+
+        h * self.height_scale
+    }
+
+    /// Flatten terrain under a building footprint.
+    ///
+    /// Matches Building_FlattenTerrain (0x0042F2A0):
+    /// 1. Samples all cell heights in footprint
+    /// 2. Computes average (or min if use_average=false)
+    /// 3. Writes uniform height to all footprint cells
+    /// 4. Smooths surrounding terrain
+    pub fn flatten_building_footprint(
+        &mut self,
+        cell_x: usize, cell_y: usize, // building center cell
+        shape: &Shape,
+        use_average: bool,
+    ) {
+        let w = shape.width as usize;
+        let h = shape.height as usize;
+        if w == 0 || h == 0 { return; }
+
+        // Corner = center - origin (with toroidal wrap)
+        let corner_x = (cell_x + N - shape.origin_x as usize) % N;
+        let corner_y = (cell_y + N - shape.origin_z as usize) % N;
+
+        // Pass 1: Sample heights and compute target
+        let mut sum: u64 = 0;
+        let mut min_h: u16 = u16::MAX;
+        let mut count: u32 = 0;
+        for dy in 0..h {
+            for dx in 0..w {
+                let mask_idx = dy * w + dx;
+                if mask_idx < 40 && (shape.cell_mask[mask_idx] & 0x01) != 0 {
+                    let cx = (corner_x + dx) % N;
+                    let cy = (corner_y + dy) % N;
+                    // Sample all 4 corners of this cell
+                    let cx1 = (cx + 1) % N;
+                    let cy1 = (cy + 1) % N;
+                    let h00 = self.heights[cy][cx];
+                    let h10 = self.heights[cy][cx1];
+                    let h01 = self.heights[cy1][cx];
+                    let h11 = self.heights[cy1][cx1];
+                    sum += h00 as u64 + h10 as u64 + h01 as u64 + h11 as u64;
+                    min_h = min_h.min(h00).min(h10).min(h01).min(h11);
+                    count += 4;
+                }
+            }
+        }
+
+        if count == 0 { return; }
+
+        let target = if use_average {
+            (sum / count as u64) as u16
+        } else {
+            min_h
+        };
+        let target = target.max(1);
+
+        // Pass 2: Write target height to all footprint cells
+        for dy in 0..h {
+            for dx in 0..w {
+                let mask_idx = dy * w + dx;
+                if mask_idx < 40 && (shape.cell_mask[mask_idx] & 0x01) != 0 {
+                    let cx = (corner_x + dx) % N;
+                    let cy = (corner_y + dy) % N;
+                    let cx1 = (cx + 1) % N;
+                    let cy1 = (cy + 1) % N;
+                    self.heights[cy][cx] = target;
+                    self.heights[cy][cx1] = target;
+                    self.heights[cy1][cx] = target;
+                    self.heights[cy1][cx1] = target;
+                }
+            }
+        }
+
+        // Pass 3: Smooth surrounding terrain
+        let radius = (w.max(h) / 2) + 1;
+        self.smooth_terrain_area(cell_x, cell_y, radius, corner_x, corner_y, w, h, shape);
+    }
+
+    /// Smooth terrain transitions around a flattened area.
+    /// Averages heights at border cells to create gradual transitions.
+    fn smooth_terrain_area(
+        &mut self,
+        center_x: usize, center_y: usize,
+        radius: usize,
+        corner_x: usize, corner_y: usize,
+        fp_w: usize, fp_h: usize,
+        shape: &Shape,
+    ) {
+        let r = radius + 1;
+        // Iterate over a ring around the footprint
+        let start_x = (center_x + N - r) % N;
+        let start_y = (center_y + N - r) % N;
+        let diameter = r * 2 + 1;
+
+        for dy in 0..diameter {
+            for dx in 0..diameter {
+                let cx = (start_x + dx) % N;
+                let cy = (start_y + dy) % N;
+
+                // Skip cells inside the footprint
+                let rel_x = (cx + N - corner_x) % N;
+                let rel_y = (cy + N - corner_y) % N;
+                if rel_x < fp_w && rel_y < fp_h {
+                    let mask_idx = rel_y * fp_w + rel_x;
+                    if mask_idx < 40 && (shape.cell_mask[mask_idx] & 0x01) != 0 {
+                        continue;
+                    }
+                }
+
+                // Average with neighbors
+                let cx1 = (cx + 1) % N;
+                let cy1 = (cy + 1) % N;
+                let cxm = (cx + N - 1) % N;
+                let cym = (cy + N - 1) % N;
+
+                let h_center = self.heights[cy][cx] as u32;
+                let h_right = self.heights[cy][cx1] as u32;
+                let h_left = self.heights[cy][cxm] as u32;
+                let h_down = self.heights[cy1][cx] as u32;
+                let h_up = self.heights[cym][cx] as u32;
+
+                let avg = (h_center * 4 + h_right + h_left + h_down + h_up) / 8;
+                self.heights[cy][cx] = avg as u16;
+            }
+        }
+    }
+
+    pub fn heights(&self) -> &[[u16; N]; N] {
+        &self.heights
+    }
+
+    /// Export heights as Vec<u32> for GPU buffer upload (matches Landscape::to_vec format).
+    pub fn heights_to_gpu_vec(&self) -> Vec<u32> {
+        let mut vec = vec![0u32; N * N];
+        for i in 0..N {
+            for j in 0..N {
+                vec[i * N + j] = self.heights[i][j] as u32;
+            }
+        }
+        vec
     }
 
     pub fn step(&self) -> f32 {

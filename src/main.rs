@@ -474,6 +474,14 @@ fn build_object_markers(
         let gx = vis_x * step;
         let gy = vis_y * step;
 
+        // Skip objects outside the visible globe disc
+        let dx_cull = gx - center;
+        let dy_cull = gy - center;
+        let viewport_radius = center * 0.9;
+        if dx_cull * dx_cull + dy_cull * dy_cull > viewport_radius * viewport_radius {
+            continue;
+        }
+
         let ix = (obj.cell_x as usize).min(127);
         let iy = (obj.cell_y as usize).min(127);
         let gz = landscape.height_at(ix, iy) as f32 * height_scale;
@@ -647,11 +655,10 @@ fn build_selection_rings(
 
 fn build_building_meshes(
     device: &wgpu::Device, objects: &[LevelObject], objects_3d: &[Option<Object3D>],
-    shapes: &[Shape], landscape: &LandscapeMesh<128>, curvature_scale: f32,
+    _shapes: &[Shape], landscape: &LandscapeMesh<128>, curvature_scale: f32,
 ) -> ModelEnvelop<TexModel> {
     let mut combined: TexModel = MeshModel::new();
     let step = landscape.step();
-    let height_scale = landscape.height_scale();
     let w = landscape.width() as f32;
     let shift = landscape.get_shift_vector();
     let center = (w - 1.0) * step / 2.0;
@@ -680,18 +687,13 @@ fn build_building_meshes(
         let gx = vis_x * step;
         let gy = vis_y * step;
 
-        let ix = (obj.cell_x as usize).min(127);
-        let iy = (obj.cell_y as usize).min(127);
-        let gz = landscape.height_at(ix, iy) as f32 * height_scale;
-        // TODO: height averaging across footprint — needs correct shapes_index mapping
-        // (ObjectRaw.shapes_index may not be a direct SHAPES.DAT index)
-        eprintln!("[bldg] subtype={} angle={} shape_idx={} gz={:.3}",
-            obj.subtype, obj.angle, obj3d.shapes_index(), gz);
-
-        let dx = gx - center;
-        let dy = gy - center;
-        let curvature_offset = (dx * dx + dy * dy) * curvature_scale;
-        let z_base = gz - curvature_offset;
+        // Skip buildings outside the visible globe disc (matching landscape viewport fade)
+        let dx_cull = gx - center;
+        let dy_cull = gy - center;
+        let viewport_radius = center * 0.9;
+        if dx_cull * dx_cull + dy_cull * dy_cull > viewport_radius * viewport_radius {
+            continue;
+        }
 
         // Rotate model vertices in the horizontal plane (model X/Z -> world X/Y)
         let angle_rad = (obj.angle as f32) * std::f32::consts::TAU / 2048.0;
@@ -699,31 +701,38 @@ fn build_building_meshes(
         let sin_a = angle_rad.sin();
 
         let base_idx = combined.vertices.len() as u16;
-        let first_vert = combined.vertices.len();
         for v in &local_model.vertices {
             let rx = v.coord.x * cos_a - v.coord.z * sin_a;
             let rz = v.coord.x * sin_a + v.coord.z * cos_a;
+
+            let vx_gpu = gx + rx * scale;
+            let vy_gpu = gy + rz * scale;
+
+            // Per-vertex curvature (matching landscape shader: dist_sq * curvature_scale)
+            let vdx = vx_gpu - center;
+            let vdy = vy_gpu - center;
+            let vertex_curvature = (vdx * vdx + vdy * vdy) * curvature_scale;
+
+            // Per-vertex terrain height sampling (matching Model3D_RenderObject Phase 4)
+            let vert_cell_x = vis_x + rx * scale / step;
+            let vert_cell_y = vis_y + rz * scale / step;
+            let abs_cell_x = ((vert_cell_x % w + w) % w) + shift.x as f32;
+            let abs_cell_y = ((vert_cell_y % w + w) % w) + shift.y as f32;
+            let vertex_gz = landscape.interpolate_height_at(abs_cell_x, abs_cell_y);
+            let vertex_z = vertex_gz - vertex_curvature + v.coord.y * scale;
+
             combined.push_vertex(TexVertex {
-                coord: Vector3::new(
-                    gx + rx * scale,
-                    gy + rz * scale,
-                    z_base + v.coord.y * scale,
-                ),
+                coord: Vector3::new(vx_gpu, vy_gpu, vertex_z),
                 uv: v.uv,
                 tex_id: v.tex_id,
             });
-        }
-        if let Some(fv) = combined.vertices.get(first_vert) {
-            eprintln!("  -> verts={} pos=({:.3},{:.3},{:.3}) scale={:.4} gx={:.3} gy={:.3} gz={:.3} angle={} ({:.2} rad) tex_id={}",
-                local_model.vertices.len(), fv.coord.x, fv.coord.y, fv.coord.z,
-                scale, gx, gy, gz, obj.angle, angle_rad, fv.tex_id);
         }
         for &idx16 in &local_model.indices {
             combined.indices.push(base_idx + idx16);
         }
     }
-    eprintln!("[buildings] total={} vertices={} indices={} step={:.4} center={:.4} h_scale={:.6}",
-        building_count, combined.vertices.len(), combined.indices.len(), step, center, height_scale);
+    eprintln!("[buildings] total={} vertices={} indices={} step={:.4} center={:.4}",
+        building_count, combined.vertices.len(), combined.indices.len(), step, center);
     // Print vertex bounding box for debugging
     if !combined.vertices.is_empty() {
         let (mut min_x, mut min_y, mut min_z) = (f32::MAX, f32::MAX, f32::MAX);
@@ -950,82 +959,6 @@ const FONT_ROWS: u32 = 6;  // 96 glyphs / 16 = 6 rows
 const FONT_ATLAS_W: u32 = FONT_COLS * FONT_GLYPH_W; // 128
 const FONT_ATLAS_H: u32 = FONT_ROWS * FONT_GLYPH_H; // 48
 
-fn build_font_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> GpuTexture {
-    let mut rgba = vec![0u8; (FONT_ATLAS_W * FONT_ATLAS_H * 4) as usize];
-    for (idx, glyph) in FONT_8X8.iter().enumerate() {
-        let col = (idx as u32) % FONT_COLS;
-        let row = (idx as u32) / FONT_COLS;
-        let ox = col * FONT_GLYPH_W;
-        let oy = row * FONT_GLYPH_H;
-        for y in 0..8u32 {
-            let bits = glyph[y as usize];
-            for x in 0..8u32 {
-                if bits & (0x80 >> x) != 0 {
-                    let px = ox + x;
-                    let py = oy + y;
-                    let off = ((py * FONT_ATLAS_W + px) * 4) as usize;
-                    rgba[off] = 255;
-                    rgba[off + 1] = 255;
-                    rgba[off + 2] = 255;
-                    rgba[off + 3] = 255;
-                }
-            }
-        }
-    }
-    GpuTexture::new_2d(device, queue, FONT_ATLAS_W, FONT_ATLAS_H,
-        wgpu::TextureFormat::Rgba8Unorm, &rgba, "font_atlas")
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct OverlayVertex {
-    position: [f32; 2],
-    uv: [f32; 2],
-}
-
-/// Build text mesh as overlay vertices. Returns vertex data.
-/// `scale` is the pixel size per glyph (e.g. 16 for 2x scaling of 8px font).
-fn build_overlay_text(text: &str, x0: f32, y0: f32, scale: f32) -> Vec<OverlayVertex> {
-    let mut vertices = Vec::new();
-    let mut cx = x0;
-    let mut cy = y0;
-    let u_step = FONT_GLYPH_W as f32 / FONT_ATLAS_W as f32;
-    let v_step = FONT_GLYPH_H as f32 / FONT_ATLAS_H as f32;
-    for ch in text.chars() {
-        if ch == '\n' {
-            cx = x0;
-            cy += scale;
-            continue;
-        }
-        let code = ch as u32;
-        if code < 32 || code > 126 {
-            cx += scale;
-            continue;
-        }
-        let idx = code - 32;
-        let col = idx % FONT_COLS;
-        let row = idx / FONT_COLS;
-        let u0 = col as f32 * u_step;
-        let v0 = row as f32 * v_step;
-        let u1 = u0 + u_step;
-        let v1 = v0 + v_step;
-
-        let x1 = cx + scale;
-        let y1 = cy + scale;
-
-        // Two triangles per glyph
-        vertices.push(OverlayVertex { position: [cx, cy], uv: [u0, v0] });
-        vertices.push(OverlayVertex { position: [x1, cy], uv: [u1, v0] });
-        vertices.push(OverlayVertex { position: [cx, y1], uv: [u0, v1] });
-        vertices.push(OverlayVertex { position: [cx, y1], uv: [u0, v1] });
-        vertices.push(OverlayVertex { position: [x1, cy], uv: [u1, v0] });
-        vertices.push(OverlayVertex { position: [x1, y1], uv: [u1, v1] });
-
-        cx += scale;
-    }
-    vertices
-}
-
 fn help_text() -> &'static str {
     concat!(
         "Q/E:    Rotate\n",
@@ -1040,6 +973,626 @@ fn help_text() -> &'static str {
         "Scroll: Zoom\n",
         "Esc:    Quit",
     )
+}
+
+/******************************************************************************/
+// HUD Sprite Renderer — 2D screen-space rendering for HUD elements
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct HudVertex {
+    position: [f32; 2],
+    uv: [f32; 2],
+    color: [f32; 4],
+}
+
+/// UV region of a sprite within the HUD atlas texture.
+#[derive(Clone)]
+struct SpriteRegion {
+    u0: f32, v0: f32,
+    u1: f32, v1: f32,
+    width: u16, height: u16,
+}
+
+#[derive(Copy, Clone, PartialEq)]
+enum HudTab { Spells, Buildings, Units }
+
+/// Screen-space 2D sprite/text renderer for the game HUD.
+struct HudRenderer {
+    pipeline: wgpu::RenderPipeline,
+    vertex_buffer: wgpu::Buffer,
+    uniform_buffer: GpuBuffer,
+    atlas_bind_group: wgpu::BindGroup,
+    bind_group_layout: wgpu::BindGroupLayout,
+    atlas_width: u32,
+    atlas_height: u32,
+    sprite_regions: Vec<SpriteRegion>,
+    /// Index of the 1x1 white pixel region for solid rectangles
+    white_region_idx: usize,
+    /// Index where font glyphs start in sprite_regions
+    font_region_start: usize,
+    vertices: Vec<HudVertex>,
+    // Minimap texture (updated per-frame)
+    minimap_bind_group: Option<wgpu::BindGroup>,
+    minimap_texture: Option<GpuTexture>,
+}
+
+impl HudRenderer {
+    const MAX_VERTICES: usize = 65536;
+
+    fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+        screen_w: f32,
+        screen_h: f32,
+    ) -> Self {
+        // Bind group layout: uniform + texture + sampler
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("hud_bg_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        // Screen size uniform
+        let screen_data = [screen_w, screen_h, 0.0f32, 0.0f32];
+        let uniform_buffer = GpuBuffer::new_uniform_init(
+            device, bytemuck::bytes_of(&screen_data), "hud_uniforms");
+
+        // Build initial atlas with white pixel + font glyphs (so text works before sprites load)
+        let font_rgba = Self::build_font_rgba();
+        let font_w = FONT_ATLAS_W;
+        let font_h = FONT_ATLAS_H;
+        // Atlas layout: white pixel at (0,0), font at (2,0)
+        let init_atlas_w = (2 + font_w).next_power_of_two();
+        let init_atlas_h = font_h.next_power_of_two();
+        let mut init_data = vec![0u8; (init_atlas_w * init_atlas_h * 4) as usize];
+        // White pixel at (0,0)
+        init_data[0] = 255; init_data[1] = 255; init_data[2] = 255; init_data[3] = 255;
+        // Blit font at (2, 0)
+        for fy in 0..font_h {
+            for fx in 0..font_w {
+                let src = ((fy * font_w + fx) * 4) as usize;
+                let dst = ((fy * init_atlas_w + 2 + fx) * 4) as usize;
+                if dst + 3 < init_data.len() && src + 3 < font_rgba.len() {
+                    init_data[dst..dst + 4].copy_from_slice(&font_rgba[src..src + 4]);
+                }
+            }
+        }
+        let atlas_tex = GpuTexture::new_2d(
+            device, queue, init_atlas_w, init_atlas_h,
+            wgpu::TextureFormat::Rgba8UnormSrgb, &init_data, "hud_atlas_initial");
+        let sampler = GpuTexture::create_sampler(device, true);
+
+        let atlas_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hud_atlas_bg"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: uniform_buffer.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&atlas_tex.view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
+            ],
+        });
+
+        // Pipeline
+        let shader_source = include_str!("../shaders/hud_sprite.wgsl");
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("hud_shader"),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("hud_pipeline_layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("hud_pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<HudVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 16, shader_location: 2 },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        // Vertex buffer (pre-allocated)
+        let vb_size = Self::MAX_VERTICES * std::mem::size_of::<HudVertex>();
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hud_vertex_buffer"),
+            size: vb_size as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Build sprite regions: white pixel + 96 font glyphs
+        let aw = init_atlas_w as f32;
+        let ah = init_atlas_h as f32;
+        let mut sprite_regions = Vec::new();
+
+        // White pixel region (index 0) — sample center of pixel
+        sprite_regions.push(SpriteRegion {
+            u0: 0.5 / aw, v0: 0.5 / ah,
+            u1: 0.5 / aw, v1: 0.5 / ah,
+            width: 1, height: 1,
+        });
+
+        // Font glyph regions (indices 1..97)
+        let u_step = FONT_GLYPH_W as f32 / aw;
+        let v_step = FONT_GLYPH_H as f32 / ah;
+        let font_u0 = 2.0 / aw;
+        let font_v0 = 0.0;
+        for idx in 0..96u32 {
+            let col = idx % FONT_COLS;
+            let row = idx / FONT_COLS;
+            sprite_regions.push(SpriteRegion {
+                u0: font_u0 + col as f32 * u_step,
+                v0: font_v0 + row as f32 * v_step,
+                u1: font_u0 + (col + 1) as f32 * u_step,
+                v1: font_v0 + (row + 1) as f32 * v_step,
+                width: FONT_GLYPH_W as u16,
+                height: FONT_GLYPH_H as u16,
+            });
+        }
+
+        HudRenderer {
+            pipeline,
+            vertex_buffer,
+            uniform_buffer,
+            atlas_bind_group,
+            bind_group_layout,
+            atlas_width: init_atlas_w,
+            atlas_height: init_atlas_h,
+            sprite_regions,
+            white_region_idx: 0,
+            font_region_start: 1,
+            vertices: Vec::with_capacity(4096),
+            minimap_bind_group: None,
+            minimap_texture: None,
+        }
+    }
+
+    /// Build the HUD atlas from plspanel.spr sprites + font glyphs.
+    /// `panel_sprites` is the PSFB container, `palette` is 1024-byte BGRA palette.
+    fn build_atlas(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        panel_sprites: &ContainerPSFB,
+        palette: &[u8],
+    ) {
+        // Phase 1: Convert all sprites to RGBA
+        let mut sprite_images: Vec<(u16, u16, Vec<u8>)> = Vec::new(); // (w, h, rgba)
+        for i in 0..panel_sprites.len() {
+            if let Some(img) = panel_sprites.get_image(i) {
+                let w = img.width as u16;
+                let h = img.height as u16;
+                let mut rgba = vec![0u8; (w as usize) * (h as usize) * 4];
+                for (j, &idx) in img.data.iter().enumerate() {
+                    if idx == 255 {
+                        // Transparent
+                        rgba[j * 4 + 3] = 0;
+                    } else {
+                        let p = (idx as usize) * 4;
+                        if p + 2 < palette.len() {
+                            // Palette is BGRA
+                            rgba[j * 4] = palette[p + 2];     // R
+                            rgba[j * 4 + 1] = palette[p + 1]; // G
+                            rgba[j * 4 + 2] = palette[p];     // B
+                            rgba[j * 4 + 3] = 255;            // A
+                        }
+                    }
+                }
+                sprite_images.push((w, h, rgba));
+            } else {
+                sprite_images.push((1, 1, vec![0, 0, 0, 0]));
+            }
+        }
+
+        // Phase 2: Calculate atlas dimensions using simple shelf packing
+        // Add 1x1 white pixel + font glyphs (128x48)
+        let font_w = FONT_ATLAS_W as u16;
+        let font_h = FONT_ATLAS_H as u16;
+
+        let mut atlas_w: u32 = 1024; // Start with reasonable width
+        let mut shelf_y: u32 = 0;
+        let mut shelf_h: u32 = 0;
+        let mut cursor_x: u32 = 0;
+        let mut placements: Vec<(u32, u32)> = Vec::new(); // (x, y) for each sprite
+
+        // Place white pixel first
+        placements.push((cursor_x, shelf_y));
+        cursor_x += 2; // 1x1 white pixel + 1px padding
+        shelf_h = 2;
+
+        // Place font atlas
+        let font_placement_x;
+        let font_placement_y;
+        if cursor_x + font_w as u32 > atlas_w {
+            shelf_y += shelf_h;
+            cursor_x = 0;
+            shelf_h = 0;
+        }
+        font_placement_x = cursor_x;
+        font_placement_y = shelf_y;
+        cursor_x += font_w as u32 + 1;
+        shelf_h = shelf_h.max(font_h as u32);
+
+        // Place sprite images
+        for (w, h, _) in &sprite_images {
+            let sw = *w as u32;
+            let sh = *h as u32;
+            if cursor_x + sw > atlas_w {
+                shelf_y += shelf_h;
+                cursor_x = 0;
+                shelf_h = 0;
+            }
+            placements.push((cursor_x, shelf_y));
+            cursor_x += sw + 1;
+            shelf_h = shelf_h.max(sh);
+        }
+
+        let atlas_h = (shelf_y + shelf_h).next_power_of_two().max(64);
+        atlas_w = atlas_w.max(cursor_x).next_power_of_two();
+
+        // Phase 3: Blit into atlas
+        let mut atlas_data = vec![0u8; (atlas_w * atlas_h * 4) as usize];
+
+        // Blit white pixel at (0,0)
+        let wp = 0usize;
+        atlas_data[wp] = 255;
+        atlas_data[wp + 1] = 255;
+        atlas_data[wp + 2] = 255;
+        atlas_data[wp + 3] = 255;
+
+        // Blit font atlas
+        let font_atlas_rgba = Self::build_font_rgba();
+        for fy in 0..font_h as u32 {
+            for fx in 0..font_w as u32 {
+                let src = ((fy * font_w as u32 + fx) * 4) as usize;
+                let dst = (((font_placement_y + fy) * atlas_w + font_placement_x + fx) * 4) as usize;
+                if dst + 3 < atlas_data.len() && src + 3 < font_atlas_rgba.len() {
+                    atlas_data[dst..dst + 4].copy_from_slice(&font_atlas_rgba[src..src + 4]);
+                }
+            }
+        }
+
+        // Blit sprite images
+        for (i, (w, h, rgba)) in sprite_images.iter().enumerate() {
+            let (px, py) = placements[i + 1]; // +1 because white pixel is placements[0]
+            for sy in 0..*h as u32 {
+                for sx in 0..*w as u32 {
+                    let src = ((sy * *w as u32 + sx) * 4) as usize;
+                    let dst = (((py + sy) * atlas_w + px + sx) * 4) as usize;
+                    if dst + 3 < atlas_data.len() && src + 3 < rgba.len() {
+                        atlas_data[dst..dst + 4].copy_from_slice(&rgba[src..src + 4]);
+                    }
+                }
+            }
+        }
+
+        // Phase 4: Build sprite regions
+        let aw = atlas_w as f32;
+        let ah = atlas_h as f32;
+        let mut regions = Vec::new();
+
+        // White pixel region (index 0)
+        regions.push(SpriteRegion {
+            u0: 0.5 / aw, v0: 0.5 / ah,
+            u1: 0.5 / aw, v1: 0.5 / ah,
+            width: 1, height: 1,
+        });
+
+        // Font glyph regions (indices 1..96)
+        let font_start = regions.len();
+        let u_step = FONT_GLYPH_W as f32 / aw;
+        let v_step = FONT_GLYPH_H as f32 / ah;
+        let font_u0 = font_placement_x as f32 / aw;
+        let font_v0 = font_placement_y as f32 / ah;
+        for idx in 0..96u32 {
+            let col = idx % FONT_COLS;
+            let row = idx / FONT_COLS;
+            regions.push(SpriteRegion {
+                u0: font_u0 + col as f32 * u_step,
+                v0: font_v0 + row as f32 * v_step,
+                u1: font_u0 + (col + 1) as f32 * u_step,
+                v1: font_v0 + (row + 1) as f32 * v_step,
+                width: FONT_GLYPH_W as u16,
+                height: FONT_GLYPH_H as u16,
+            });
+        }
+
+        // Panel sprite regions
+        for (i, (w, h, _)) in sprite_images.iter().enumerate() {
+            let (px, py) = placements[i + 1];
+            regions.push(SpriteRegion {
+                u0: px as f32 / aw,
+                v0: py as f32 / ah,
+                u1: (px + *w as u32) as f32 / aw,
+                v1: (py + *h as u32) as f32 / ah,
+                width: *w,
+                height: *h,
+            });
+        }
+
+        // Phase 5: Upload atlas
+        let atlas_tex = GpuTexture::new_2d(
+            device, queue, atlas_w, atlas_h,
+            wgpu::TextureFormat::Rgba8UnormSrgb, &atlas_data, "hud_atlas");
+        let sampler = GpuTexture::create_sampler(device, true);
+
+        self.atlas_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hud_atlas_bg"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.uniform_buffer.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&atlas_tex.view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
+            ],
+        });
+
+        self.atlas_width = atlas_w;
+        self.atlas_height = atlas_h;
+        self.sprite_regions = regions;
+        self.white_region_idx = 0;
+        self.font_region_start = font_start;
+
+        log::info!("[hud] Atlas built: {}x{}, {} sprites, {} font glyphs, {} total regions",
+            atlas_w, atlas_h, sprite_images.len(), 96, self.sprite_regions.len());
+    }
+
+    fn build_font_rgba() -> Vec<u8> {
+        let mut rgba = vec![0u8; (FONT_ATLAS_W * FONT_ATLAS_H * 4) as usize];
+        for (idx, glyph) in FONT_8X8.iter().enumerate() {
+            let col = (idx as u32) % FONT_COLS;
+            let row = (idx as u32) / FONT_COLS;
+            let ox = col * FONT_GLYPH_W;
+            let oy = row * FONT_GLYPH_H;
+            for y in 0..8u32 {
+                let bits = glyph[y as usize];
+                for x in 0..8u32 {
+                    if bits & (0x80 >> x) != 0 {
+                        let px = ox + x;
+                        let py = oy + y;
+                        let off = ((py * FONT_ATLAS_W + px) * 4) as usize;
+                        rgba[off] = 255;
+                        rgba[off + 1] = 255;
+                        rgba[off + 2] = 255;
+                        rgba[off + 3] = 255;
+                    }
+                }
+            }
+        }
+        rgba
+    }
+
+    fn begin_frame(&mut self) {
+        self.vertices.clear();
+    }
+
+    fn push_quad(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, u0: f32, v0: f32, u1: f32, v1: f32, color: [f32; 4]) {
+        self.vertices.push(HudVertex { position: [x0, y0], uv: [u0, v0], color });
+        self.vertices.push(HudVertex { position: [x1, y0], uv: [u1, v0], color });
+        self.vertices.push(HudVertex { position: [x0, y1], uv: [u0, v1], color });
+        self.vertices.push(HudVertex { position: [x0, y1], uv: [u0, v1], color });
+        self.vertices.push(HudVertex { position: [x1, y0], uv: [u1, v0], color });
+        self.vertices.push(HudVertex { position: [x1, y1], uv: [u1, v1], color });
+    }
+
+    /// Draw a solid colored rectangle.
+    fn draw_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
+        let r = &self.sprite_regions[self.white_region_idx];
+        self.push_quad(x, y, x + w, y + h, r.u0, r.v0, r.u1, r.v1, color);
+    }
+
+    /// Draw a sprite from the atlas at screen position (x, y) with scale.
+    fn draw_sprite(&mut self, sprite_idx: usize, x: f32, y: f32, scale_x: f32, scale_y: f32) {
+        if sprite_idx >= self.sprite_regions.len() { return; }
+        let r = self.sprite_regions[sprite_idx].clone();
+        let w = r.width as f32 * scale_x;
+        let h = r.height as f32 * scale_y;
+        self.push_quad(x, y, x + w, y + h, r.u0, r.v0, r.u1, r.v1, [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    /// Draw text using the embedded bitmap font.
+    fn draw_text(&mut self, text: &str, x0: f32, y0: f32, scale: f32, color: [f32; 4]) {
+        let mut cx = x0;
+        let mut cy = y0;
+        for ch in text.chars() {
+            if ch == '\n' {
+                cx = x0;
+                cy += scale;
+                continue;
+            }
+            let code = ch as u32;
+            if code < 32 || code > 126 {
+                cx += scale;
+                continue;
+            }
+            let glyph_idx = (code - 32) as usize;
+            let region_idx = self.font_region_start + glyph_idx;
+            if region_idx < self.sprite_regions.len() {
+                let r = self.sprite_regions[region_idx].clone();
+                self.push_quad(cx, cy, cx + scale, cy + scale, r.u0, r.v0, r.u1, r.v1, color);
+            }
+            cx += scale;
+        }
+    }
+
+    /// Get the sprite region index for panel sprites (offset past white pixel + font glyphs).
+    fn panel_sprite_index(&self, psfb_index: usize) -> usize {
+        self.font_region_start + 96 + psfb_index
+    }
+
+    /// Update the minimap texture from heightmap + unit positions.
+    fn update_minimap(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        heights: &[[u16; 128]; 128],
+        units: &[Unit],
+    ) {
+        let mut rgba = vec![0u8; 128 * 128 * 4];
+        // Draw terrain from heightmap
+        for y in 0..128usize {
+            for x in 0..128usize {
+                let h = heights[y][x];
+                let off = (y * 128 + x) * 4;
+                if h == 0 {
+                    // Water
+                    rgba[off] = 20; rgba[off + 1] = 40; rgba[off + 2] = 80; rgba[off + 3] = 255;
+                } else {
+                    // Land — green gradient by height
+                    let v = ((h as f32 / 1024.0) * 180.0).min(255.0) as u8;
+                    rgba[off] = v / 4;
+                    rgba[off + 1] = 40 + v / 2;
+                    rgba[off + 2] = v / 6;
+                    rgba[off + 3] = 255;
+                }
+            }
+        }
+        // Draw unit dots using cell coordinates
+        let tribe_colors: [[u8; 3]; 4] = [
+            [80, 130, 255],  // Blue
+            [255, 60, 60],   // Red
+            [255, 255, 60],  // Yellow
+            [60, 255, 60],   // Green
+        ];
+        for unit in units {
+            if !unit.alive { continue; }
+            let cx = (unit.cell_x as usize).min(127);
+            let cy = (unit.cell_y as usize).min(127);
+            let off = (cy * 128 + cx) * 4;
+            let tc = &tribe_colors[(unit.tribe_index as usize).min(3)];
+            rgba[off] = tc[0]; rgba[off + 1] = tc[1]; rgba[off + 2] = tc[2]; rgba[off + 3] = 255;
+        }
+
+        let tex = GpuTexture::new_2d(
+            device, queue, 128, 128,
+            wgpu::TextureFormat::Rgba8UnormSrgb, &rgba, "minimap");
+        let sampler = GpuTexture::create_sampler(device, false);
+
+        self.minimap_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("minimap_bg"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.uniform_buffer.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&tex.view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
+            ],
+        }));
+        self.minimap_texture = Some(tex);
+    }
+
+    /// Render the HUD. Issues draw calls with the atlas bind group, and optionally the minimap bind group.
+    fn render_full(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, queue: &wgpu::Queue,
+                   screen_w: f32, screen_h: f32, minimap_rect: Option<(f32, f32, f32, f32)>) {
+        if self.vertices.is_empty() && self.minimap_bind_group.is_none() { return; }
+
+        // Update screen size uniform
+        let screen_data = [screen_w, screen_h, 0.0f32, 0.0f32];
+        self.uniform_buffer.update(queue, 0, bytemuck::bytes_of(&screen_data));
+
+        // Upload vertex data
+        let data: &[u8] = bytemuck::cast_slice(&self.vertices);
+        queue.write_buffer(&self.vertex_buffer, 0, data);
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("hud_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
+        pass.set_pipeline(&self.pipeline);
+
+        // Draw minimap first (separate bind group)
+        if let (Some(ref mm_bg), Some((mx, my, mw, mh))) = (&self.minimap_bind_group, minimap_rect) {
+            // Build minimap quad inline (6 vertices at the very start)
+            let mm_verts = [
+                HudVertex { position: [mx, my], uv: [0.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+                HudVertex { position: [mx + mw, my], uv: [1.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+                HudVertex { position: [mx, my + mh], uv: [0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
+                HudVertex { position: [mx, my + mh], uv: [0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
+                HudVertex { position: [mx + mw, my], uv: [1.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+                HudVertex { position: [mx + mw, my + mh], uv: [1.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
+            ];
+            let mm_data: &[u8] = bytemuck::cast_slice(&mm_verts);
+            // Write minimap vertices at the end of the existing vertex data
+            let mm_offset = (self.vertices.len() * std::mem::size_of::<HudVertex>()) as u64;
+            queue.write_buffer(&self.vertex_buffer, mm_offset, mm_data);
+
+            pass.set_bind_group(0, mm_bg, &[]);
+            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            pass.draw(self.vertices.len() as u32..self.vertices.len() as u32 + 6, 0..1);
+        }
+
+        // Draw all other HUD elements with atlas bind group
+        if !self.vertices.is_empty() {
+            pass.set_bind_group(0, &self.atlas_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            pass.draw(0..self.vertices.len() as u32, 0..1);
+        }
+    }
 }
 
 /******************************************************************************/
@@ -1205,12 +1758,10 @@ struct App {
     sky_bind_group: Option<wgpu::BindGroup>,
     sky_uniform_buffer: Option<GpuBuffer>,
 
-    // Overlay text
-    overlay_pipeline: Option<wgpu::RenderPipeline>,
-    overlay_bind_group: Option<wgpu::BindGroup>,
-    overlay_vertex_buffer: Option<wgpu::Buffer>,
-    overlay_vertex_count: u32,
-    overlay_uniform_buffer: Option<GpuBuffer>,
+    // HUD renderer (replaces old overlay text system)
+    hud: Option<HudRenderer>,
+    hud_tab: HudTab,
+    hud_panel_sprite_count: usize,
 
     // Shared uniform buffers
     mvp_buffer: Option<GpuBuffer>,
@@ -1310,11 +1861,9 @@ impl App {
             sky_pipeline: None,
             sky_bind_group: None,
             sky_uniform_buffer: None,
-            overlay_pipeline: None,
-            overlay_bind_group: None,
-            overlay_vertex_buffer: None,
-            overlay_vertex_count: 0,
-            overlay_uniform_buffer: None,
+            hud: None,
+            hud_tab: HudTab::Spells,
+            hud_panel_sprite_count: 0,
             mvp_buffer: None,
             model_transform_buffer: None,
             landscape_params_buffer: None,
@@ -1449,8 +1998,21 @@ impl App {
         // Remove persons from static markers — they're now rendered by the coordinator
         self.level_objects.retain(|obj| obj.model_type != ModelType::Person);
 
+        // Flatten terrain under buildings (modifies heightmap + re-uploads GPU buffer)
+        self.flatten_terrain_under_buildings();
+
         self.rebuild_spawn_model();
         self.center_on_tribe0_shaman();
+
+        // Rebuild HUD atlas with new palette
+        let panel_path = base.join("data").join("plspanel.spr");
+        if let Some(panel_container) = ContainerPSFB::from_file(&panel_path) {
+            self.hud_panel_sprite_count = panel_container.len();
+            if let Some(ref mut hud) = self.hud {
+                let gpu = self.gpu.as_ref().unwrap();
+                hud.build_atlas(&gpu.device, &gpu.queue, &panel_container, &level_res.params.palette);
+            }
+        }
     }
 
     /// Compute the terrain height under the orbit camera eye position.
@@ -1848,6 +2410,46 @@ impl App {
         }
     }
 
+    /// Flatten terrain under all building footprints (matching original game's
+    /// Building_FlattenTerrain @ 0x0042F2A0). Modifies self.landscape_mesh heights
+    /// and re-uploads the GPU heights buffer.
+    fn flatten_terrain_under_buildings(&mut self) {
+        for obj in &self.level_objects {
+            if obj.model_type != ModelType::Building { continue; }
+            let idx = match object_3d_index(&obj.model_type, obj.subtype, obj.tribe_index) {
+                Some(i) => i,
+                None => continue,
+            };
+            let obj3d = match idx < self.objects_3d.len() {
+                true => match &self.objects_3d[idx] {
+                    Some(o) => o,
+                    None => continue,
+                },
+                false => continue,
+            };
+            // Compute rotation index (0-3) from angle, matching original:
+            // rotation = (angle + 0x1FF) >> 9
+            let rotation = ((obj.angle.wrapping_add(0x1FF)) >> 9) as usize & 3;
+            let fp_idx = obj3d.footprint_index(rotation);
+            if fp_idx < 0 || (fp_idx as usize) >= self.shapes.len() { continue; }
+            let shape = &self.shapes[fp_idx as usize];
+            self.landscape_mesh.flatten_building_footprint(
+                obj.cell_x as usize, obj.cell_y as usize,
+                shape,
+                true, // use average height (default for most building types)
+            );
+        }
+
+        // Re-upload modified heights to GPU
+        if let Some(ref gpu) = self.gpu {
+            if let Some(ref heights_buf) = self.heights_buffer {
+                let heights_vec = self.landscape_mesh.heights_to_gpu_vec();
+                let heights_bytes: &[u8] = bytemuck::cast_slice(&heights_vec);
+                heights_buf.update(&gpu.queue, 0, heights_bytes);
+            }
+        }
+    }
+
     fn rebuild_object_markers(&mut self) {
         if let Some(ref gpu) = self.gpu {
             let cs = if self.curvature_enabled { self.curvature_scale } else { 0.0 };
@@ -1863,20 +2465,140 @@ impl App {
         self.rebuild_unit_models();
     }
 
-    fn rebuild_overlay(&mut self) {
-        if let Some(ref gpu) = self.gpu {
-            let text = help_text();
-            let verts = build_overlay_text(text, 10.0, 10.0, 16.0);
-            self.overlay_vertex_count = verts.len() as u32;
-            let data: &[u8] = bytemuck::cast_slice(&verts);
-            let buf = GpuBuffer::new_vertex(&gpu.device, data, "overlay_vb");
-            self.overlay_vertex_buffer = Some(buf.buffer);
-            // Update screen size uniform
-            let screen_data = [self.screen.width as f32, self.screen.height as f32, 0.0f32, 0.0f32];
-            if let Some(ref buf) = self.overlay_uniform_buffer {
-                buf.update(&gpu.queue, 0, bytemuck::bytes_of(&screen_data));
+    fn rebuild_hud(&mut self) {
+        // HUD is rebuilt each frame in draw_hud(), nothing needed here
+    }
+
+    fn draw_hud(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
+        let gpu = match self.gpu.as_ref() {
+            Some(g) => g,
+            None => return,
+        };
+        let hud = match self.hud.as_mut() {
+            Some(h) => h,
+            None => return,
+        };
+
+        let sw = self.screen.width as f32;
+        let sh = self.screen.height as f32;
+        let scale_x = sw / 640.0;
+        let scale_y = sh / 480.0;
+        let sidebar_w = (100.0 * scale_x).round();
+        let font_scale = (12.0 * scale_y).max(10.0).round();
+        let small_font = (font_scale * 0.75).round();
+
+        // Update minimap texture
+        hud.update_minimap(
+            &gpu.device, &gpu.queue,
+            self.landscape_mesh.heights(),
+            &self.unit_coordinator.units,
+        );
+
+        hud.begin_frame();
+
+        // === Left Sidebar Background ===
+        hud.draw_rect(0.0, 0.0, sidebar_w, sh, [0.08, 0.08, 0.12, 0.92]);
+
+        // === Minimap (top of sidebar) ===
+        let mm_pad = 4.0 * scale_x;
+        let mm_size = sidebar_w - mm_pad * 2.0;
+        let mm_x = mm_pad;
+        let mm_y = mm_pad;
+        // Minimap border
+        hud.draw_rect(mm_x - 1.0, mm_y - 1.0, mm_size + 2.0, mm_size + 2.0, [0.3, 0.3, 0.4, 1.0]);
+        let minimap_rect = Some((mm_x, mm_y, mm_size, mm_size));
+
+        // === Tab Buttons (below minimap) ===
+        let tab_y = mm_y + mm_size + 4.0 * scale_y;
+        let tab_h = font_scale + 6.0 * scale_y;
+        let tab_w = (sidebar_w - mm_pad * 2.0) / 3.0;
+        let tabs = [("Spells", HudTab::Spells), ("Build", HudTab::Buildings), ("Units", HudTab::Units)];
+        for (i, (label, tab_id)) in tabs.iter().enumerate() {
+            let tx = mm_pad + i as f32 * tab_w;
+            let is_active = self.hud_tab == *tab_id;
+            let bg = if is_active { [0.25, 0.25, 0.4, 1.0] } else { [0.12, 0.12, 0.18, 1.0] };
+            hud.draw_rect(tx, tab_y, tab_w - 1.0, tab_h, bg);
+            let text_color = if is_active { [1.0, 1.0, 1.0, 1.0] } else { [0.6, 0.6, 0.6, 1.0] };
+            hud.draw_text(label, tx + 3.0, tab_y + 3.0 * scale_y, small_font, text_color);
+        }
+
+        // === Panel Content (below tabs) ===
+        let panel_y = tab_y + tab_h + 2.0 * scale_y;
+        let line_h = font_scale + 2.0;
+
+        match self.hud_tab {
+            HudTab::Spells => {
+                let spells = [
+                    "Burn", "Blast", "Lightning", "Whirlwind",
+                    "Plague", "Invisibility", "Firestorm", "Hypnotize",
+                    "Ghost Army", "Erosion", "Swamp", "Land Bridge",
+                    "Angel/Death", "Earthquake", "Flatten", "Volcano",
+                ];
+                for (i, name) in spells.iter().enumerate() {
+                    let row = i / 2;
+                    let col = i % 2;
+                    let sx = mm_pad + col as f32 * (sidebar_w / 2.0 - mm_pad);
+                    let sy = panel_y + row as f32 * line_h;
+                    hud.draw_text(name, sx, sy, small_font, [0.8, 0.9, 1.0, 0.9]);
+                }
+            }
+            HudTab::Buildings => {
+                let buildings = ["Hut", "Guard Tower", "Temple", "Spy Hut",
+                                 "Warrior Hut", "Firewarrior Hut", "Prison", "Boat Hut"];
+                for (i, name) in buildings.iter().enumerate() {
+                    let sy = panel_y + i as f32 * line_h;
+                    hud.draw_text(name, mm_pad, sy, small_font, [0.9, 0.85, 0.7, 0.9]);
+                }
+            }
+            HudTab::Units => {
+                let unit_types: [(u8, &str); 6] = [
+                    (PERSON_SUBTYPE_BRAVE, "Brave"),
+                    (PERSON_SUBTYPE_WARRIOR, "Warrior"),
+                    (PERSON_SUBTYPE_SPY, "Spy"),
+                    (PERSON_SUBTYPE_PREACHER, "Preacher"),
+                    (PERSON_SUBTYPE_FIREWARRIOR, "Firewarr"),
+                    (PERSON_SUBTYPE_SHAMAN, "Shaman"),
+                ];
+                for (i, (subtype, name)) in unit_types.iter().enumerate() {
+                    let count = self.unit_coordinator.units.iter()
+                        .filter(|u| u.alive && u.subtype == *subtype && u.tribe_index == 0)
+                        .count();
+                    let sy = panel_y + i as f32 * line_h;
+                    let text = format!("{}: {}", name, count);
+                    hud.draw_text(&text, mm_pad, sy, small_font, [0.7, 1.0, 0.7, 0.9]);
+                }
             }
         }
+
+        // === Viewport Info (top-left of 3D viewport) ===
+        let vp_x = sidebar_w + 8.0;
+        hud.draw_text(help_text(), vp_x, 8.0, font_scale, [1.0, 1.0, 1.0, 0.7]);
+
+        // FPS / level info at bottom of viewport
+        let info = format!("Level: {}  Frame: {}", self.level_num, self.frame_count);
+        hud.draw_text(&info, vp_x, sh - font_scale - 4.0, font_scale, [1.0, 1.0, 0.5, 0.7]);
+
+        // === Tribe population (bottom-right corner) ===
+        let tribe_colors: [[f32; 4]; 4] = [
+            [0.3, 0.5, 1.0, 0.9],  // Blue
+            [1.0, 0.3, 0.3, 0.9],  // Red
+            [1.0, 1.0, 0.3, 0.9],  // Yellow
+            [0.3, 1.0, 0.3, 0.9],  // Green
+        ];
+        let pop_x = sw - 100.0 * scale_x;
+        for tribe in 0..4u8 {
+            let count = self.unit_coordinator.units.iter()
+                .filter(|u| u.alive && u.tribe_index == tribe)
+                .count();
+            if count > 0 {
+                let py = 8.0 + tribe as f32 * (font_scale + 2.0);
+                let text = format!("T{}: {}", tribe, count);
+                hud.draw_text(&text, pop_x, py, font_scale, tribe_colors[tribe as usize]);
+            }
+        }
+
+        // Render the HUD
+        hud.render_full(encoder, view, &gpu.queue, sw, sh, minimap_rect);
     }
 
     fn rebuild_landscape_variants(&mut self, level_res: &LevelRes) {
@@ -2212,38 +2934,12 @@ impl App {
 
         }
 
-        // Overlay text pass (no depth, load existing color)
-        if let (Some(ref pipeline), Some(ref bg), Some(ref vb)) =
-            (&self.overlay_pipeline, &self.overlay_bind_group, &self.overlay_vertex_buffer)
-        {
-            if self.overlay_vertex_count > 0 {
-                // Update screen size uniform for overlay
-                let screen_data = [self.screen.width as f32, self.screen.height as f32, 0.0f32, 0.0f32];
-                if let Some(ref buf) = self.overlay_uniform_buffer {
-                    buf.update(&gpu.queue, 0, bytemuck::bytes_of(&screen_data));
-                }
+        // HUD pass (2D overlay — no depth, load existing color)
+        // End the `gpu` borrow before calling draw_hud (needs &mut self)
+        let _ = gpu;
+        self.draw_hud(&mut encoder, &view);
 
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("overlay_pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    ..Default::default()
-                });
-                pass.set_pipeline(pipeline);
-                pass.set_bind_group(0, bg, &[]);
-                pass.set_vertex_buffer(0, vb.slice(..));
-                pass.draw(0..self.overlay_vertex_count, 0..1);
-            }
-        }
-
+        let gpu = self.gpu.as_ref().unwrap();
         gpu.queue.submit(std::iter::once(encoder.finish()));
         output.present();
     }
@@ -2639,101 +3335,11 @@ impl ApplicationHandler for App {
             (None, None, None)
         };
 
-        // Overlay text pipeline
-        let overlay_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("overlay_bg_layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        let font_atlas = build_font_atlas(device, &gpu.queue);
-        let font_sampler = GpuTexture::create_sampler(device, true);
-
-        let screen_data = [self.screen.width as f32, self.screen.height as f32, 0.0f32, 0.0f32];
-        let overlay_uniform_buffer = GpuBuffer::new_uniform_init(
-            device, bytemuck::bytes_of(&screen_data), "overlay_uniforms");
-
-        let overlay_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("overlay_bg"),
-            layout: &overlay_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: overlay_uniform_buffer.buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&font_atlas.view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&font_sampler) },
-            ],
-        });
-
-        let overlay_shader_source = include_str!("../shaders/overlay_text.wgsl");
-        let overlay_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("overlay_shader"),
-            source: wgpu::ShaderSource::Wgsl(overlay_shader_source.into()),
-        });
-        let overlay_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("overlay_pipeline_layout"),
-            bind_group_layouts: &[&overlay_bind_group_layout],
-            immediate_size: 0,
-        });
-        let overlay_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("overlay_pipeline"),
-            layout: Some(&overlay_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &overlay_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<OverlayVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &overlay_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: gpu.surface_format(),
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        // HUD renderer (replaces old overlay text pipeline)
+        let hud_renderer = HudRenderer::new(
+            device, &gpu.queue, gpu.surface_format(),
+            self.screen.width as f32, self.screen.height as f32,
+        );
 
         // Store everything
         self.heights_buffer = Some(heights_buffer);
@@ -2757,9 +3363,7 @@ impl ApplicationHandler for App {
         self.sky_bind_group = sky_bind_group;
         self.sky_uniform_buffer = sky_uniform_buffer;
         self.model_main = Some(model_main);
-        self.overlay_pipeline = Some(overlay_pipeline);
-        self.overlay_bind_group = Some(overlay_bind_group);
-        self.overlay_uniform_buffer = Some(overlay_uniform_buffer);
+        self.hud = Some(hud_renderer);
 
         self.gpu = Some(gpu);
 
@@ -2786,11 +3390,26 @@ impl ApplicationHandler for App {
         self.unit_coordinator.load_level(&level_res2.units, &level_res2.landscape.height, level_res2.landscape.land_size());
         self.level_objects.retain(|obj| obj.model_type != ModelType::Person);
 
+        // Flatten terrain under buildings (modifies heightmap + re-uploads GPU buffer)
+        self.flatten_terrain_under_buildings();
+
         self.rebuild_spawn_model();
         self.center_on_tribe0_shaman();
 
-        // Build initial overlay text
-        self.rebuild_overlay();
+        // Build HUD sprite atlas from plspanel.spr
+        {
+            let panel_path = base2.join("data").join("plspanel.spr");
+            if let Some(panel_container) = ContainerPSFB::from_file(&panel_path) {
+                self.hud_panel_sprite_count = panel_container.len();
+                if let Some(ref mut hud) = self.hud {
+                    let gpu = self.gpu.as_ref().unwrap();
+                    hud.build_atlas(&gpu.device, &gpu.queue, &panel_container, &level_res2.params.palette);
+                }
+                log::info!("[hud] Loaded {} sprites from plspanel.spr", self.hud_panel_sprite_count);
+            } else {
+                log::warn!("[hud] plspanel.spr not found at {:?}, using font-only atlas", panel_path);
+            }
+        }
 
         self.do_render = true;
     }
@@ -2803,7 +3422,7 @@ impl ApplicationHandler for App {
                 if let Some(gpu) = self.gpu.as_mut() {
                     gpu.resize(physical_size);
                 }
-                self.rebuild_overlay();
+                self.rebuild_hud();
                 self.do_render = true;
             },
             WindowEvent::CursorMoved { position, .. } => {
@@ -2827,51 +3446,83 @@ impl ApplicationHandler for App {
                 }
             },
             WindowEvent::MouseInput { state, button, .. } => {
+                let sw = self.screen.width as f32;
+                let sh = self.screen.height as f32;
+                let scale_x = sw / 640.0;
+                let scale_y = sh / 480.0;
+                let sidebar_w = (100.0 * scale_x).round();
+
+                // Check if click is on the HUD sidebar
+                let on_sidebar = self.mouse_pos.x < sidebar_w;
+
                 match (button, state) {
                     (MouseButton::Left, ElementState::Pressed) => {
-                        // Start potential drag
-                        self.drag_state = DragState::PendingDrag { start: self.mouse_pos };
+                        if on_sidebar {
+                            // Handle sidebar tab clicks
+                            let mm_pad = 4.0 * scale_x;
+                            let mm_size = sidebar_w - mm_pad * 2.0;
+                            let font_scale = (12.0 * scale_y).max(10.0).round();
+                            let tab_y = mm_pad + mm_size + 4.0 * scale_y;
+                            let tab_h = font_scale + 6.0 * scale_y;
+                            let tab_w = (sidebar_w - mm_pad * 2.0) / 3.0;
+
+                            if self.mouse_pos.y >= tab_y && self.mouse_pos.y < tab_y + tab_h {
+                                let tab_idx = ((self.mouse_pos.x - mm_pad) / tab_w) as usize;
+                                self.hud_tab = match tab_idx {
+                                    0 => HudTab::Spells,
+                                    1 => HudTab::Buildings,
+                                    _ => HudTab::Units,
+                                };
+                            }
+                            self.do_render = true;
+                        } else {
+                            // Start potential drag (game world interaction)
+                            self.drag_state = DragState::PendingDrag { start: self.mouse_pos };
+                        }
                     }
                     (MouseButton::Left, ElementState::Released) => {
-                        match self.drag_state {
-                            DragState::PendingDrag { .. } => {
-                                // Short click (no drag) — single-select via billboard projection
-                                match self.find_unit_at_screen_pos(&self.mouse_pos) {
-                                    Some(id) => self.unit_coordinator.selection.select_single(id),
-                                    None => self.unit_coordinator.selection.clear(),
+                        if !on_sidebar {
+                            match self.drag_state {
+                                DragState::PendingDrag { .. } => {
+                                    // Short click (no drag) — single-select via billboard projection
+                                    match self.find_unit_at_screen_pos(&self.mouse_pos) {
+                                        Some(id) => self.unit_coordinator.selection.select_single(id),
+                                        None => self.unit_coordinator.selection.clear(),
+                                    }
                                 }
-
+                                DragState::Dragging { start, current } => {
+                                    // Drag release — box-select units in screen rectangle
+                                    let ids = self.units_in_screen_rect(start, current);
+                                    self.unit_coordinator.selection.select_multiple(ids);
+                                }
+                                DragState::None => {}
                             }
-                            DragState::Dragging { start, current } => {
-                                // Drag release — box-select units in screen rectangle
-                                let ids = self.units_in_screen_rect(start, current);
-                                self.unit_coordinator.selection.select_multiple(ids);
-                            }
-                            DragState::None => {}
                         }
                         self.drag_state = DragState::None;
                         self.rebuild_unit_models();
                     }
                     (MouseButton::Right, ElementState::Pressed) => {
-                        // Right-click: move order
-                        if let Some((cx, cy)) = self.screen_to_cell() {
-                            let target = cell_to_world(cx, cy, self.landscape_mesh.width() as f32);
-                            let selected = self.unit_coordinator.selection.selected.len();
-                            log::info!("[move-order] click cell=({:.1}, {:.1}) → world=({}, {}) selected={}",
-                                cx, cy, target.x, target.z, selected);
-                            if selected > 0 {
-                                let uid = self.unit_coordinator.selection.selected[0];
-                                if let Some(u) = self.unit_coordinator.units.get(uid) {
-                                    let walkable = self.unit_coordinator.region_map()
-                                        .is_walkable(target.to_tile());
-                                    log::info!("[move-order] unit {} at world=({}, {}) cell=({:.1}, {:.1}) target_walkable={}",
-                                        uid, u.movement.position.x, u.movement.position.z,
-                                        u.cell_x, u.cell_y, walkable);
+                        if !on_sidebar {
+                            // Right-click: move order
+                            if let Some((cx, cy)) = self.screen_to_cell() {
+                                let target = cell_to_world(cx, cy, self.landscape_mesh.width() as f32);
+                                let selected = self.unit_coordinator.selection.selected.len();
+                                log::info!("[move-order] click cell=({:.1}, {:.1}) → world=({}, {}) selected={}",
+                                    cx, cy, target.x, target.z, selected);
+                                if selected > 0 {
+                                    let uid = self.unit_coordinator.selection.selected[0];
+                                    if let Some(u) = self.unit_coordinator.units.get(uid) {
+                                        let walkable = self.unit_coordinator.region_map()
+                                            .is_walkable(target.to_tile());
+                                        log::info!("[move-order] unit {} at world=({}, {}) cell=({:.1}, {:.1}) target_walkable={}",
+                                            uid, u.movement.position.x, u.movement.position.z,
+                                            u.cell_x, u.cell_y, walkable);
+                                    }
                                 }
+                                self.unit_coordinator.order_move(target);
+                            } else {
+                                log::warn!("[move-order] screen_to_cell returned None");
                             }
-                            self.unit_coordinator.order_move(target);
-                        } else {
-                            log::warn!("[move-order] screen_to_cell returned None");
                         }
                     }
                     _ => {}
