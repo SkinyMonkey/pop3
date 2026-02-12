@@ -235,6 +235,19 @@ impl Object3D {
     pub fn shapes_index(&self) -> u8 {
         self.object.shapes_index
     }
+
+    /// Returns the SHAPES.DAT footprint index for the given rotation (0-3).
+    /// Rotation is computed from angle: `((angle as u32 + 0x1FF) >> 9) & 3`
+    /// Returns i8 since negative values mean no footprint.
+    pub fn footprint_index(&self, rotation: usize) -> i8 {
+        match rotation & 3 {
+            0 => self.object.shapes_index as i8,
+            1 => self.object.u1 as i8,
+            2 => (self.object.f10 & 0xFF) as u8 as i8,
+            3 => (self.object.f10 >> 8) as u8 as i8,
+            _ => unreachable!(),
+        }
+    }
 }
 
 /******************************************************************************/
