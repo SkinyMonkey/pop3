@@ -1,18 +1,22 @@
-// objects_tex.wgsl — OBJ viewer with textured objects.
-// Replaces objects_1.vert + objects_1.frag.
+// objects_tex.wgsl — Textured 3D objects with directional lighting.
 
-// Group 0: Transform matrices
+// Group 0: Transform matrices + lighting
 struct Transforms {
     m_transform: mat4x4<f32>,
 };
-
-@group(0) @binding(0) var<uniform> transforms: Transforms;
 
 struct Transforms1 {
     m_transform1: mat4x4<f32>,
 };
 
+struct LightParams {
+    sun_dir: vec3<f32>,
+    ambient: f32,
+};
+
+@group(0) @binding(0) var<uniform> transforms: Transforms;
 @group(0) @binding(1) var<uniform> transforms1: Transforms1;
+@group(0) @binding(2) var<uniform> light: LightParams;
 
 // Group 1: Texture and sampler
 @group(1) @binding(0) var texture_main: texture_2d<f32>;
@@ -30,6 +34,7 @@ struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) tex_id: i32,
+    @location(2) world_pos: vec3<f32>,
 };
 
 @vertex
@@ -38,13 +43,19 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.position = transforms.m_transform * transforms1.m_transform1 * vec4<f32>(in.coord3d, 1.0);
     out.tex_id = in.tex_id;
     out.uv = in.uv;
+    out.world_pos = in.coord3d;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    // Compute face normal from screen-space derivatives
+    let world_normal = normalize(cross(dpdx(in.world_pos), dpdy(in.world_pos)));
+    let ndotl = max(dot(world_normal, light.sun_dir), 0.0);
+    let brightness = light.ambient + (1.0 - light.ambient) * ndotl;
+
     if (in.tex_id < 0 || in.tex_id > 255) {
-        return vec4<f32>(0.6, 0.6, 0.6, 1.0);
+        return vec4<f32>(vec3<f32>(0.6) * brightness, 1.0);
     }
 
     let row = in.tex_id / 8;
@@ -58,5 +69,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (color.w > 0.0) {
         discard;
     }
-    return color;
+    return vec4<f32>(color.rgb * brightness, color.a);
 }
