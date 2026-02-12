@@ -12,6 +12,9 @@ struct Transforms1 {
 struct LightParams {
     sun_dir: vec3<f32>,
     ambient: f32,
+    camera_focus: vec2<f32>,
+    viewport_radius: f32,
+    game_tick: f32,
 };
 
 @group(0) @binding(0) var<uniform> transforms: Transforms;
@@ -35,6 +38,7 @@ struct VertexOutput {
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) tex_id: i32,
     @location(2) world_pos: vec3<f32>,
+    @location(3) viewport_fade: f32,
 };
 
 @vertex
@@ -44,18 +48,31 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.tex_id = in.tex_id;
     out.uv = in.uv;
     out.world_pos = in.coord3d;
+
+    // Viewport fade: smooth circular falloff at edges
+    let dx = in.coord3d.x - light.camera_focus.x;
+    let dy = in.coord3d.y - light.camera_focus.y;
+    let dist = sqrt(dx * dx + dy * dy);
+    let fade_start = light.viewport_radius * 0.85;
+    let fade_end = light.viewport_radius;
+    out.viewport_fade = clamp(1.0 - (dist - fade_start) / (fade_end - fade_start), 0.0, 1.0);
+
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    if (in.viewport_fade < 0.01) {
+        discard;
+    }
+
     // Compute face normal from screen-space derivatives
     let world_normal = normalize(cross(dpdx(in.world_pos), dpdy(in.world_pos)));
     let ndotl = max(dot(world_normal, light.sun_dir), 0.0);
     let brightness = light.ambient + (1.0 - light.ambient) * ndotl;
 
     if (in.tex_id < 0 || in.tex_id > 255) {
-        return vec4<f32>(vec3<f32>(0.6) * brightness, 1.0);
+        return vec4<f32>(vec3<f32>(0.6) * brightness * in.viewport_fade, 1.0);
     }
 
     let row = in.tex_id / 8;
@@ -69,5 +86,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (color.w > 0.0) {
         discard;
     }
-    return vec4<f32>(color.rgb * brightness, color.a);
+    return vec4<f32>(color.rgb * brightness * in.viewport_fade, color.a);
 }
