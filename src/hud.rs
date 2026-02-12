@@ -1,0 +1,807 @@
+// HUD data types, layout computation, and pure rendering helpers.
+//
+// This module contains the data contract between game logic and the HUD renderer.
+// Game logic populates `HudState` each frame; the HUD renders whatever it receives.
+// No game-logic types (Unit, LandscapeMesh, etc.) are referenced here.
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct HudVertex {
+    pub position: [f32; 2],
+    pub uv: [f32; 2],
+    pub color: [f32; 4],
+}
+
+#[derive(Clone, Debug)]
+pub struct SpriteRegion {
+    pub u0: f32,
+    pub v0: f32,
+    pub u1: f32,
+    pub v1: f32,
+    pub width: u16,
+    pub height: u16,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum HudTab {
+    Spells,
+    Buildings,
+    Units,
+}
+
+/// Pre-computed layout dimensions for the HUD, derived from screen size.
+/// Single source of truth — used by both rendering and input handling.
+#[derive(Clone, Debug)]
+pub struct HudLayout {
+    pub screen_w: f32,
+    pub screen_h: f32,
+    pub scale_x: f32,
+    pub scale_y: f32,
+    pub sidebar_w: f32,
+    pub font_scale: f32,
+    pub small_font: f32,
+    pub mm_pad: f32,
+    pub mm_size: f32,
+    pub mm_x: f32,
+    pub mm_y: f32,
+    pub tab_y: f32,
+    pub tab_h: f32,
+    pub tab_w: f32,
+    pub panel_y: f32,
+    pub line_h: f32,
+}
+
+// ---------------------------------------------------------------------------
+// Data contract: game logic → HUD
+// ---------------------------------------------------------------------------
+
+/// Data the game logic provides to the HUD each frame.
+/// The HUD renders whatever is in here — no game logic knowledge.
+pub struct HudState {
+    pub active_tab: HudTab,
+    pub minimap: MinimapData,
+    pub panel_entries: Vec<PanelEntry>,
+    pub tribe_populations: Vec<TribePopulation>,
+    pub level_num: u32,
+    pub frame_count: u64,
+}
+
+pub struct MinimapData {
+    pub heights: [[u16; 128]; 128],
+    pub dots: Vec<MinimapDot>,
+}
+
+pub struct MinimapDot {
+    pub cell_x: u8,
+    pub cell_y: u8,
+    pub tribe_index: u8,
+}
+
+pub struct PanelEntry {
+    pub label: String,
+    pub color: [f32; 4],
+}
+
+pub struct TribePopulation {
+    pub tribe_index: u8,
+    pub count: u32,
+    pub color: [f32; 4],
+}
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+pub const FONT_GLYPH_W: u32 = 8;
+pub const FONT_GLYPH_H: u32 = 8;
+pub const FONT_COLS: u32 = 16;
+pub const FONT_ROWS: u32 = 6;
+pub const FONT_ATLAS_W: u32 = FONT_COLS * FONT_GLYPH_W; // 128
+pub const FONT_ATLAS_H: u32 = FONT_ROWS * FONT_GLYPH_H; // 48
+
+/// Tribe colors for minimap dots (RGB, 0-255).
+pub const MINIMAP_TRIBE_COLORS: [[u8; 3]; 4] = [
+    [80, 130, 255],  // Blue
+    [255, 60, 60],   // Red
+    [255, 255, 60],  // Yellow
+    [60, 255, 60],   // Green
+];
+
+/// Tribe colors for HUD text overlay (RGBA, 0.0-1.0).
+pub const HUD_TRIBE_COLORS: [[f32; 4]; 4] = [
+    [0.3, 0.5, 1.0, 0.9],  // Blue
+    [1.0, 0.3, 0.3, 0.9],  // Red
+    [1.0, 1.0, 0.3, 0.9],  // Yellow
+    [0.3, 1.0, 0.3, 0.9],  // Green
+];
+
+/// 8x8 bitmap font for ASCII 32..127 (96 glyphs).
+/// Each glyph is 8 bytes (one byte per row, MSB = leftmost pixel).
+pub const FONT_8X8: [[u8; 8]; 96] = {
+    let mut f = [[0u8; 8]; 96];
+    f[0] = [0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00]; // Space (32)
+    f[1] = [0x18,0x18,0x18,0x18,0x18,0x00,0x18,0x00]; // !
+    f[2] = [0x6C,0x6C,0x6C,0x00,0x00,0x00,0x00,0x00]; // "
+    f[3] = [0x6C,0x6C,0xFE,0x6C,0xFE,0x6C,0x6C,0x00]; // #
+    f[4] = [0x18,0x7E,0xC0,0x7C,0x06,0xFC,0x18,0x00]; // $
+    f[5] = [0x00,0xC6,0xCC,0x18,0x30,0x66,0xC6,0x00]; // %
+    f[6] = [0x38,0x6C,0x38,0x76,0xDC,0xCC,0x76,0x00]; // &
+    f[7] = [0x18,0x18,0x30,0x00,0x00,0x00,0x00,0x00]; // '
+    f[8] = [0x0C,0x18,0x30,0x30,0x30,0x18,0x0C,0x00]; // (
+    f[9] = [0x30,0x18,0x0C,0x0C,0x0C,0x18,0x30,0x00]; // )
+    f[10] = [0x00,0x66,0x3C,0xFF,0x3C,0x66,0x00,0x00]; // *
+    f[11] = [0x00,0x18,0x18,0x7E,0x18,0x18,0x00,0x00]; // +
+    f[12] = [0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x30]; // ,
+    f[13] = [0x00,0x00,0x00,0x7E,0x00,0x00,0x00,0x00]; // -
+    f[14] = [0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x00]; // .
+    f[15] = [0x06,0x0C,0x18,0x30,0x60,0xC0,0x80,0x00]; // /
+    f[16] = [0x7C,0xC6,0xCE,0xD6,0xE6,0xC6,0x7C,0x00]; // 0
+    f[17] = [0x18,0x38,0x18,0x18,0x18,0x18,0x7E,0x00]; // 1
+    f[18] = [0x7C,0xC6,0x06,0x1C,0x30,0x66,0xFE,0x00]; // 2
+    f[19] = [0x7C,0xC6,0x06,0x3C,0x06,0xC6,0x7C,0x00]; // 3
+    f[20] = [0x1C,0x3C,0x6C,0xCC,0xFE,0x0C,0x1E,0x00]; // 4
+    f[21] = [0xFE,0xC0,0xFC,0x06,0x06,0xC6,0x7C,0x00]; // 5
+    f[22] = [0x38,0x60,0xC0,0xFC,0xC6,0xC6,0x7C,0x00]; // 6
+    f[23] = [0xFE,0xC6,0x0C,0x18,0x30,0x30,0x30,0x00]; // 7
+    f[24] = [0x7C,0xC6,0xC6,0x7C,0xC6,0xC6,0x7C,0x00]; // 8
+    f[25] = [0x7C,0xC6,0xC6,0x7E,0x06,0x0C,0x78,0x00]; // 9
+    f[26] = [0x00,0x18,0x18,0x00,0x00,0x18,0x18,0x00]; // :
+    f[27] = [0x00,0x18,0x18,0x00,0x00,0x18,0x18,0x30]; // ;
+    f[28] = [0x0C,0x18,0x30,0x60,0x30,0x18,0x0C,0x00]; // <
+    f[29] = [0x00,0x00,0x7E,0x00,0x00,0x7E,0x00,0x00]; // =
+    f[30] = [0x60,0x30,0x18,0x0C,0x18,0x30,0x60,0x00]; // >
+    f[31] = [0x7C,0xC6,0x0C,0x18,0x18,0x00,0x18,0x00]; // ?
+    f[32] = [0x7C,0xC6,0xDE,0xDE,0xDE,0xC0,0x78,0x00]; // @
+    f[33] = [0x38,0x6C,0xC6,0xC6,0xFE,0xC6,0xC6,0x00]; // A
+    f[34] = [0xFC,0x66,0x66,0x7C,0x66,0x66,0xFC,0x00]; // B
+    f[35] = [0x3C,0x66,0xC0,0xC0,0xC0,0x66,0x3C,0x00]; // C
+    f[36] = [0xF8,0x6C,0x66,0x66,0x66,0x6C,0xF8,0x00]; // D
+    f[37] = [0xFE,0x62,0x68,0x78,0x68,0x62,0xFE,0x00]; // E
+    f[38] = [0xFE,0x62,0x68,0x78,0x68,0x60,0xF0,0x00]; // F
+    f[39] = [0x3C,0x66,0xC0,0xC0,0xCE,0x66,0x3E,0x00]; // G
+    f[40] = [0xC6,0xC6,0xC6,0xFE,0xC6,0xC6,0xC6,0x00]; // H
+    f[41] = [0x3C,0x18,0x18,0x18,0x18,0x18,0x3C,0x00]; // I
+    f[42] = [0x1E,0x0C,0x0C,0x0C,0xCC,0xCC,0x78,0x00]; // J
+    f[43] = [0xE6,0x66,0x6C,0x78,0x6C,0x66,0xE6,0x00]; // K
+    f[44] = [0xF0,0x60,0x60,0x60,0x62,0x66,0xFE,0x00]; // L
+    f[45] = [0xC6,0xEE,0xFE,0xFE,0xD6,0xC6,0xC6,0x00]; // M
+    f[46] = [0xC6,0xE6,0xF6,0xDE,0xCE,0xC6,0xC6,0x00]; // N
+    f[47] = [0x7C,0xC6,0xC6,0xC6,0xC6,0xC6,0x7C,0x00]; // O
+    f[48] = [0xFC,0x66,0x66,0x7C,0x60,0x60,0xF0,0x00]; // P
+    f[49] = [0x7C,0xC6,0xC6,0xC6,0xD6,0xDE,0x7C,0x06]; // Q
+    f[50] = [0xFC,0x66,0x66,0x7C,0x6C,0x66,0xE6,0x00]; // R
+    f[51] = [0x7C,0xC6,0xE0,0x7C,0x0E,0xC6,0x7C,0x00]; // S
+    f[52] = [0x7E,0x7E,0x5A,0x18,0x18,0x18,0x3C,0x00]; // T
+    f[53] = [0xC6,0xC6,0xC6,0xC6,0xC6,0xC6,0x7C,0x00]; // U
+    f[54] = [0xC6,0xC6,0xC6,0xC6,0x6C,0x38,0x10,0x00]; // V
+    f[55] = [0xC6,0xC6,0xD6,0xFE,0xFE,0xEE,0xC6,0x00]; // W
+    f[56] = [0xC6,0x6C,0x38,0x38,0x38,0x6C,0xC6,0x00]; // X
+    f[57] = [0x66,0x66,0x66,0x3C,0x18,0x18,0x3C,0x00]; // Y
+    f[58] = [0xFE,0xC6,0x8C,0x18,0x32,0x66,0xFE,0x00]; // Z
+    f[59] = [0x3C,0x30,0x30,0x30,0x30,0x30,0x3C,0x00]; // [
+    f[60] = [0xC0,0x60,0x30,0x18,0x0C,0x06,0x02,0x00]; // backslash
+    f[61] = [0x3C,0x0C,0x0C,0x0C,0x0C,0x0C,0x3C,0x00]; // ]
+    f[62] = [0x10,0x38,0x6C,0xC6,0x00,0x00,0x00,0x00]; // ^
+    f[63] = [0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xFF]; // _
+    f[64] = [0x30,0x18,0x0C,0x00,0x00,0x00,0x00,0x00]; // `
+    f[65] = [0x00,0x00,0x78,0x0C,0x7C,0xCC,0x76,0x00]; // a
+    f[66] = [0xE0,0x60,0x7C,0x66,0x66,0x66,0xDC,0x00]; // b
+    f[67] = [0x00,0x00,0x7C,0xC6,0xC0,0xC6,0x7C,0x00]; // c
+    f[68] = [0x1C,0x0C,0x7C,0xCC,0xCC,0xCC,0x76,0x00]; // d
+    f[69] = [0x00,0x00,0x7C,0xC6,0xFE,0xC0,0x7C,0x00]; // e
+    f[70] = [0x1C,0x36,0x30,0x78,0x30,0x30,0x78,0x00]; // f
+    f[71] = [0x00,0x00,0x76,0xCC,0xCC,0x7C,0x0C,0xF8]; // g
+    f[72] = [0xE0,0x60,0x6C,0x76,0x66,0x66,0xE6,0x00]; // h
+    f[73] = [0x18,0x00,0x38,0x18,0x18,0x18,0x3C,0x00]; // i
+    f[74] = [0x06,0x00,0x06,0x06,0x06,0x66,0x66,0x3C]; // j
+    f[75] = [0xE0,0x60,0x66,0x6C,0x78,0x6C,0xE6,0x00]; // k
+    f[76] = [0x38,0x18,0x18,0x18,0x18,0x18,0x3C,0x00]; // l
+    f[77] = [0x00,0x00,0xEC,0xFE,0xD6,0xD6,0xD6,0x00]; // m
+    f[78] = [0x00,0x00,0xDC,0x66,0x66,0x66,0x66,0x00]; // n
+    f[79] = [0x00,0x00,0x7C,0xC6,0xC6,0xC6,0x7C,0x00]; // o
+    f[80] = [0x00,0x00,0xDC,0x66,0x66,0x7C,0x60,0xF0]; // p
+    f[81] = [0x00,0x00,0x76,0xCC,0xCC,0x7C,0x0C,0x1E]; // q
+    f[82] = [0x00,0x00,0xDC,0x76,0x60,0x60,0xF0,0x00]; // r
+    f[83] = [0x00,0x00,0x7E,0xC0,0x7C,0x06,0xFC,0x00]; // s
+    f[84] = [0x30,0x30,0x7C,0x30,0x30,0x36,0x1C,0x00]; // t
+    f[85] = [0x00,0x00,0xCC,0xCC,0xCC,0xCC,0x76,0x00]; // u
+    f[86] = [0x00,0x00,0xC6,0xC6,0xC6,0x6C,0x38,0x00]; // v
+    f[87] = [0x00,0x00,0xC6,0xD6,0xD6,0xFE,0x6C,0x00]; // w
+    f[88] = [0x00,0x00,0xC6,0x6C,0x38,0x6C,0xC6,0x00]; // x
+    f[89] = [0x00,0x00,0xC6,0xC6,0xCE,0x76,0x06,0xFC]; // y
+    f[90] = [0x00,0x00,0xFC,0x98,0x30,0x64,0xFC,0x00]; // z
+    f[91] = [0x0E,0x18,0x18,0x70,0x18,0x18,0x0E,0x00]; // {
+    f[92] = [0x18,0x18,0x18,0x00,0x18,0x18,0x18,0x00]; // |
+    f[93] = [0x70,0x18,0x18,0x0E,0x18,0x18,0x70,0x00]; // }
+    f[94] = [0x76,0xDC,0x00,0x00,0x00,0x00,0x00,0x00]; // ~
+    f[95] = [0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00]; // DEL placeholder
+    f
+};
+
+// ---------------------------------------------------------------------------
+// Pure functions
+// ---------------------------------------------------------------------------
+
+/// Generate RGBA pixel data for the 128x48 bitmap font atlas.
+pub fn build_font_rgba() -> Vec<u8> {
+    let mut rgba = vec![0u8; (FONT_ATLAS_W * FONT_ATLAS_H * 4) as usize];
+    for (idx, glyph) in FONT_8X8.iter().enumerate() {
+        let col = (idx as u32) % FONT_COLS;
+        let row = (idx as u32) / FONT_COLS;
+        let ox = col * FONT_GLYPH_W;
+        let oy = row * FONT_GLYPH_H;
+        for y in 0..8u32 {
+            let bits = glyph[y as usize];
+            for x in 0..8u32 {
+                if bits & (0x80 >> x) != 0 {
+                    let px = ox + x;
+                    let py = oy + y;
+                    let off = ((py * FONT_ATLAS_W + px) * 4) as usize;
+                    rgba[off] = 255;
+                    rgba[off + 1] = 255;
+                    rgba[off + 2] = 255;
+                    rgba[off + 3] = 255;
+                }
+            }
+        }
+    }
+    rgba
+}
+
+/// Generate 6 vertices (2 triangles) for a textured quad.
+/// Winding: TL→TR→BL, BL→TR→BR.
+pub fn generate_quad_vertices(
+    x0: f32, y0: f32, x1: f32, y1: f32,
+    u0: f32, v0: f32, u1: f32, v1: f32,
+    color: [f32; 4],
+) -> [HudVertex; 6] {
+    [
+        HudVertex { position: [x0, y0], uv: [u0, v0], color },
+        HudVertex { position: [x1, y0], uv: [u1, v0], color },
+        HudVertex { position: [x0, y1], uv: [u0, v1], color },
+        HudVertex { position: [x0, y1], uv: [u0, v1], color },
+        HudVertex { position: [x1, y0], uv: [u1, v0], color },
+        HudVertex { position: [x1, y1], uv: [u1, v1], color },
+    ]
+}
+
+/// Shelf-pack a list of (width, height) items into an atlas of given width.
+/// Returns (placements, atlas_height) where placements[i] = (x, y) for item i,
+/// and atlas_height is the next power-of-two height that fits everything.
+pub fn shelf_pack(items: &[(u16, u16)], atlas_w: u32) -> (Vec<(u32, u32)>, u32) {
+    let mut shelf_y: u32 = 0;
+    let mut shelf_h: u32 = 0;
+    let mut cursor_x: u32 = 0;
+    let mut placements = Vec::with_capacity(items.len());
+
+    for &(w, h) in items {
+        let sw = w as u32;
+        let sh = h as u32;
+        if cursor_x + sw > atlas_w {
+            shelf_y += shelf_h;
+            cursor_x = 0;
+            shelf_h = 0;
+        }
+        placements.push((cursor_x, shelf_y));
+        cursor_x += sw + 1; // 1px padding
+        shelf_h = shelf_h.max(sh);
+    }
+
+    let atlas_h = (shelf_y + shelf_h).next_power_of_two().max(64);
+    (placements, atlas_h)
+}
+
+/// Convert palette-indexed pixel data to RGBA.
+/// Palette is in BGRA format (4 bytes per entry). `transparent_idx` pixels get alpha=0.
+pub fn convert_indexed_to_rgba(indexed: &[u8], palette: &[u8], transparent_idx: u8) -> Vec<u8> {
+    let mut rgba = vec![0u8; indexed.len() * 4];
+    for (j, &idx) in indexed.iter().enumerate() {
+        if idx == transparent_idx {
+            rgba[j * 4 + 3] = 0;
+        } else {
+            let p = (idx as usize) * 4;
+            if p + 2 < palette.len() {
+                // Palette is BGRA → output RGBA
+                rgba[j * 4] = palette[p + 2];     // R
+                rgba[j * 4 + 1] = palette[p + 1]; // G
+                rgba[j * 4 + 2] = palette[p];     // B
+                rgba[j * 4 + 3] = 255;            // A
+            }
+        }
+    }
+    rgba
+}
+
+/// Generate 128x128 RGBA minimap texture from terrain heights and unit positions.
+pub fn generate_minimap_rgba(data: &MinimapData) -> Vec<u8> {
+    let mut rgba = vec![0u8; 128 * 128 * 4];
+    // Terrain
+    for y in 0..128usize {
+        for x in 0..128usize {
+            let h = data.heights[y][x];
+            let off = (y * 128 + x) * 4;
+            if h == 0 {
+                // Water
+                rgba[off] = 20;
+                rgba[off + 1] = 40;
+                rgba[off + 2] = 80;
+                rgba[off + 3] = 255;
+            } else {
+                // Land — green gradient by height
+                let v = ((h as f32 / 1024.0) * 180.0).min(255.0) as u8;
+                rgba[off] = v / 4;
+                rgba[off + 1] = 40 + v / 2;
+                rgba[off + 2] = v / 6;
+                rgba[off + 3] = 255;
+            }
+        }
+    }
+    // Unit dots
+    for dot in &data.dots {
+        let cx = (dot.cell_x as usize).min(127);
+        let cy = (dot.cell_y as usize).min(127);
+        let off = (cy * 128 + cx) * 4;
+        let tc = &MINIMAP_TRIBE_COLORS[(dot.tribe_index as usize).min(3)];
+        rgba[off] = tc[0];
+        rgba[off + 1] = tc[1];
+        rgba[off + 2] = tc[2];
+        rgba[off + 3] = 255;
+    }
+    rgba
+}
+
+/// Compute HUD layout dimensions from screen size.
+pub fn compute_hud_layout(screen_w: f32, screen_h: f32) -> HudLayout {
+    let scale_x = screen_w / 640.0;
+    let scale_y = screen_h / 480.0;
+    let sidebar_w = (100.0 * scale_x).round();
+    let font_scale = (12.0 * scale_y).max(10.0).round();
+    let small_font = (font_scale * 0.75).round();
+    let mm_pad = 4.0 * scale_x;
+    let mm_size = sidebar_w - mm_pad * 2.0;
+    let mm_x = mm_pad;
+    let mm_y = mm_pad;
+    let tab_y = mm_y + mm_size + 4.0 * scale_y;
+    let tab_h = font_scale + 6.0 * scale_y;
+    let tab_w = (sidebar_w - mm_pad * 2.0) / 3.0;
+    let panel_y = tab_y + tab_h + 2.0 * scale_y;
+    let line_h = font_scale + 2.0;
+    HudLayout {
+        screen_w, screen_h, scale_x, scale_y,
+        sidebar_w, font_scale, small_font,
+        mm_pad, mm_size, mm_x, mm_y,
+        tab_y, tab_h, tab_w,
+        panel_y, line_h,
+    }
+}
+
+/// Detect which tab was clicked given mouse position and layout.
+/// Returns None if click is outside the tab bar.
+pub fn detect_tab_click(mouse_x: f32, mouse_y: f32, layout: &HudLayout) -> Option<HudTab> {
+    if mouse_y < layout.tab_y || mouse_y >= layout.tab_y + layout.tab_h {
+        return None;
+    }
+    if mouse_x < layout.mm_pad || mouse_x >= layout.sidebar_w - layout.mm_pad {
+        return None;
+    }
+    let tab_idx = ((mouse_x - layout.mm_pad) / layout.tab_w) as usize;
+    Some(match tab_idx {
+        0 => HudTab::Spells,
+        1 => HudTab::Buildings,
+        _ => HudTab::Units,
+    })
+}
+
+/// Get the sprite region index for a PSFB panel sprite.
+/// Panel sprites are stored after the white pixel (1) + font glyphs (96).
+pub fn panel_sprite_index(font_region_start: usize, psfb_index: usize) -> usize {
+    font_region_start + 96 + psfb_index
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- build_font_rgba --
+
+    #[test]
+    fn build_font_rgba_correct_size() {
+        // Arrange: expected size is 128 * 48 * 4 = 24576 bytes
+        let expected_len = (FONT_ATLAS_W * FONT_ATLAS_H * 4) as usize;
+
+        // Act
+        let rgba = build_font_rgba();
+
+        // Assert
+        assert_eq!(rgba.len(), expected_len);
+    }
+
+    #[test]
+    fn build_font_rgba_known_set_pixel() {
+        // Arrange: 'A' is glyph index 33 (ASCII 65 - 32).
+        // FONT_8X8[33] row 0 = 0x38 = 0b00111000, so pixel (2,0) relative to glyph is set.
+        // Glyph 33: col = 33 % 16 = 1, row = 33 / 16 = 2
+        // Atlas pixel = (1*8 + 2, 2*8 + 0) = (10, 16)
+        let px = 1 * FONT_GLYPH_W + 2;
+        let py = 2 * FONT_GLYPH_H + 0;
+        let off = ((py * FONT_ATLAS_W + px) * 4) as usize;
+
+        // Act
+        let rgba = build_font_rgba();
+
+        // Assert: white opaque pixel
+        assert_eq!(rgba[off], 255);
+        assert_eq!(rgba[off + 1], 255);
+        assert_eq!(rgba[off + 2], 255);
+        assert_eq!(rgba[off + 3], 255);
+    }
+
+    #[test]
+    fn build_font_rgba_space_glyph_empty() {
+        // Arrange: space (glyph 0) is all zeros, so (0,0) in the atlas should be transparent
+        let off = 0usize; // pixel (0, 0) = glyph 0, row 0
+
+        // Act
+        let rgba = build_font_rgba();
+
+        // Assert
+        assert_eq!(rgba[off + 3], 0); // alpha = 0
+    }
+
+    #[test]
+    fn build_font_rgba_all_opaque_pixels_are_white() {
+        // Arrange & Act
+        let rgba = build_font_rgba();
+
+        // Assert: every pixel with alpha > 0 must be pure white
+        for i in (0..rgba.len()).step_by(4) {
+            if rgba[i + 3] > 0 {
+                assert_eq!(rgba[i], 255, "R at offset {}", i);
+                assert_eq!(rgba[i + 1], 255, "G at offset {}", i);
+                assert_eq!(rgba[i + 2], 255, "B at offset {}", i);
+            }
+        }
+    }
+
+    // -- generate_quad_vertices --
+
+    #[test]
+    fn generate_quad_vertices_returns_six() {
+        // Arrange
+        let color = [1.0, 1.0, 1.0, 1.0];
+
+        // Act
+        let verts = generate_quad_vertices(0.0, 0.0, 10.0, 10.0, 0.0, 0.0, 1.0, 1.0, color);
+
+        // Assert
+        assert_eq!(verts.len(), 6);
+    }
+
+    #[test]
+    fn generate_quad_vertices_triangle_winding() {
+        // Arrange
+        let color = [1.0, 0.0, 0.0, 1.0];
+
+        // Act
+        let v = generate_quad_vertices(10.0, 20.0, 50.0, 80.0, 0.1, 0.2, 0.9, 0.8, color);
+
+        // Assert: first triangle = TL, TR, BL
+        assert_eq!(v[0].position, [10.0, 20.0]); // TL
+        assert_eq!(v[1].position, [50.0, 20.0]); // TR
+        assert_eq!(v[2].position, [10.0, 80.0]); // BL
+        // Second triangle = BL, TR, BR
+        assert_eq!(v[3].position, [10.0, 80.0]); // BL
+        assert_eq!(v[4].position, [50.0, 20.0]); // TR
+        assert_eq!(v[5].position, [50.0, 80.0]); // BR
+    }
+
+    #[test]
+    fn generate_quad_vertices_uv_matches_input() {
+        // Arrange
+        let color = [1.0; 4];
+
+        // Act
+        let v = generate_quad_vertices(0.0, 0.0, 1.0, 1.0, 0.25, 0.5, 0.75, 1.0, color);
+
+        // Assert
+        assert_eq!(v[0].uv, [0.25, 0.5]); // TL
+        assert_eq!(v[1].uv, [0.75, 0.5]); // TR
+        assert_eq!(v[5].uv, [0.75, 1.0]); // BR
+    }
+
+    // -- shelf_pack --
+
+    #[test]
+    fn shelf_pack_single_item() {
+        // Arrange
+        let items = [(32, 32)];
+
+        // Act
+        let (placements, height) = shelf_pack(&items, 1024);
+
+        // Assert
+        assert_eq!(placements[0], (0, 0));
+        assert!(height >= 32);
+    }
+
+    #[test]
+    fn shelf_pack_items_fit_one_row() {
+        // Arrange: 3 items of 100px wide, atlas = 1024 (plenty of room)
+        let items = [(100, 20), (100, 30), (100, 25)];
+
+        // Act
+        let (placements, _height) = shelf_pack(&items, 1024);
+
+        // Assert: all on row y=0
+        assert_eq!(placements[0].1, 0);
+        assert_eq!(placements[1].1, 0);
+        assert_eq!(placements[2].1, 0);
+        // x positions increase
+        assert!(placements[1].0 > placements[0].0);
+        assert!(placements[2].0 > placements[1].0);
+    }
+
+    #[test]
+    fn shelf_pack_overflow_wraps_to_next_shelf() {
+        // Arrange: atlas width 100, items of 60px each — second won't fit on first row
+        let items = [(60, 20), (60, 30)];
+
+        // Act
+        let (placements, _height) = shelf_pack(&items, 100);
+
+        // Assert: first item at y=0, second wraps to y=20
+        assert_eq!(placements[0], (0, 0));
+        assert_eq!(placements[1].0, 0);
+        assert_eq!(placements[1].1, 20); // shelf_h from first row
+    }
+
+    #[test]
+    fn shelf_pack_height_is_power_of_two() {
+        // Arrange
+        let items = [(50, 30), (50, 40), (50, 20)];
+
+        // Act
+        let (_placements, height) = shelf_pack(&items, 60);
+
+        // Assert: height is power of two
+        assert!(height.is_power_of_two());
+        // Must be at least as tall as content
+        assert!(height >= 30 + 40); // two rows: 40 + 20
+    }
+
+    // -- convert_indexed_to_rgba --
+
+    #[test]
+    fn convert_indexed_opaque_pixel() {
+        // Arrange: palette entry 5 = BGRA (10, 20, 30, 255)
+        let mut palette = vec![0u8; 256 * 4];
+        palette[5 * 4] = 10;     // B
+        palette[5 * 4 + 1] = 20; // G
+        palette[5 * 4 + 2] = 30; // R
+        palette[5 * 4 + 3] = 255;
+        let indexed = [5u8];
+
+        // Act
+        let rgba = convert_indexed_to_rgba(&indexed, &palette, 255);
+
+        // Assert: BGRA→RGBA swap
+        assert_eq!(rgba[0], 30);  // R (from palette B+2)
+        assert_eq!(rgba[1], 20);  // G
+        assert_eq!(rgba[2], 10);  // B (from palette B+0)
+        assert_eq!(rgba[3], 255); // A
+    }
+
+    #[test]
+    fn convert_indexed_transparent_pixel() {
+        // Arrange
+        let palette = vec![255u8; 256 * 4];
+        let indexed = [255u8]; // transparent index
+
+        // Act
+        let rgba = convert_indexed_to_rgba(&indexed, &palette, 255);
+
+        // Assert
+        assert_eq!(rgba[3], 0); // alpha = 0
+    }
+
+    #[test]
+    fn convert_indexed_bgra_to_rgba_swap() {
+        // Arrange: palette entry 0 = B=0xFF, G=0x80, R=0x40, A=0
+        let mut palette = vec![0u8; 4];
+        palette[0] = 0xFF; // B
+        palette[1] = 0x80; // G
+        palette[2] = 0x40; // R
+        let indexed = [0u8];
+
+        // Act
+        let rgba = convert_indexed_to_rgba(&indexed, &palette, 255);
+
+        // Assert: R and B swapped
+        assert_eq!(rgba[0], 0x40); // R
+        assert_eq!(rgba[1], 0x80); // G
+        assert_eq!(rgba[2], 0xFF); // B
+    }
+
+    // -- generate_minimap_rgba --
+
+    #[test]
+    fn generate_minimap_water_color() {
+        // Arrange: all heights = 0 (water)
+        let data = MinimapData {
+            heights: [[0u16; 128]; 128],
+            dots: vec![],
+        };
+
+        // Act
+        let rgba = generate_minimap_rgba(&data);
+
+        // Assert: first pixel is water blue
+        assert_eq!(rgba[0], 20);
+        assert_eq!(rgba[1], 40);
+        assert_eq!(rgba[2], 80);
+        assert_eq!(rgba[3], 255);
+    }
+
+    #[test]
+    fn generate_minimap_land_gradient() {
+        // Arrange: cell (0,0) height = 512
+        let mut heights = [[0u16; 128]; 128];
+        heights[0][0] = 512;
+        let data = MinimapData { heights, dots: vec![] };
+
+        // Act
+        let rgba = generate_minimap_rgba(&data);
+
+        // Assert: green channel should be higher than water (40)
+        let v = ((512.0f32 / 1024.0) * 180.0).min(255.0) as u8;
+        assert_eq!(rgba[0], v / 4);
+        assert_eq!(rgba[1], 40 + v / 2);
+        assert_eq!(rgba[2], v / 6);
+    }
+
+    #[test]
+    fn generate_minimap_unit_dot_overwrites_terrain() {
+        // Arrange: water terrain, one unit dot at (10, 20), tribe 1 (red)
+        let data = MinimapData {
+            heights: [[0u16; 128]; 128],
+            dots: vec![MinimapDot { cell_x: 10, cell_y: 20, tribe_index: 1 }],
+        };
+
+        // Act
+        let rgba = generate_minimap_rgba(&data);
+
+        // Assert: cell (10, 20) should be red tribe color, not water
+        let off = (20 * 128 + 10) * 4;
+        assert_eq!(rgba[off], 255);    // R
+        assert_eq!(rgba[off + 1], 60); // G
+        assert_eq!(rgba[off + 2], 60); // B
+    }
+
+    // -- compute_hud_layout --
+
+    #[test]
+    fn compute_hud_layout_base_resolution() {
+        // Arrange: 640x480 = 1x scale
+
+        // Act
+        let l = compute_hud_layout(640.0, 480.0);
+
+        // Assert
+        assert_eq!(l.sidebar_w, 100.0);
+        assert_eq!(l.scale_x, 1.0);
+        assert_eq!(l.scale_y, 1.0);
+        assert_eq!(l.mm_pad, 4.0);
+        assert_eq!(l.mm_size, 92.0); // 100 - 4*2
+    }
+
+    #[test]
+    fn compute_hud_layout_double_resolution() {
+        // Arrange: 1280x960 = 2x scale
+
+        // Act
+        let l = compute_hud_layout(1280.0, 960.0);
+
+        // Assert
+        assert_eq!(l.sidebar_w, 200.0);
+        assert_eq!(l.scale_x, 2.0);
+        assert_eq!(l.scale_y, 2.0);
+        assert_eq!(l.mm_pad, 8.0);
+        assert_eq!(l.mm_size, 184.0); // 200 - 8*2
+    }
+
+    #[test]
+    fn compute_hud_layout_font_scale_minimum() {
+        // Arrange: very small screen where 12*scale_y < 10
+        // scale_y = 200/480 ≈ 0.417, 12*0.417 = 5.0 → clamped to 10
+        let l = compute_hud_layout(320.0, 200.0);
+
+        // Assert
+        assert_eq!(l.font_scale, 10.0);
+    }
+
+    // -- detect_tab_click --
+
+    #[test]
+    fn detect_tab_click_spells() {
+        // Arrange
+        let layout = compute_hud_layout(640.0, 480.0);
+        // Click in the middle of the first tab
+        let x = layout.mm_pad + layout.tab_w * 0.5;
+        let y = layout.tab_y + layout.tab_h * 0.5;
+
+        // Act
+        let result = detect_tab_click(x, y, &layout);
+
+        // Assert
+        assert_eq!(result, Some(HudTab::Spells));
+    }
+
+    #[test]
+    fn detect_tab_click_buildings() {
+        // Arrange
+        let layout = compute_hud_layout(640.0, 480.0);
+        let x = layout.mm_pad + layout.tab_w * 1.5;
+        let y = layout.tab_y + layout.tab_h * 0.5;
+
+        // Act
+        let result = detect_tab_click(x, y, &layout);
+
+        // Assert
+        assert_eq!(result, Some(HudTab::Buildings));
+    }
+
+    #[test]
+    fn detect_tab_click_units() {
+        // Arrange
+        let layout = compute_hud_layout(640.0, 480.0);
+        let x = layout.mm_pad + layout.tab_w * 2.5;
+        let y = layout.tab_y + layout.tab_h * 0.5;
+
+        // Act
+        let result = detect_tab_click(x, y, &layout);
+
+        // Assert
+        assert_eq!(result, Some(HudTab::Units));
+    }
+
+    #[test]
+    fn detect_tab_click_outside_returns_none() {
+        // Arrange
+        let layout = compute_hud_layout(640.0, 480.0);
+
+        // Act: click above tab bar
+        let above = detect_tab_click(layout.mm_pad + 10.0, layout.tab_y - 5.0, &layout);
+        // Click below tab bar
+        let below = detect_tab_click(layout.mm_pad + 10.0, layout.tab_y + layout.tab_h + 5.0, &layout);
+        // Click left of tabs
+        let left = detect_tab_click(0.0, layout.tab_y + 2.0, &layout);
+
+        // Assert
+        assert_eq!(above, None);
+        assert_eq!(below, None);
+        assert_eq!(left, None);
+    }
+
+    // -- panel_sprite_index --
+
+    #[test]
+    fn panel_sprite_index_calculation() {
+        // Arrange
+        let font_region_start = 1;
+        let psfb_index = 5;
+
+        // Act
+        let idx = panel_sprite_index(font_region_start, psfb_index);
+
+        // Assert: 1 + 96 + 5 = 102
+        assert_eq!(idx, 102);
+    }
+}

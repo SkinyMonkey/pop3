@@ -52,6 +52,13 @@ use pop3::game_state::tick::{GameWorld, StdTimeSource, TickSubsystems};
 use pop3::game_state::state_machine::GameState;
 use pop3::game_state::traits::NoOp;
 
+use pop3::hud::{
+    self, HudVertex, SpriteRegion, HudTab, HudState,
+    MinimapData, MinimapDot, PanelEntry, TribePopulation,
+    FONT_GLYPH_W, FONT_GLYPH_H, FONT_COLS,
+    FONT_ATLAS_W, FONT_ATLAS_H, HUD_TRIBE_COLORS,
+};
+
 /******************************************************************************/
 
 fn obj_colors() -> Vec<Vector3<u8>> {
@@ -752,212 +759,6 @@ fn build_building_meshes(
 /******************************************************************************/
 // Overlay text rendering — minimal bitmap font
 
-/// 8×8 bitmap font for ASCII 32..127 (96 glyphs).
-/// Each glyph is 8 bytes (one byte per row, MSB = leftmost pixel).
-/// This is a compact CP437-style font embedded as a constant.
-const FONT_8X8: [[u8; 8]; 96] = {
-    let mut f = [[0u8; 8]; 96];
-    // Space (32)
-    f[0] = [0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00];
-    // ! (33)
-    f[1] = [0x18,0x18,0x18,0x18,0x18,0x00,0x18,0x00];
-    // " (34)
-    f[2] = [0x6C,0x6C,0x6C,0x00,0x00,0x00,0x00,0x00];
-    // # (35)
-    f[3] = [0x6C,0x6C,0xFE,0x6C,0xFE,0x6C,0x6C,0x00];
-    // $ (36)
-    f[4] = [0x18,0x7E,0xC0,0x7C,0x06,0xFC,0x18,0x00];
-    // % (37)
-    f[5] = [0x00,0xC6,0xCC,0x18,0x30,0x66,0xC6,0x00];
-    // & (38)
-    f[6] = [0x38,0x6C,0x38,0x76,0xDC,0xCC,0x76,0x00];
-    // ' (39)
-    f[7] = [0x18,0x18,0x30,0x00,0x00,0x00,0x00,0x00];
-    // ( (40)
-    f[8] = [0x0C,0x18,0x30,0x30,0x30,0x18,0x0C,0x00];
-    // ) (41)
-    f[9] = [0x30,0x18,0x0C,0x0C,0x0C,0x18,0x30,0x00];
-    // * (42)
-    f[10] = [0x00,0x66,0x3C,0xFF,0x3C,0x66,0x00,0x00];
-    // + (43)
-    f[11] = [0x00,0x18,0x18,0x7E,0x18,0x18,0x00,0x00];
-    // , (44)
-    f[12] = [0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x30];
-    // - (45)
-    f[13] = [0x00,0x00,0x00,0x7E,0x00,0x00,0x00,0x00];
-    // . (46)
-    f[14] = [0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x00];
-    // / (47)
-    f[15] = [0x06,0x0C,0x18,0x30,0x60,0xC0,0x80,0x00];
-    // 0 (48)
-    f[16] = [0x7C,0xC6,0xCE,0xD6,0xE6,0xC6,0x7C,0x00];
-    // 1 (49)
-    f[17] = [0x18,0x38,0x18,0x18,0x18,0x18,0x7E,0x00];
-    // 2 (50)
-    f[18] = [0x7C,0xC6,0x06,0x1C,0x30,0x66,0xFE,0x00];
-    // 3 (51)
-    f[19] = [0x7C,0xC6,0x06,0x3C,0x06,0xC6,0x7C,0x00];
-    // 4 (52)
-    f[20] = [0x1C,0x3C,0x6C,0xCC,0xFE,0x0C,0x1E,0x00];
-    // 5 (53)
-    f[21] = [0xFE,0xC0,0xFC,0x06,0x06,0xC6,0x7C,0x00];
-    // 6 (54)
-    f[22] = [0x38,0x60,0xC0,0xFC,0xC6,0xC6,0x7C,0x00];
-    // 7 (55)
-    f[23] = [0xFE,0xC6,0x0C,0x18,0x30,0x30,0x30,0x00];
-    // 8 (56)
-    f[24] = [0x7C,0xC6,0xC6,0x7C,0xC6,0xC6,0x7C,0x00];
-    // 9 (57)
-    f[25] = [0x7C,0xC6,0xC6,0x7E,0x06,0x0C,0x78,0x00];
-    // : (58)
-    f[26] = [0x00,0x18,0x18,0x00,0x00,0x18,0x18,0x00];
-    // ; (59)
-    f[27] = [0x00,0x18,0x18,0x00,0x00,0x18,0x18,0x30];
-    // < (60)
-    f[28] = [0x0C,0x18,0x30,0x60,0x30,0x18,0x0C,0x00];
-    // = (61)
-    f[29] = [0x00,0x00,0x7E,0x00,0x00,0x7E,0x00,0x00];
-    // > (62)
-    f[30] = [0x60,0x30,0x18,0x0C,0x18,0x30,0x60,0x00];
-    // ? (63)
-    f[31] = [0x7C,0xC6,0x0C,0x18,0x18,0x00,0x18,0x00];
-    // @ (64)
-    f[32] = [0x7C,0xC6,0xDE,0xDE,0xDE,0xC0,0x78,0x00];
-    // A (65)
-    f[33] = [0x38,0x6C,0xC6,0xC6,0xFE,0xC6,0xC6,0x00];
-    // B (66)
-    f[34] = [0xFC,0x66,0x66,0x7C,0x66,0x66,0xFC,0x00];
-    // C (67)
-    f[35] = [0x3C,0x66,0xC0,0xC0,0xC0,0x66,0x3C,0x00];
-    // D (68)
-    f[36] = [0xF8,0x6C,0x66,0x66,0x66,0x6C,0xF8,0x00];
-    // E (69)
-    f[37] = [0xFE,0x62,0x68,0x78,0x68,0x62,0xFE,0x00];
-    // F (70)
-    f[38] = [0xFE,0x62,0x68,0x78,0x68,0x60,0xF0,0x00];
-    // G (71)
-    f[39] = [0x3C,0x66,0xC0,0xC0,0xCE,0x66,0x3E,0x00];
-    // H (72)
-    f[40] = [0xC6,0xC6,0xC6,0xFE,0xC6,0xC6,0xC6,0x00];
-    // I (73)
-    f[41] = [0x3C,0x18,0x18,0x18,0x18,0x18,0x3C,0x00];
-    // J (74)
-    f[42] = [0x1E,0x0C,0x0C,0x0C,0xCC,0xCC,0x78,0x00];
-    // K (75)
-    f[43] = [0xE6,0x66,0x6C,0x78,0x6C,0x66,0xE6,0x00];
-    // L (76)
-    f[44] = [0xF0,0x60,0x60,0x60,0x62,0x66,0xFE,0x00];
-    // M (77)
-    f[45] = [0xC6,0xEE,0xFE,0xFE,0xD6,0xC6,0xC6,0x00];
-    // N (78)
-    f[46] = [0xC6,0xE6,0xF6,0xDE,0xCE,0xC6,0xC6,0x00];
-    // O (79)
-    f[47] = [0x7C,0xC6,0xC6,0xC6,0xC6,0xC6,0x7C,0x00];
-    // P (80)
-    f[48] = [0xFC,0x66,0x66,0x7C,0x60,0x60,0xF0,0x00];
-    // Q (81)
-    f[49] = [0x7C,0xC6,0xC6,0xC6,0xD6,0xDE,0x7C,0x06];
-    // R (82)
-    f[50] = [0xFC,0x66,0x66,0x7C,0x6C,0x66,0xE6,0x00];
-    // S (83)
-    f[51] = [0x7C,0xC6,0xE0,0x7C,0x0E,0xC6,0x7C,0x00];
-    // T (84)
-    f[52] = [0x7E,0x7E,0x5A,0x18,0x18,0x18,0x3C,0x00];
-    // U (85)
-    f[53] = [0xC6,0xC6,0xC6,0xC6,0xC6,0xC6,0x7C,0x00];
-    // V (86)
-    f[54] = [0xC6,0xC6,0xC6,0xC6,0x6C,0x38,0x10,0x00];
-    // W (87)
-    f[55] = [0xC6,0xC6,0xD6,0xFE,0xFE,0xEE,0xC6,0x00];
-    // X (88)
-    f[56] = [0xC6,0x6C,0x38,0x38,0x38,0x6C,0xC6,0x00];
-    // Y (89)
-    f[57] = [0x66,0x66,0x66,0x3C,0x18,0x18,0x3C,0x00];
-    // Z (90)
-    f[58] = [0xFE,0xC6,0x8C,0x18,0x32,0x66,0xFE,0x00];
-    // [ (91)
-    f[59] = [0x3C,0x30,0x30,0x30,0x30,0x30,0x3C,0x00];
-    // \ (92)
-    f[60] = [0xC0,0x60,0x30,0x18,0x0C,0x06,0x02,0x00];
-    // ] (93)
-    f[61] = [0x3C,0x0C,0x0C,0x0C,0x0C,0x0C,0x3C,0x00];
-    // ^ (94)
-    f[62] = [0x10,0x38,0x6C,0xC6,0x00,0x00,0x00,0x00];
-    // _ (95)
-    f[63] = [0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xFF];
-    // ` (96)
-    f[64] = [0x30,0x18,0x0C,0x00,0x00,0x00,0x00,0x00];
-    // a (97)
-    f[65] = [0x00,0x00,0x78,0x0C,0x7C,0xCC,0x76,0x00];
-    // b (98)
-    f[66] = [0xE0,0x60,0x7C,0x66,0x66,0x66,0xDC,0x00];
-    // c (99)
-    f[67] = [0x00,0x00,0x7C,0xC6,0xC0,0xC6,0x7C,0x00];
-    // d (100)
-    f[68] = [0x1C,0x0C,0x7C,0xCC,0xCC,0xCC,0x76,0x00];
-    // e (101)
-    f[69] = [0x00,0x00,0x7C,0xC6,0xFE,0xC0,0x7C,0x00];
-    // f (102)
-    f[70] = [0x1C,0x36,0x30,0x78,0x30,0x30,0x78,0x00];
-    // g (103)
-    f[71] = [0x00,0x00,0x76,0xCC,0xCC,0x7C,0x0C,0xF8];
-    // h (104)
-    f[72] = [0xE0,0x60,0x6C,0x76,0x66,0x66,0xE6,0x00];
-    // i (105)
-    f[73] = [0x18,0x00,0x38,0x18,0x18,0x18,0x3C,0x00];
-    // j (106)
-    f[74] = [0x06,0x00,0x06,0x06,0x06,0x66,0x66,0x3C];
-    // k (107)
-    f[75] = [0xE0,0x60,0x66,0x6C,0x78,0x6C,0xE6,0x00];
-    // l (108)
-    f[76] = [0x38,0x18,0x18,0x18,0x18,0x18,0x3C,0x00];
-    // m (109)
-    f[77] = [0x00,0x00,0xEC,0xFE,0xD6,0xD6,0xD6,0x00];
-    // n (110)
-    f[78] = [0x00,0x00,0xDC,0x66,0x66,0x66,0x66,0x00];
-    // o (111)
-    f[79] = [0x00,0x00,0x7C,0xC6,0xC6,0xC6,0x7C,0x00];
-    // p (112)
-    f[80] = [0x00,0x00,0xDC,0x66,0x66,0x7C,0x60,0xF0];
-    // q (113)
-    f[81] = [0x00,0x00,0x76,0xCC,0xCC,0x7C,0x0C,0x1E];
-    // r (114)
-    f[82] = [0x00,0x00,0xDC,0x76,0x60,0x60,0xF0,0x00];
-    // s (115)
-    f[83] = [0x00,0x00,0x7E,0xC0,0x7C,0x06,0xFC,0x00];
-    // t (116)
-    f[84] = [0x30,0x30,0x7C,0x30,0x30,0x36,0x1C,0x00];
-    // u (117)
-    f[85] = [0x00,0x00,0xCC,0xCC,0xCC,0xCC,0x76,0x00];
-    // v (118)
-    f[86] = [0x00,0x00,0xC6,0xC6,0xC6,0x6C,0x38,0x00];
-    // w (119)
-    f[87] = [0x00,0x00,0xC6,0xD6,0xD6,0xFE,0x6C,0x00];
-    // x (120)
-    f[88] = [0x00,0x00,0xC6,0x6C,0x38,0x6C,0xC6,0x00];
-    // y (121)
-    f[89] = [0x00,0x00,0xC6,0xC6,0xCE,0x76,0x06,0xFC];
-    // z (122)
-    f[90] = [0x00,0x00,0xFC,0x98,0x30,0x64,0xFC,0x00];
-    // { (123)
-    f[91] = [0x0E,0x18,0x18,0x70,0x18,0x18,0x0E,0x00];
-    // | (124)
-    f[92] = [0x18,0x18,0x18,0x00,0x18,0x18,0x18,0x00];
-    // } (125)
-    f[93] = [0x70,0x18,0x18,0x0E,0x18,0x18,0x70,0x00];
-    // ~ (126)
-    f[94] = [0x76,0xDC,0x00,0x00,0x00,0x00,0x00,0x00];
-    // DEL placeholder (127) — not used but keeps array full
-    f[95] = [0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00];
-    f
-};
-
-const FONT_GLYPH_W: u32 = 8;
-const FONT_GLYPH_H: u32 = 8;
-const FONT_COLS: u32 = 16; // glyphs per row in atlas
-const FONT_ROWS: u32 = 6;  // 96 glyphs / 16 = 6 rows
-const FONT_ATLAS_W: u32 = FONT_COLS * FONT_GLYPH_W; // 128
-const FONT_ATLAS_H: u32 = FONT_ROWS * FONT_GLYPH_H; // 48
 
 fn help_text() -> &'static str {
     concat!(
@@ -977,25 +778,6 @@ fn help_text() -> &'static str {
 
 /******************************************************************************/
 // HUD Sprite Renderer — 2D screen-space rendering for HUD elements
-
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct HudVertex {
-    position: [f32; 2],
-    uv: [f32; 2],
-    color: [f32; 4],
-}
-
-/// UV region of a sprite within the HUD atlas texture.
-#[derive(Clone)]
-struct SpriteRegion {
-    u0: f32, v0: f32,
-    u1: f32, v1: f32,
-    width: u16, height: u16,
-}
-
-#[derive(Copy, Clone, PartialEq)]
-enum HudTab { Spells, Buildings, Units }
 
 /// Screen-space 2D sprite/text renderer for the game HUD.
 struct HudRenderer {
@@ -1219,79 +1001,40 @@ impl HudRenderer {
             if let Some(img) = panel_sprites.get_image(i) {
                 let w = img.width as u16;
                 let h = img.height as u16;
-                let mut rgba = vec![0u8; (w as usize) * (h as usize) * 4];
-                for (j, &idx) in img.data.iter().enumerate() {
-                    if idx == 255 {
-                        // Transparent
-                        rgba[j * 4 + 3] = 0;
-                    } else {
-                        let p = (idx as usize) * 4;
-                        if p + 2 < palette.len() {
-                            // Palette is BGRA
-                            rgba[j * 4] = palette[p + 2];     // R
-                            rgba[j * 4 + 1] = palette[p + 1]; // G
-                            rgba[j * 4 + 2] = palette[p];     // B
-                            rgba[j * 4 + 3] = 255;            // A
-                        }
-                    }
-                }
+                let rgba = hud::convert_indexed_to_rgba(&img.data, palette, 255);
                 sprite_images.push((w, h, rgba));
             } else {
                 sprite_images.push((1, 1, vec![0, 0, 0, 0]));
             }
         }
 
-        // Phase 2: Calculate atlas dimensions using simple shelf packing
-        // Add 1x1 white pixel + font glyphs (128x48)
+        // Phase 2: Calculate atlas dimensions using shelf packing
         let font_w = FONT_ATLAS_W as u16;
         let font_h = FONT_ATLAS_H as u16;
+        let atlas_w: u32 = 1024;
 
-        let mut atlas_w: u32 = 1024; // Start with reasonable width
-        let mut shelf_y: u32 = 0;
-        let mut shelf_h: u32 = 0;
-        let mut cursor_x: u32 = 0;
-        let mut placements: Vec<(u32, u32)> = Vec::new(); // (x, y) for each sprite
-
-        // Place white pixel first
-        placements.push((cursor_x, shelf_y));
-        cursor_x += 2; // 1x1 white pixel + 1px padding
-        shelf_h = 2;
-
-        // Place font atlas
-        let font_placement_x;
-        let font_placement_y;
-        if cursor_x + font_w as u32 > atlas_w {
-            shelf_y += shelf_h;
-            cursor_x = 0;
-            shelf_h = 0;
-        }
-        font_placement_x = cursor_x;
-        font_placement_y = shelf_y;
-        cursor_x += font_w as u32 + 1;
-        shelf_h = shelf_h.max(font_h as u32);
-
-        // Place sprite images
+        // Pack all items: white pixel (1x1), font atlas, then sprite images
+        let mut all_items: Vec<(u16, u16)> = Vec::with_capacity(2 + sprite_images.len());
+        all_items.push((1, 1)); // white pixel
+        all_items.push((font_w, font_h)); // font atlas
         for (w, h, _) in &sprite_images {
-            let sw = *w as u32;
-            let sh = *h as u32;
-            if cursor_x + sw > atlas_w {
-                shelf_y += shelf_h;
-                cursor_x = 0;
-                shelf_h = 0;
-            }
-            placements.push((cursor_x, shelf_y));
-            cursor_x += sw + 1;
-            shelf_h = shelf_h.max(sh);
+            all_items.push((*w, *h));
         }
+        let (all_placements, atlas_h) = hud::shelf_pack(&all_items, atlas_w);
+        let atlas_w = atlas_w.next_power_of_two();
 
-        let atlas_h = (shelf_y + shelf_h).next_power_of_two().max(64);
-        atlas_w = atlas_w.max(cursor_x).next_power_of_two();
+        // Extract placements
+        let font_placement_x = all_placements[1].0;
+        let font_placement_y = all_placements[1].1;
+        // Sprite placements start at index 2
+        let placements: Vec<(u32, u32)> = all_placements[2..].to_vec();
 
         // Phase 3: Blit into atlas
         let mut atlas_data = vec![0u8; (atlas_w * atlas_h * 4) as usize];
 
-        // Blit white pixel at (0,0)
-        let wp = 0usize;
+        // Blit white pixel
+        let (wp_x, wp_y) = all_placements[0];
+        let wp = ((wp_y * atlas_w + wp_x) * 4) as usize;
         atlas_data[wp] = 255;
         atlas_data[wp + 1] = 255;
         atlas_data[wp + 2] = 255;
@@ -1311,7 +1054,7 @@ impl HudRenderer {
 
         // Blit sprite images
         for (i, (w, h, rgba)) in sprite_images.iter().enumerate() {
-            let (px, py) = placements[i + 1]; // +1 because white pixel is placements[0]
+            let (px, py) = placements[i];
             for sy in 0..*h as u32 {
                 for sx in 0..*w as u32 {
                     let src = ((sy * *w as u32 + sx) * 4) as usize;
@@ -1356,7 +1099,7 @@ impl HudRenderer {
 
         // Panel sprite regions
         for (i, (w, h, _)) in sprite_images.iter().enumerate() {
-            let (px, py) = placements[i + 1];
+            let (px, py) = placements[i];
             regions.push(SpriteRegion {
                 u0: px as f32 / aw,
                 v0: py as f32 / ah,
@@ -1394,28 +1137,7 @@ impl HudRenderer {
     }
 
     fn build_font_rgba() -> Vec<u8> {
-        let mut rgba = vec![0u8; (FONT_ATLAS_W * FONT_ATLAS_H * 4) as usize];
-        for (idx, glyph) in FONT_8X8.iter().enumerate() {
-            let col = (idx as u32) % FONT_COLS;
-            let row = (idx as u32) / FONT_COLS;
-            let ox = col * FONT_GLYPH_W;
-            let oy = row * FONT_GLYPH_H;
-            for y in 0..8u32 {
-                let bits = glyph[y as usize];
-                for x in 0..8u32 {
-                    if bits & (0x80 >> x) != 0 {
-                        let px = ox + x;
-                        let py = oy + y;
-                        let off = ((py * FONT_ATLAS_W + px) * 4) as usize;
-                        rgba[off] = 255;
-                        rgba[off + 1] = 255;
-                        rgba[off + 2] = 255;
-                        rgba[off + 3] = 255;
-                    }
-                }
-            }
-        }
-        rgba
+        hud::build_font_rgba()
     }
 
     fn begin_frame(&mut self) {
@@ -1423,12 +1145,7 @@ impl HudRenderer {
     }
 
     fn push_quad(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, u0: f32, v0: f32, u1: f32, v1: f32, color: [f32; 4]) {
-        self.vertices.push(HudVertex { position: [x0, y0], uv: [u0, v0], color });
-        self.vertices.push(HudVertex { position: [x1, y0], uv: [u1, v0], color });
-        self.vertices.push(HudVertex { position: [x0, y1], uv: [u0, v1], color });
-        self.vertices.push(HudVertex { position: [x0, y1], uv: [u0, v1], color });
-        self.vertices.push(HudVertex { position: [x1, y0], uv: [u1, v0], color });
-        self.vertices.push(HudVertex { position: [x1, y1], uv: [u1, v1], color });
+        self.vertices.extend_from_slice(&hud::generate_quad_vertices(x0, y0, x1, y1, u0, v0, u1, v1, color));
     }
 
     /// Draw a solid colored rectangle.
@@ -1473,51 +1190,17 @@ impl HudRenderer {
 
     /// Get the sprite region index for panel sprites (offset past white pixel + font glyphs).
     fn panel_sprite_index(&self, psfb_index: usize) -> usize {
-        self.font_region_start + 96 + psfb_index
+        hud::panel_sprite_index(self.font_region_start, psfb_index)
     }
 
-    /// Update the minimap texture from heightmap + unit positions.
+    /// Update the minimap texture from pre-built MinimapData.
     fn update_minimap(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        heights: &[[u16; 128]; 128],
-        units: &[Unit],
+        data: &MinimapData,
     ) {
-        let mut rgba = vec![0u8; 128 * 128 * 4];
-        // Draw terrain from heightmap
-        for y in 0..128usize {
-            for x in 0..128usize {
-                let h = heights[y][x];
-                let off = (y * 128 + x) * 4;
-                if h == 0 {
-                    // Water
-                    rgba[off] = 20; rgba[off + 1] = 40; rgba[off + 2] = 80; rgba[off + 3] = 255;
-                } else {
-                    // Land — green gradient by height
-                    let v = ((h as f32 / 1024.0) * 180.0).min(255.0) as u8;
-                    rgba[off] = v / 4;
-                    rgba[off + 1] = 40 + v / 2;
-                    rgba[off + 2] = v / 6;
-                    rgba[off + 3] = 255;
-                }
-            }
-        }
-        // Draw unit dots using cell coordinates
-        let tribe_colors: [[u8; 3]; 4] = [
-            [80, 130, 255],  // Blue
-            [255, 60, 60],   // Red
-            [255, 255, 60],  // Yellow
-            [60, 255, 60],   // Green
-        ];
-        for unit in units {
-            if !unit.alive { continue; }
-            let cx = (unit.cell_x as usize).min(127);
-            let cy = (unit.cell_y as usize).min(127);
-            let off = (cy * 128 + cx) * 4;
-            let tc = &tribe_colors[(unit.tribe_index as usize).min(3)];
-            rgba[off] = tc[0]; rgba[off + 1] = tc[1]; rgba[off + 2] = tc[2]; rgba[off + 3] = 255;
-        }
+        let rgba = hud::generate_minimap_rgba(data);
 
         let tex = GpuTexture::new_2d(
             device, queue, 128, 128,
@@ -2469,86 +2152,45 @@ impl App {
         // HUD is rebuilt each frame in draw_hud(), nothing needed here
     }
 
-    fn draw_hud(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
-        let gpu = match self.gpu.as_ref() {
-            Some(g) => g,
-            None => return,
+    /// Build HudState from current game state (game logic → HUD data contract).
+    fn build_hud_state(&self) -> HudState {
+        // Build minimap data
+        let dots: Vec<MinimapDot> = self.unit_coordinator.units.iter()
+            .filter(|u| u.alive)
+            .map(|u| MinimapDot {
+                cell_x: (u.cell_x as u8).min(127),
+                cell_y: (u.cell_y as u8).min(127),
+                tribe_index: u.tribe_index,
+            })
+            .collect();
+        let minimap = MinimapData {
+            heights: *self.landscape_mesh.heights(),
+            dots,
         };
-        let hud = match self.hud.as_mut() {
-            Some(h) => h,
-            None => return,
-        };
 
-        let sw = self.screen.width as f32;
-        let sh = self.screen.height as f32;
-        let scale_x = sw / 640.0;
-        let scale_y = sh / 480.0;
-        let sidebar_w = (100.0 * scale_x).round();
-        let font_scale = (12.0 * scale_y).max(10.0).round();
-        let small_font = (font_scale * 0.75).round();
-
-        // Update minimap texture
-        hud.update_minimap(
-            &gpu.device, &gpu.queue,
-            self.landscape_mesh.heights(),
-            &self.unit_coordinator.units,
-        );
-
-        hud.begin_frame();
-
-        // === Left Sidebar Background ===
-        hud.draw_rect(0.0, 0.0, sidebar_w, sh, [0.08, 0.08, 0.12, 0.92]);
-
-        // === Minimap (top of sidebar) ===
-        let mm_pad = 4.0 * scale_x;
-        let mm_size = sidebar_w - mm_pad * 2.0;
-        let mm_x = mm_pad;
-        let mm_y = mm_pad;
-        // Minimap border
-        hud.draw_rect(mm_x - 1.0, mm_y - 1.0, mm_size + 2.0, mm_size + 2.0, [0.3, 0.3, 0.4, 1.0]);
-        let minimap_rect = Some((mm_x, mm_y, mm_size, mm_size));
-
-        // === Tab Buttons (below minimap) ===
-        let tab_y = mm_y + mm_size + 4.0 * scale_y;
-        let tab_h = font_scale + 6.0 * scale_y;
-        let tab_w = (sidebar_w - mm_pad * 2.0) / 3.0;
-        let tabs = [("Spells", HudTab::Spells), ("Build", HudTab::Buildings), ("Units", HudTab::Units)];
-        for (i, (label, tab_id)) in tabs.iter().enumerate() {
-            let tx = mm_pad + i as f32 * tab_w;
-            let is_active = self.hud_tab == *tab_id;
-            let bg = if is_active { [0.25, 0.25, 0.4, 1.0] } else { [0.12, 0.12, 0.18, 1.0] };
-            hud.draw_rect(tx, tab_y, tab_w - 1.0, tab_h, bg);
-            let text_color = if is_active { [1.0, 1.0, 1.0, 1.0] } else { [0.6, 0.6, 0.6, 1.0] };
-            hud.draw_text(label, tx + 3.0, tab_y + 3.0 * scale_y, small_font, text_color);
-        }
-
-        // === Panel Content (below tabs) ===
-        let panel_y = tab_y + tab_h + 2.0 * scale_y;
-        let line_h = font_scale + 2.0;
-
-        match self.hud_tab {
+        // Build panel entries for the active tab
+        let panel_entries = match self.hud_tab {
             HudTab::Spells => {
-                let spells = [
-                    "Burn", "Blast", "Lightning", "Whirlwind",
-                    "Plague", "Invisibility", "Firestorm", "Hypnotize",
-                    "Ghost Army", "Erosion", "Swamp", "Land Bridge",
-                    "Angel/Death", "Earthquake", "Flatten", "Volcano",
-                ];
-                for (i, name) in spells.iter().enumerate() {
-                    let row = i / 2;
-                    let col = i % 2;
-                    let sx = mm_pad + col as f32 * (sidebar_w / 2.0 - mm_pad);
-                    let sy = panel_y + row as f32 * line_h;
-                    hud.draw_text(name, sx, sy, small_font, [0.8, 0.9, 1.0, 0.9]);
-                }
+                ["Burn", "Blast", "Lightning", "Whirlwind",
+                 "Plague", "Invisibility", "Firestorm", "Hypnotize",
+                 "Ghost Army", "Erosion", "Swamp", "Land Bridge",
+                 "Angel/Death", "Earthquake", "Flatten", "Volcano"]
+                    .iter()
+                    .map(|name| PanelEntry {
+                        label: name.to_string(),
+                        color: [0.8, 0.9, 1.0, 0.9],
+                    })
+                    .collect()
             }
             HudTab::Buildings => {
-                let buildings = ["Hut", "Guard Tower", "Temple", "Spy Hut",
-                                 "Warrior Hut", "Firewarrior Hut", "Prison", "Boat Hut"];
-                for (i, name) in buildings.iter().enumerate() {
-                    let sy = panel_y + i as f32 * line_h;
-                    hud.draw_text(name, mm_pad, sy, small_font, [0.9, 0.85, 0.7, 0.9]);
-                }
+                ["Hut", "Guard Tower", "Temple", "Spy Hut",
+                 "Warrior Hut", "Firewarrior Hut", "Prison", "Boat Hut"]
+                    .iter()
+                    .map(|name| PanelEntry {
+                        label: name.to_string(),
+                        color: [0.9, 0.85, 0.7, 0.9],
+                    })
+                    .collect()
             }
             HudTab::Units => {
                 let unit_types: [(u8, &str); 6] = [
@@ -2559,46 +2201,118 @@ impl App {
                     (PERSON_SUBTYPE_FIREWARRIOR, "Firewarr"),
                     (PERSON_SUBTYPE_SHAMAN, "Shaman"),
                 ];
-                for (i, (subtype, name)) in unit_types.iter().enumerate() {
+                unit_types.iter().map(|(subtype, name)| {
                     let count = self.unit_coordinator.units.iter()
                         .filter(|u| u.alive && u.subtype == *subtype && u.tribe_index == 0)
                         .count();
-                    let sy = panel_y + i as f32 * line_h;
-                    let text = format!("{}: {}", name, count);
-                    hud.draw_text(&text, mm_pad, sy, small_font, [0.7, 1.0, 0.7, 0.9]);
+                    PanelEntry {
+                        label: format!("{}: {}", name, count),
+                        color: [0.7, 1.0, 0.7, 0.9],
+                    }
+                }).collect()
+            }
+        };
+
+        // Build tribe populations
+        let mut tribe_counts = [0u32; 4];
+        for u in &self.unit_coordinator.units {
+            if u.alive && (u.tribe_index as usize) < 4 {
+                tribe_counts[u.tribe_index as usize] += 1;
+            }
+        }
+        let tribe_populations: Vec<TribePopulation> = (0..4u8)
+            .filter(|&t| tribe_counts[t as usize] > 0)
+            .map(|t| TribePopulation {
+                tribe_index: t,
+                count: tribe_counts[t as usize],
+                color: HUD_TRIBE_COLORS[t as usize],
+            })
+            .collect();
+
+        HudState {
+            active_tab: self.hud_tab,
+            minimap,
+            panel_entries,
+            tribe_populations,
+            level_num: self.level_num as u32,
+            frame_count: self.frame_count as u64,
+        }
+    }
+
+    fn draw_hud(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
+        let gpu = match self.gpu.as_ref() {
+            Some(g) => g,
+            None => return,
+        };
+
+        // Build HUD data from game state (decoupled)
+        let hud_state = self.build_hud_state();
+        let layout = hud::compute_hud_layout(self.screen.width as f32, self.screen.height as f32);
+
+        let hud = match self.hud.as_mut() {
+            Some(h) => h,
+            None => return,
+        };
+
+        // Update minimap texture from data contract
+        hud.update_minimap(&gpu.device, &gpu.queue, &hud_state.minimap);
+
+        hud.begin_frame();
+
+        // === Left Sidebar Background ===
+        hud.draw_rect(0.0, 0.0, layout.sidebar_w, layout.screen_h, [0.08, 0.08, 0.12, 0.92]);
+
+        // === Minimap border ===
+        hud.draw_rect(layout.mm_x - 1.0, layout.mm_y - 1.0, layout.mm_size + 2.0, layout.mm_size + 2.0, [0.3, 0.3, 0.4, 1.0]);
+        let minimap_rect = Some((layout.mm_x, layout.mm_y, layout.mm_size, layout.mm_size));
+
+        // === Tab Buttons ===
+        let tabs = [("Spells", HudTab::Spells), ("Build", HudTab::Buildings), ("Units", HudTab::Units)];
+        for (i, (label, tab_id)) in tabs.iter().enumerate() {
+            let tx = layout.mm_pad + i as f32 * layout.tab_w;
+            let is_active = hud_state.active_tab == *tab_id;
+            let bg = if is_active { [0.25, 0.25, 0.4, 1.0] } else { [0.12, 0.12, 0.18, 1.0] };
+            hud.draw_rect(tx, layout.tab_y, layout.tab_w - 1.0, layout.tab_h, bg);
+            let text_color = if is_active { [1.0, 1.0, 1.0, 1.0] } else { [0.6, 0.6, 0.6, 1.0] };
+            hud.draw_text(label, tx + 3.0, layout.tab_y + 3.0 * layout.scale_y, layout.small_font, text_color);
+        }
+
+        // === Panel Content (from HudState data contract) ===
+        match hud_state.active_tab {
+            HudTab::Spells => {
+                for (i, entry) in hud_state.panel_entries.iter().enumerate() {
+                    let row = i / 2;
+                    let col = i % 2;
+                    let sx = layout.mm_pad + col as f32 * (layout.sidebar_w / 2.0 - layout.mm_pad);
+                    let sy = layout.panel_y + row as f32 * layout.line_h;
+                    hud.draw_text(&entry.label, sx, sy, layout.small_font, entry.color);
+                }
+            }
+            _ => {
+                for (i, entry) in hud_state.panel_entries.iter().enumerate() {
+                    let sy = layout.panel_y + i as f32 * layout.line_h;
+                    hud.draw_text(&entry.label, layout.mm_pad, sy, layout.small_font, entry.color);
                 }
             }
         }
 
-        // === Viewport Info (top-left of 3D viewport) ===
-        let vp_x = sidebar_w + 8.0;
-        hud.draw_text(help_text(), vp_x, 8.0, font_scale, [1.0, 1.0, 1.0, 0.7]);
+        // === Viewport Info ===
+        let vp_x = layout.sidebar_w + 8.0;
+        hud.draw_text(help_text(), vp_x, 8.0, layout.font_scale, [1.0, 1.0, 1.0, 0.7]);
 
-        // FPS / level info at bottom of viewport
-        let info = format!("Level: {}  Frame: {}", self.level_num, self.frame_count);
-        hud.draw_text(&info, vp_x, sh - font_scale - 4.0, font_scale, [1.0, 1.0, 0.5, 0.7]);
+        let info = format!("Level: {}  Frame: {}", hud_state.level_num, hud_state.frame_count);
+        hud.draw_text(&info, vp_x, layout.screen_h - layout.font_scale - 4.0, layout.font_scale, [1.0, 1.0, 0.5, 0.7]);
 
-        // === Tribe population (bottom-right corner) ===
-        let tribe_colors: [[f32; 4]; 4] = [
-            [0.3, 0.5, 1.0, 0.9],  // Blue
-            [1.0, 0.3, 0.3, 0.9],  // Red
-            [1.0, 1.0, 0.3, 0.9],  // Yellow
-            [0.3, 1.0, 0.3, 0.9],  // Green
-        ];
-        let pop_x = sw - 100.0 * scale_x;
-        for tribe in 0..4u8 {
-            let count = self.unit_coordinator.units.iter()
-                .filter(|u| u.alive && u.tribe_index == tribe)
-                .count();
-            if count > 0 {
-                let py = 8.0 + tribe as f32 * (font_scale + 2.0);
-                let text = format!("T{}: {}", tribe, count);
-                hud.draw_text(&text, pop_x, py, font_scale, tribe_colors[tribe as usize]);
-            }
+        // === Tribe population (from HudState data contract) ===
+        let pop_x = layout.screen_w - 100.0 * layout.scale_x;
+        for tp in &hud_state.tribe_populations {
+            let py = 8.0 + tp.tribe_index as f32 * (layout.font_scale + 2.0);
+            let text = format!("T{}: {}", tp.tribe_index, tp.count);
+            hud.draw_text(&text, pop_x, py, layout.font_scale, tp.color);
         }
 
-        // Render the HUD
-        hud.render_full(encoder, view, &gpu.queue, sw, sh, minimap_rect);
+        // Render
+        hud.render_full(encoder, view, &gpu.queue, layout.screen_w, layout.screen_h, minimap_rect);
     }
 
     fn rebuild_landscape_variants(&mut self, level_res: &LevelRes) {
@@ -3446,33 +3160,14 @@ impl ApplicationHandler for App {
                 }
             },
             WindowEvent::MouseInput { state, button, .. } => {
-                let sw = self.screen.width as f32;
-                let sh = self.screen.height as f32;
-                let scale_x = sw / 640.0;
-                let scale_y = sh / 480.0;
-                let sidebar_w = (100.0 * scale_x).round();
-
-                // Check if click is on the HUD sidebar
-                let on_sidebar = self.mouse_pos.x < sidebar_w;
+                let layout = hud::compute_hud_layout(self.screen.width as f32, self.screen.height as f32);
+                let on_sidebar = self.mouse_pos.x < layout.sidebar_w;
 
                 match (button, state) {
                     (MouseButton::Left, ElementState::Pressed) => {
                         if on_sidebar {
-                            // Handle sidebar tab clicks
-                            let mm_pad = 4.0 * scale_x;
-                            let mm_size = sidebar_w - mm_pad * 2.0;
-                            let font_scale = (12.0 * scale_y).max(10.0).round();
-                            let tab_y = mm_pad + mm_size + 4.0 * scale_y;
-                            let tab_h = font_scale + 6.0 * scale_y;
-                            let tab_w = (sidebar_w - mm_pad * 2.0) / 3.0;
-
-                            if self.mouse_pos.y >= tab_y && self.mouse_pos.y < tab_y + tab_h {
-                                let tab_idx = ((self.mouse_pos.x - mm_pad) / tab_w) as usize;
-                                self.hud_tab = match tab_idx {
-                                    0 => HudTab::Spells,
-                                    1 => HudTab::Buildings,
-                                    _ => HudTab::Units,
-                                };
+                            if let Some(tab) = hud::detect_tab_click(self.mouse_pos.x, self.mouse_pos.y, &layout) {
+                                self.hud_tab = tab;
                             }
                             self.do_render = true;
                         } else {
