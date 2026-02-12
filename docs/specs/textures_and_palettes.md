@@ -500,7 +500,7 @@ if (level_param < 10) {
 | `objects/shapes.ver` | - | - | Shape version file |
 | `plssphr.dat` | DAT_005a7d48 | Variable | Sphere mesh data (XOR encrypted) |
 | `data\plsbackg.dat` | - | - | Background/skybox data |
-| `data\skylens.dat` | - | - | Sky lens flare data |
+| `data\skylens.dat` | 0x007f9880 | 0x41D0 (16,848) | Sky hemisphere lens distortion LUT (26×81 i32 pairs) |
 | `data\alavaa.dat` | - | - | Lava animation data |
 
 ### Frontend Data (fenew folder)

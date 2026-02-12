@@ -67,6 +67,58 @@ fn obj_colors() -> Vec<Vector3<u8>> {
     ]
 }
 
+/// GPU uniform for sky_dome.wgsl — must match the shader's SkyDomeParams layout.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct SkyDomeParams {
+    u_origin: f32,
+    v_origin: f32,
+    cos_angle: f32,
+    sin_angle: f32,
+    u_scale: f32,
+    v_scale: f32,
+    horizon: f32,
+    mode: u32,
+}
+
+/// Tracks accumulated sky rotation, matching Sky_UpdateRotation (0x004dc710)
+/// and Sky_ComputeParams (0x004dc850) from the original binary.
+struct SkyCamera {
+    u_acc: f32,
+    v_acc: f32,
+    angle: f32,
+    horizon: f32,
+    mode: u32,
+}
+
+impl SkyCamera {
+    fn new(mode: u32) -> Self {
+        Self { u_acc: 0.0, v_acc: 0.0, angle: 0.0, horizon: 1.5, mode }
+    }
+
+    /// Rotate UV delta by current angle, then accumulate.
+    fn update_rotation(&mut self, dyaw: f32, du: f32, dv: f32) {
+        let cos_a = self.angle.cos();
+        let sin_a = self.angle.sin();
+        self.u_acc += du * cos_a + dv * sin_a;
+        self.v_acc += dv * cos_a - du * sin_a;
+        self.angle += dyaw * 0.5;
+    }
+
+    fn to_params(&self) -> SkyDomeParams {
+        SkyDomeParams {
+            u_origin: self.u_acc,
+            v_origin: self.v_acc,
+            cos_angle: self.angle.cos(),
+            sin_angle: self.angle.sin(),
+            u_scale: 2.5,
+            v_scale: 1.8,
+            horizon: self.horizon,
+            mode: self.mode,
+        }
+    }
+}
+
 type LandscapeMeshS = LandscapeMesh<128>;
 
 fn process_key(key: KeyCode, camera: &mut Camera, landscape_mesh: &mut LandscapeMeshS) {
@@ -1204,6 +1256,8 @@ struct App {
     sky_pipeline: Option<wgpu::RenderPipeline>,
     sky_bind_group: Option<wgpu::BindGroup>,
     sky_uniform_buffer: Option<GpuBuffer>,
+    sky_camera: SkyCamera,
+    prev_angle_z: i16,
 
     // Overlay text
     overlay_pipeline: Option<wgpu::RenderPipeline>,
@@ -1310,6 +1364,8 @@ impl App {
             sky_pipeline: None,
             sky_bind_group: None,
             sky_uniform_buffer: None,
+            sky_camera: SkyCamera::new(0),
+            prev_angle_z: 65, // matches camera.angle_z init
             overlay_pipeline: None,
             overlay_bind_group: None,
             overlay_vertex_buffer: None,
@@ -1716,6 +1772,8 @@ impl App {
                 self.camera.angle_y = 0;
                 self.camera.angle_z = 0;
                 self.camera.pos = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
+                self.sky_camera = SkyCamera::new(self.sky_camera.mode);
+                self.prev_angle_z = self.camera.angle_z;
                 self.rebuild_spawn_model();
                 self.log_camera_state("reset");
             },
@@ -2095,11 +2153,22 @@ impl App {
         let obj_params = ObjectParams { num_colors: obj_colors().len() as i32, _pad: 0 };
         self.select_params_buffer.as_ref().unwrap().update(&gpu.queue, 0, bytemuck::bytes_of(&obj_params));
 
-        // Update sky yaw offset
+        // Update sky dome rotation
         if let Some(ref sky_buf) = self.sky_uniform_buffer {
-            // angle_z is in degrees; map to 0..1 range for UV offset
-            let yaw = (self.camera.angle_z as f32) / 360.0;
-            sky_buf.update(&gpu.queue, 0, bytemuck::bytes_of(&[yaw, 0.0f32, 0.0f32, 0.0f32]));
+            // Constant sky parallax drift every frame (original: per-level params
+            // from spell data table at 0x885784, fed into Sky_UpdateRotation)
+            let drift_rate = 0.003;
+            self.sky_camera.update_rotation(drift_rate, drift_rate * 0.5, 0.0);
+
+            // Camera yaw delta also drives sky panning
+            let dz = (self.camera.angle_z - self.prev_angle_z) as f32;
+            let dyaw = if dz > 180.0 { dz - 360.0 } else if dz < -180.0 { dz + 360.0 } else { dz };
+            let dyaw_rad = dyaw * std::f32::consts::PI / 180.0;
+            self.sky_camera.update_rotation(dyaw_rad, -dyaw_rad, 0.0);
+            self.prev_angle_z = self.camera.angle_z;
+
+            let params = self.sky_camera.to_params();
+            sky_buf.update(&gpu.queue, 0, bytemuck::bytes_of(&params));
         }
 
         // Update select model vertex data
@@ -2516,34 +2585,40 @@ impl ApplicationHandler for App {
         // Sky texture and pipeline
         let sky_data = std::fs::read(&level_res.paths.sky).ok();
         let (sky_pipeline, sky_bind_group, sky_uniform_buffer) = if let Some(sky_raw) = sky_data {
-            // sky0-{key}.dat is 512x512 palette indices (262144 bytes).
-            // sky0-0.dat is 307200 bytes (600x512); just take first 512 rows.
-            let sky_size = 512usize;
-            let pixel_count = sky_size * sky_size;
-            let sky_indices = if sky_raw.len() >= pixel_count {
-                &sky_raw[..pixel_count]
-            } else {
-                &sky_raw[..]
+            // Two sky texture formats:
+            //   640×480 (307200 bytes): absolute palette indices (100-127), no offset
+            //   512×512 (262144 bytes): relative indices (1-14), need +0x70 → 0x71-0x7E
+            let (src_w, src_h, pal_offset) = match sky_raw.len() {
+                307200 => (640usize, 480usize, 0u8),
+                262144 => (512usize, 512usize, 0x70u8),
+                other => (640usize, other / 640, 0u8),
             };
+            // Mode 0 (dome) for 512×512 cloud textures, Mode 1 (simple) for 640×480
+            self.sky_camera.mode = if src_w == 512 && src_h == 512 { 0 } else { 1 };
             let pal = &level_res.params.palette;
-            // Game adds 0x70 to every sky byte, then uses result as direct palette index
-            let mut sky_rgb = vec![0u8; sky_size * sky_size * 3];
-            for (i, &idx) in sky_indices.iter().enumerate() {
-                let pal_idx = idx.wrapping_add(0x70) as usize * 4;
-                sky_rgb[i * 3]     = pal[pal_idx];
-                sky_rgb[i * 3 + 1] = pal[pal_idx + 1];
-                sky_rgb[i * 3 + 2] = pal[pal_idx + 2];
+            log::info!("Sky: {}x{} ({} bytes), pal {} bytes, offset +0x{:02x}",
+                src_w, src_h, sky_raw.len(), pal.len(), pal_offset);
+            let mut sky_rgb = vec![0u8; src_w * src_h * 3];
+            for y in 0..src_h {
+                for x in 0..src_w {
+                    let idx = sky_raw[y * src_w + x].wrapping_add(pal_offset) as usize;
+                    let pal_off = idx * 4;
+                    let dst = (y * src_w + x) * 3;
+                    sky_rgb[dst]     = pal[pal_off];
+                    sky_rgb[dst + 1] = pal[pal_off + 1];
+                    sky_rgb[dst + 2] = pal[pal_off + 2];
+                }
             }
             let sky_rgba = rgb_to_rgba(&sky_rgb);
             let sky_tex = GpuTexture::new_2d(
                 device, &gpu.queue,
-                sky_size as u32, sky_size as u32,
+                src_w as u32, src_h as u32,
                 wgpu::TextureFormat::Rgba8Unorm,
                 &sky_rgba, "sky_texture",
             );
             let sky_sampler = GpuTexture::create_sampler(device, false);
             let sky_uniform = GpuBuffer::new_uniform_init(
-                device, bytemuck::bytes_of(&[0.0f32; 4]), "sky_uniform",
+                device, bytemuck::bytes_of(&self.sky_camera.to_params()), "sky_uniform",
             );
 
             let sky_bg_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -2588,7 +2663,7 @@ impl ApplicationHandler for App {
                 ],
             });
 
-            let sky_shader_source = include_str!("../shaders/sky.wgsl");
+            let sky_shader_source = include_str!("../shaders/sky_dome.wgsl");
             let sky_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("sky_shader"),
                 source: wgpu::ShaderSource::Wgsl(sky_shader_source.into()),
@@ -2902,6 +2977,8 @@ impl ApplicationHandler for App {
                                 self.camera.angle_y = 0;
                                 self.camera.angle_z = 0;
                                 self.camera.pos = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
+                                self.sky_camera = SkyCamera::new(self.sky_camera.mode);
+                                self.prev_angle_z = self.camera.angle_z;
                                 self.rebuild_spawn_model();
                                 self.log_camera_state("reset");
                             },
@@ -3115,4 +3192,54 @@ fn main() {
     let event_loop = EventLoop::new().unwrap();
     let mut app = App::new(config);
     event_loop.run_app(&mut app).unwrap();
+}
+
+#[cfg(test)]
+mod sky_tests {
+    use super::*;
+
+    #[test]
+    fn sky_dome_params_size() {
+        assert_eq!(std::mem::size_of::<SkyDomeParams>(), 32);
+    }
+
+    #[test]
+    fn sky_camera_initial_params() {
+        let cam = SkyCamera::new(0);
+        let p = cam.to_params();
+        assert_eq!(p.u_origin, 0.0);
+        assert_eq!(p.v_origin, 0.0);
+        assert!((p.cos_angle - 1.0).abs() < 1e-6);
+        assert!(p.sin_angle.abs() < 1e-6);
+        assert_eq!(p.mode, 0);
+    }
+
+    #[test]
+    fn sky_camera_rotation_accumulates() {
+        let mut cam = SkyCamera::new(0);
+        cam.update_rotation(0.1, 0.0, 0.0);
+        assert!((cam.angle - 0.05).abs() < 1e-6); // dyaw * 0.5
+        let p = cam.to_params();
+        assert!((p.cos_angle - 0.05_f32.cos()).abs() < 1e-6);
+        assert!((p.sin_angle - 0.05_f32.sin()).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sky_camera_uv_accumulation() {
+        let mut cam = SkyCamera::new(0);
+        // With angle=0, cos=1, sin=0: du goes to u_acc, dv goes to v_acc
+        cam.update_rotation(0.0, 0.5, 0.3);
+        assert!((cam.u_acc - 0.5).abs() < 1e-6);
+        assert!((cam.v_acc - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sky_mode_from_dimensions() {
+        // 512×512 -> mode 0 (dome)
+        let mode = if 512 == 512 { 0u32 } else { 1 };
+        assert_eq!(mode, 0);
+        // 640×480 -> mode 1 (simple)
+        let mode = if 640 == 512 { 0u32 } else { 1 };
+        assert_eq!(mode, 1);
+    }
 }

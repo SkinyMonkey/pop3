@@ -589,5 +589,16 @@ The Populous: The Beginning rendering system documentation is now **100% complet
 | 0x004e57a0 | FUN_004e57a0    | Network_OpenSyncLog           |
 | 0x00418c00 | FUN_00418c00    | Sound_LoadSDT                 |
 | 0x00418f40 | FUN_00418f40    | Sound_LoadSDTLowQuality       |
+| 0x004dc0e0 | FUN_004dc0e0    | Sky_RenderOrchestrator        |
+| 0x004dcc30 | FUN_004dcc30    | Sky_RenderTiled               |
+| 0x004dd710 | FUN_004dd710    | Sky_RenderSimple              |
+| 0x004dd790 | FUN_004dd790    | Sky_RenderParallax            |
+| 0x004dd880 | FUN_004dd880    | Sky_RenderFlatFill            |
+| 0x004dc890 | FUN_004dc890    | Sky_SetViewport               |
+| 0x004dc710 | FUN_004dc710    | Sky_UpdateRotation            |
+| 0x004dc850 | FUN_004dc850    | Sky_ComputeParams             |
+| 0x004dc3f0 | FUN_004dc3f0    | Sky_BuildPaletteLUT           |
+| 0x004dc930 | FUN_004dc930    | Sky_RasterizeScanline         |
+| 0x0045ae50 | FUN_0045ae50    | Camera_GetYawRotation         |
 
 ---

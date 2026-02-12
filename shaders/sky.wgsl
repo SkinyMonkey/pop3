@@ -1,7 +1,15 @@
-// sky.wgsl — Fullscreen sky background with panoramic horizontal scrolling.
+// sky.wgsl — Fullscreen sky background matching Sky_RenderSimple (Mode 1).
+//
+// Original algorithm (0x004dd710):
+//   tex_u = (origin_u >> 16) + x          — horizontal scroll by camera yaw
+//   tex_v = (origin_v >> 18) + y * 2      — 2x vertical scale (zoom into clouds)
+//   pixel = texture[(tex_u & 0x1FF) + (tex_v & 0x1FF) * 512]
+//
+// The 2x vertical factor makes cloud patterns appear at natural scale when the
+// 512×512 texture covers the ~384-line visible sky area.
 
 struct SkyParams {
-    yaw_offset: f32,
+    yaw_offset: f32,    // camera yaw mapped to 0..1 UV offset
 };
 
 @group(0) @binding(0) var<uniform> sky_params: SkyParams;
@@ -35,6 +43,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let u = in.uv.x + sky_params.yaw_offset;
-    let v = in.uv.y;
+    // Original uses y * 2 to zoom into the cloud texture vertically
+    let v = in.uv.y * 2.0;
     return textureSample(sky_texture, sky_sampler, vec2<f32>(u, v));
 }

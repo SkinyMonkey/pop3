@@ -67,39 +67,46 @@ fn load_sky_rgba(variant: &SkyVariant) -> SkyImage {
     let sky_raw = std::fs::read(&variant.sky_path).expect("Failed to read sky file");
     let pal = std::fs::read(&variant.pal_path).expect("Failed to read palette file");
 
-    // Always 512x512 — the game processes exactly 0x40000 bytes then adds 0x70
-    let width = 512usize;
-    let height = 512usize;
-    let pixel_count = width * height;
+    // Detect dimensions from file size
+    let (width, height) = match sky_raw.len() {
+        307200 => (640usize, 480usize),  // sky0-{c}.dat = 640×480
+        262144 => (512usize, 512usize),  // MSKY0-{c}.DAT = 512×512
+        other => {
+            let w = 512usize;
+            let h = other / w;
+            eprintln!("  [DEBUG] Unknown sky size {}, assuming {}x{}", other, w, h);
+            (w, h)
+        }
+    };
 
+    let pixel_count = width * height;
     let indices = &sky_raw[..pixel_count.min(sky_raw.len())];
     let min_idx = indices.iter().copied().min().unwrap_or(0);
     let max_idx = indices.iter().copied().max().unwrap_or(0);
 
-    // After +0x70: show the actual palette indices the game would use
-    let remapped_min = min_idx.wrapping_add(0x70);
-    let remapped_max = max_idx.wrapping_add(0x70);
-    println!("sky0-{}.dat: {} bytes (512x512), raw range [{}-{}], after +0x70: [{}-{}] (0x{:02x}-0x{:02x})",
-        variant.key, sky_raw.len(), min_idx, max_idx,
-        remapped_min, remapped_max, remapped_min, remapped_max);
+    // sky0 files contain absolute palette indices (100-127 = 0x64-0x7F).
+    // MSKY files use relative 0-15 needing +0x70, sky0 files do not.
+    println!("sky0-{}.dat: {} bytes ({}x{}), index range [{}-{}] (0x{:02x}-0x{:02x})",
+        variant.key, sky_raw.len(), width, height,
+        min_idx, max_idx, min_idx, max_idx);
 
-    // Print palette colors at the remapped range
+    // Print palette colors at the actual index range
     if pal.len() >= 256 * 4 {
-        let start = remapped_min as usize;
-        let end = (remapped_max as usize + 1).min(256);
-        print!("  palette [0x{:02x}..0x{:02x}]: ", start, end);
-        for i in start..end {
-            let off = i * 4;
+        print!("  palette [0x{:02x}..0x{:02x}]: ", min_idx, max_idx);
+        for i in min_idx..=max_idx {
+            let off = i as usize * 4;
             print!("#{:02x}{:02x}{:02x} ", pal[off], pal[off+1], pal[off+2]);
         }
         println!();
     }
 
-    // Game adds 0x70 to every sky byte, then uses result as direct palette index
-    // (the interp table from FUN_004dc3f0 is for mode 2's flat gradient, not texture mode)
+    // 640×480 files have absolute palette indices (100-127).
+    // 512×512 files have relative indices (1-14) needing +0x70 → palette 0x71-0x7E.
+    let pal_offset: u8 = if width == 640 { 0 } else { 0x70 };
+
     let mut rgba = vec![0u8; pixel_count * 4];
     for (i, &idx) in indices.iter().enumerate() {
-        let pal_idx = idx.wrapping_add(0x70) as usize;
+        let pal_idx = idx.wrapping_add(pal_offset) as usize;
         let off = pal_idx * 4;
         if off + 2 < pal.len() {
             rgba[i * 4]     = pal[off];
