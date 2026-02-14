@@ -1641,14 +1641,14 @@ impl App {
         let level_type = self.config.landtype.as_deref();
         let level_res = LevelRes::new(&base, self.level_num, level_type);
 
-        self.landscape_mesh.set_heights(&level_res.landscape.height);
+        let shores = level_res.landscape.make_shores();
+        self.landscape_mesh.set_heights(&shores.height);
 
         {
             let gpu = self.gpu.as_ref().unwrap();
 
             // Update heights buffer
-            let landscape = level_res.landscape.make_shores();
-            let heights_vec = landscape.to_vec();
+            let heights_vec = shores.to_vec();
             let heights_bytes: &[u8] = bytemuck::cast_slice(&heights_vec);
             let heights_buffer = GpuBuffer::new_storage(&gpu.device, heights_bytes, "heights_buffer");
             self.heights_buffer = Some(heights_buffer);
@@ -2703,11 +2703,11 @@ impl ApplicationHandler for App {
         let level_type = self.config.landtype.as_deref();
         let level_res = LevelRes::new(&base, self.level_num, level_type);
 
-        self.landscape_mesh.set_heights(&level_res.landscape.height);
+        let shores = level_res.landscape.make_shores();
+        self.landscape_mesh.set_heights(&shores.height);
 
         // Heights storage buffer
-        let landscape = level_res.landscape.make_shores();
-        let heights_vec = landscape.to_vec();
+        let heights_vec = shores.to_vec();
         let heights_bytes: &[u8] = bytemuck::cast_slice(&heights_vec);
         let heights_buffer = GpuBuffer::new_storage(device, heights_bytes, "heights_buffer");
 
