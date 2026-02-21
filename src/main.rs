@@ -373,6 +373,93 @@ fn build_spawn_model(device: &wgpu::Device, cells: &[(f32, f32, u8)],
     ModelEnvelop::<TexModel>::new(device, m)
 }
 
+/// Generate a procedural circular shadow texture (single-channel stored as RGBA).
+/// Returns RGBA pixel data for a `size x size` texture.
+fn generate_shadow_texture(size: u32) -> Vec<u8> {
+    let mut data = vec![0u8; (size * size * 4) as usize];
+    let center = size as f32 / 2.0;
+    let radius = center - 1.0;
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 - center + 0.5;
+            let dy = y as f32 - center + 0.5;
+            let dist = (dx * dx + dy * dy).sqrt() / radius;
+            let alpha = if dist > 1.0 {
+                0.0
+            } else {
+                // Smooth falloff matching original's 4-pixel edge gradient
+                let t = 1.0 - dist;
+                t * t * (3.0 - 2.0 * t) // smoothstep
+            };
+            let off = ((y * size + x) * 4) as usize;
+            let a = (alpha * 255.0) as u8;
+            data[off] = a;     // R channel (sampled in shader)
+            data[off + 1] = a;
+            data[off + 2] = a;
+            data[off + 3] = 255;
+        }
+    }
+    data
+}
+
+/// Build flat ground-projected shadow quads for each unit.
+/// Unlike build_spawn_model which creates billboards, these lie flat on the terrain.
+/// Build flat ground-projected shadow quads.
+/// Each entry is (cell_x, cell_y, radius) where radius is in world units.
+fn build_shadow_quads(
+    device: &wgpu::Device,
+    all_cells: &[(f32, f32, f32, i16)],
+    landscape: &LandscapeMesh<128>,
+    curvature_scale: f32,
+) -> ModelEnvelop<TexModel> {
+    let mut model: TexModel = MeshModel::new();
+    let step = landscape.step();
+    let height_scale = landscape.height_scale();
+    let w = landscape.width() as f32;
+    let shift = landscape.get_shift_vector();
+    let center = (w - 1.0) * step / 2.0;
+
+    for &(cell_x, cell_y, shadow_radius, shadow_type) in all_cells {
+        let vis_x = ((cell_x - shift.x as f32) % w + w) % w;
+        let vis_y = ((cell_y - shift.y as f32) % w + w) % w;
+        let gx = vis_x * step;
+        let gy = vis_y * step;
+
+        let ix = (cell_x as usize).min(127);
+        let iy = (cell_y as usize).min(127);
+        let gz = landscape.height_at(ix, iy) as f32 * height_scale;
+
+        let dx = gx - center;
+        let dy = gy - center;
+        let curvature_offset = (dx * dx + dy * dy) * curvature_scale;
+        let z_base = gz - curvature_offset + 0.005; // slight offset above terrain
+
+        // Flat quad corners (axis-aligned on the ground plane)
+        let x0 = gx - shadow_radius;
+        let x1 = gx + shadow_radius;
+        let y0 = gy - shadow_radius;
+        let y1 = gy + shadow_radius;
+
+        let v = |px: f32, py: f32, u: f32, v: f32| -> TexVertex {
+            TexVertex {
+                coord: Vector3::new(px, py, z_base),
+                uv: Vector2::new(u, v),
+                tex_id: shadow_type,
+            }
+        };
+
+        // Two triangles forming a flat quad
+        model.push_vertex(v(x0, y0, 0.0, 0.0));
+        model.push_vertex(v(x1, y0, 1.0, 0.0));
+        model.push_vertex(v(x1, y1, 1.0, 1.0));
+        model.push_vertex(v(x0, y0, 0.0, 0.0));
+        model.push_vertex(v(x1, y1, 1.0, 1.0));
+        model.push_vertex(v(x0, y1, 0.0, 1.0));
+    }
+    let m = vec![(RenderType::Triangles, model)];
+    ModelEnvelop::<TexModel>::new(device, m)
+}
+
 /******************************************************************************/
 // Level object markers
 
@@ -1423,17 +1510,27 @@ struct App {
     sprite_group1_layout: Option<wgpu::BindGroupLayout>,
     unit_renders: Vec<UnitTypeRender>,
 
+    // Ground shadows
+    shadow_pipeline: Option<wgpu::RenderPipeline>,
+    shadow_bind_group: Option<wgpu::BindGroup>,
+    shadow_model: Option<ModelEnvelop<TexModel>>,
+
     // Level object markers
     objects_marker_pipeline: Option<wgpu::RenderPipeline>,
     model_objects: Option<ModelEnvelop<ColorModel>>,
     level_objects: Vec<LevelObject>,
     show_objects: bool,
+    show_shadows: bool,
+    show_lighting: bool,
+    show_markers: bool,
 
     // 3D building meshes
     objects_3d: Vec<Option<Object3D>>,
     shapes: Vec<Shape>,
     building_pipeline: Option<wgpu::RenderPipeline>,
+    building_bind_group_0: Option<wgpu::BindGroup>,
     building_bind_group_1: Option<wgpu::BindGroup>,
+    lighting_buffer: Option<GpuBuffer>,
     model_buildings: Option<ModelEnvelop<TexModel>>,
 
     // Sky
@@ -1532,14 +1629,22 @@ impl App {
             spawn_pipeline: None,
             sprite_group1_layout: None,
             unit_renders: Vec::new(),
+            shadow_pipeline: None,
+            shadow_bind_group: None,
+            shadow_model: None,
             objects_marker_pipeline: None,
             model_objects: None,
             level_objects: Vec::new(),
             show_objects: true,
+            show_shadows: true,
+            show_lighting: true,
+            show_markers: true,
             objects_3d: Vec::new(),
             shapes: Vec::new(),
             building_pipeline: None,
+            building_bind_group_0: None,
             building_bind_group_1: None,
+            lighting_buffer: None,
             model_buildings: None,
             sky_pipeline: None,
             sky_bind_group: None,
@@ -2020,6 +2125,41 @@ impl App {
             }
         }
         self.rebuild_object_markers();
+        self.rebuild_shadow_model();
+    }
+
+    fn rebuild_shadow_model(&mut self) {
+        if let Some(ref gpu) = self.gpu {
+            let cs = if self.curvature_enabled { self.curvature_scale } else { 0.0 };
+            let step = self.landscape_mesh.step();
+            let mut all_cells: Vec<(f32, f32, f32, i16)> = Vec::new();
+            // Unit shadows (type 1 = shimmer)
+            for ur in &self.unit_renders {
+                for &(cx, cy, _) in &ur.cells {
+                    all_cells.push((cx, cy, step * 0.5, 1));
+                }
+            }
+            // Building shadows (type 0 = static, offset in sun direction)
+            let lx = self.sunlight.x;
+            let ly = self.sunlight.y;
+            let sun_len = (lx * lx + ly * ly).sqrt().max(0.001);
+            let sun_dx = lx / sun_len;
+            let sun_dy = ly / sun_len;
+            for obj in &self.level_objects {
+                if matches!(obj.model_type, ModelType::Building) {
+                    let radius = step * 1.0;
+                    let cell_offset = 0.6; // in cell units (becomes 0.6 * step world units)
+                    all_cells.push((obj.cell_x + sun_dx * cell_offset, obj.cell_y + sun_dy * cell_offset, radius, 0));
+                }
+            }
+            if !all_cells.is_empty() {
+                self.shadow_model = Some(build_shadow_quads(
+                    &gpu.device, &all_cells, &self.landscape_mesh, cs,
+                ));
+            } else {
+                self.shadow_model = None;
+            }
+        }
     }
 
     /// Rebuild all unit type atlases (e.g. on level change with new palette).
@@ -2524,6 +2664,23 @@ impl App {
         let params = self.build_landscape_params();
         self.landscape_params_buffer.as_ref().unwrap().update(&gpu.queue, 0, bytemuck::bytes_of(&params));
 
+        // Update lighting params (shared by buildings, sprites, shadows)
+        if let Some(ref buf) = self.lighting_buffer {
+            let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+            let vp_radius = center * 0.9;
+            let light_data: [f32; 8] = if self.show_lighting {
+                let lx = self.sunlight.x;
+                let ly = self.sunlight.y;
+                let len = (lx * lx + ly * ly + 200.0 * 200.0_f32).sqrt();
+                [-lx / len, -ly / len, 200.0 / len, 0.35,
+                 center, center, vp_radius, self.game_world.game_tick as f32]
+            } else {
+                [0.0, 0.0, 1.0, 1.0,
+                 center, center, vp_radius, self.game_world.game_tick as f32]
+            };
+            buf.update(&gpu.queue, 0, bytemuck::bytes_of(&light_data));
+        }
+
         // Update selection uniform
         #[repr(C)]
         #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -2596,10 +2753,20 @@ impl App {
                 }
             }
 
+            // Draw ground shadows under units and buildings
+            if self.show_shadows { if let (Some(ref pipeline), Some(ref bg), Some(ref bg0), Some(ref model)) =
+                (&self.shadow_pipeline, &self.shadow_bind_group, &self.building_bind_group_0, &self.shadow_model)
+            {
+                render_pass.set_pipeline(pipeline);
+                render_pass.set_bind_group(0, bg0, &[]);
+                render_pass.set_bind_group(1, bg, &[]);
+                model.draw(&mut render_pass);
+            }}
+
             // Draw person unit sprites (per-type atlas)
-            if let Some(ref spawn_pipeline) = self.spawn_pipeline {
+            if let (Some(ref spawn_pipeline), Some(ref bg0)) = (&self.spawn_pipeline, &self.building_bind_group_0) {
                 render_pass.set_pipeline(spawn_pipeline);
-                render_pass.set_bind_group(0, self.objects_group0_bind_group.as_ref().unwrap(), &[]);
+                render_pass.set_bind_group(0, bg0, &[]);
                 for ur in &self.unit_renders {
                     if let Some(ref model) = ur.model {
                         render_pass.set_bind_group(1, &ur.bind_group, &[]);
@@ -2610,12 +2777,11 @@ impl App {
 
             // Draw 3D building meshes (identity model transform, same as markers)
             if self.show_objects {
-                if let (Some(ref pipeline), Some(ref bg1)) =
-                    (&self.building_pipeline, &self.building_bind_group_1)
+                if let (Some(ref pipeline), Some(ref bg0), Some(ref bg1)) =
+                    (&self.building_pipeline, &self.building_bind_group_0, &self.building_bind_group_1)
                 {
-                    // model_select already wrote identity — no extra write needed
                     render_pass.set_pipeline(pipeline);
-                    render_pass.set_bind_group(0, self.objects_group0_bind_group.as_ref().unwrap(), &[]);
+                    render_pass.set_bind_group(0, bg0, &[]);
                     render_pass.set_bind_group(1, bg1, &[]);
                     if let Some(ref model) = self.model_buildings {
                         model.draw(&mut render_pass);
@@ -2635,7 +2801,7 @@ impl App {
             }
 
             // Draw live unit markers and selection rings
-            if let Some(ref marker_pipeline) = self.objects_marker_pipeline {
+            if self.show_markers { if let Some(ref marker_pipeline) = self.objects_marker_pipeline {
                 render_pass.set_pipeline(marker_pipeline);
                 render_pass.set_bind_group(0, self.objects_group0_bind_group.as_ref().unwrap(), &[]);
                 if let Some(ref model) = self.model_unit_markers {
@@ -2644,7 +2810,7 @@ impl App {
                 if let Some(ref model) = self.model_selection_rings {
                     model.draw(&mut render_pass);
                 }
-            }
+            }}
 
         }
 
@@ -2801,15 +2967,134 @@ impl ApplicationHandler for App {
             ],
         });
 
+        // Lit group 0 layout: transforms + transforms1 + lighting (shared by sprites, shadows, buildings)
+        let lit_group0_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("lit_group0_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
         let spawn_shader_source = include_str!("../shaders/shaman_sprite.wgsl");
         let spawn_vertex_layouts = TexModel::vertex_buffer_layouts();
         let spawn_pipeline = create_pipeline(
             device, spawn_shader_source, &spawn_vertex_layouts,
-            &[&objects_group0_layout, &sprite_group1_layout],
+            &[&lit_group0_layout, &sprite_group1_layout],
             gpu.surface_format(), true,
             wgpu::PrimitiveTopology::TriangleList,
             "shaman_sprite_pipeline",
         );
+
+        // Shadow pipeline — alpha-blended ground shadows
+        let shadow_shader_source = include_str!("../shaders/shadow.wgsl");
+        let shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shadow_shader"),
+            source: wgpu::ShaderSource::Wgsl(shadow_shader_source.into()),
+        });
+        let shadow_pipe_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("shadow_pipeline_layout"),
+            bind_group_layouts: &[&lit_group0_layout, &sprite_group1_layout],
+            immediate_size: 0,
+        });
+        let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shadow_pipeline"),
+            layout: Some(&shadow_pipe_layout),
+            vertex: wgpu::VertexState {
+                module: &shadow_shader,
+                entry_point: Some("vs_main"),
+                buffers: &TexModel::vertex_buffer_layouts(),
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shadow_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: gpu.surface_format(),
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Zero,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false, // shadows don't write depth
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+
+        // Shadow texture (procedural circular gradient)
+        let shadow_tex_data = generate_shadow_texture(32);
+        let shadow_texture = GpuTexture::new_2d(
+            device, &gpu.queue, 32, 32,
+            wgpu::TextureFormat::Rgba8UnormSrgb, &shadow_tex_data, "shadow_texture",
+        );
+        let shadow_sampler = GpuTexture::create_sampler(device, false); // linear filtering
+        let shadow_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shadow_bind_group"),
+            layout: &sprite_group1_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&shadow_texture.view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&shadow_sampler) },
+            ],
+        });
 
         // Level objects marker pipeline (group 0 only, no group 1)
         let objects_marker_shader = include_str!("../shaders/level_objects.wgsl");
@@ -2867,7 +3152,31 @@ impl ApplicationHandler for App {
             ],
         });
 
-        // Building pipeline (reuses objects_tex.wgsl shader, TexModel vertex layout)
+        // Lighting uniform (sun_dir vec3 + ambient f32 + camera_focus vec2 + viewport_radius f32 + pad = 32 bytes)
+        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+        let vp_radius = center * 0.9;
+        let lx = self.sunlight.x;
+        let ly = self.sunlight.y;
+        let len = (lx * lx + ly * ly + 200.0 * 200.0_f32).sqrt();
+        let light_data: [f32; 8] = [
+            -lx / len, -ly / len, 200.0 / len, 0.35,
+            center, center, vp_radius, 0.0,
+        ];
+        let lighting_buffer = GpuBuffer::new_uniform_init(
+            device, bytemuck::bytes_of(&light_data), "lighting_buffer",
+        );
+
+        let lit_group0_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("lit_group0_bg"),
+            layout: &lit_group0_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: mvp_buffer.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: model_transform_buffer.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: lighting_buffer.buffer.as_entire_binding() },
+            ],
+        });
+
+        // Building pipeline (objects_tex.wgsl with directional lighting)
         let building_shader_source = include_str!("../shaders/objects_tex.wgsl");
         let building_vertex_layouts = TexModel::vertex_buffer_layouts();
         let building_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -2876,7 +3185,7 @@ impl ApplicationHandler for App {
         });
         let building_pipe_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("building_pipeline_layout"),
-            bind_group_layouts: &[&objects_group0_layout, &sprite_group1_layout],
+            bind_group_layouts: &[&lit_group0_layout, &sprite_group1_layout],
             immediate_size: 0,
         });
         let building_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -3067,12 +3376,16 @@ impl ApplicationHandler for App {
         self.objects_group0_bind_group = Some(objects_group0_bind_group);
         self.objects_group1_bind_group = Some(objects_group1_bind_group);
         self.spawn_pipeline = Some(spawn_pipeline);
+        self.shadow_pipeline = Some(shadow_pipeline);
+        self.shadow_bind_group = Some(shadow_bind_group);
         self.sprite_group1_layout = Some(sprite_group1_layout);
         self.objects_marker_pipeline = Some(objects_marker_pipeline);
         self.objects_3d = objects_3d;
         self.shapes = shapes;
         self.building_pipeline = Some(building_pipeline);
+        self.building_bind_group_0 = Some(lit_group0_bind_group);
         self.building_bind_group_1 = Some(building_bind_group_1);
+        self.lighting_buffer = Some(lighting_buffer);
         self.sky_pipeline = sky_pipeline;
         self.sky_bind_group = sky_bind_group;
         self.sky_uniform_buffer = sky_uniform_buffer;
@@ -3294,6 +3607,15 @@ impl ApplicationHandler for App {
                             KeyCode::KeyO => {
                                 self.show_objects = !self.show_objects;
                                 log::info!("objects {}", if self.show_objects { "on" } else { "off" });
+                            },
+                            KeyCode::KeyG => {
+                                self.show_shadows = !self.show_shadows;
+                                self.show_lighting = !self.show_lighting;
+                                log::info!("shadows+lighting {}", if self.show_shadows { "on" } else { "off" });
+                            },
+                            KeyCode::KeyU => {
+                                self.show_markers = !self.show_markers;
+                                log::info!("markers {}", if self.show_markers { "on" } else { "off" });
                             },
                             KeyCode::BracketRight => {
                                 self.curvature_scale *= 1.2;
