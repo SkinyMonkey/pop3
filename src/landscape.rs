@@ -5,7 +5,7 @@ use std::slice::Chunks;
 use cgmath::{Vector4, Vector3, Vector2};
 
 use crate::model::{Triangle, VertexModel, MeshModel};
-use crate::envelop::GpuModel;
+use crate::envelop::{GpuModel, ModelEnvelop, RenderType};
 use crate::pop::objects::Shape;
 
 pub type LandscapeModel = MeshModel<Vector2<u8>, u16>;
@@ -367,4 +367,82 @@ impl<'a, const N: usize> Iterator for LandscapeTriangleIterator<'a, N> {
             None => None,
         }
     }
+}
+
+/******************************************************************************/
+
+/// Landscape model transform: world = LANDSCAPE_SCALE * model + LANDSCAPE_OFFSET.
+pub const LANDSCAPE_SCALE: f32 = 2.5;
+pub const LANDSCAPE_OFFSET: f32 = -2.0;
+
+/// Packed landscape uniform data matching the WGSL LandscapeParams struct.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct LandscapeUniformData {
+    pub level_shift: [i32; 4],
+    pub height_scale: f32,
+    pub step: f32,
+    pub width: i32,
+    pub _pad_width: i32,
+    pub sunlight: [f32; 4],
+    pub wat_offset: i32,
+    pub curvature_scale: f32,
+    pub camera_focus: [f32; 2],
+    pub viewport_radius: f32,
+    pub _pad2: [f32; 3],
+}
+
+/// A landscape program variant with its own pipeline and group-1 bind group.
+pub struct LandscapeVariant {
+    pub pipeline: wgpu::RenderPipeline,
+    pub bind_group_1: wgpu::BindGroup,
+}
+
+pub struct LandscapeProgramContainer {
+    variants: Vec<LandscapeVariant>,
+    index: usize,
+}
+
+impl LandscapeProgramContainer {
+    pub fn new() -> Self {
+        Self { variants: Vec::new(), index: 0 }
+    }
+
+    pub fn add(&mut self, variant: LandscapeVariant) {
+        self.variants.push(variant);
+    }
+
+    pub fn next(&mut self) {
+        if !self.variants.is_empty() {
+            self.index = (self.index + 1) % self.variants.len();
+        }
+    }
+
+    pub fn prev(&mut self) {
+        if self.variants.is_empty() { return; }
+        self.index = if self.index == 0 {
+            self.variants.len() - 1
+        } else {
+            self.index - 1
+        };
+    }
+
+    pub fn current(&self) -> Option<&LandscapeVariant> {
+        self.variants.get(self.index)
+    }
+}
+
+pub fn make_landscape_model<const N: usize>(device: &wgpu::Device, landscape_mesh: &LandscapeMesh<N>) -> ModelEnvelop<LandscapeModel> {
+    let mut model: LandscapeModel = MeshModel::new();
+    landscape_mesh.to_model(&mut model);
+    log::debug!("Landscape mesh - vertices={:?}, indices={:?}", model.vertices.len(), model.indices.len());
+    let m = vec![(RenderType::Triangles, model)];
+    let mut model_main = ModelEnvelop::<LandscapeModel>::new(device, m);
+    if let Some(m) = model_main.get(0) {
+        m.location.x = LANDSCAPE_OFFSET;
+        m.location.y = LANDSCAPE_OFFSET;
+        m.scale = LANDSCAPE_SCALE;
+    }
+    eprintln!("[landscape] model transform: location=({0},{0},0) scale={1}", LANDSCAPE_OFFSET, LANDSCAPE_SCALE);
+    model_main
 }
