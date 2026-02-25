@@ -31,6 +31,8 @@ struct VertexOutput {
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.position = light_mvp.matrix * model_transform.matrix * vec4<f32>(in.coord3d, 1.0);
+    // Bias depth toward light so ground-level proxies beat the 0.005 comparison bias
+    out.position.z = max(out.position.z - 0.008, 0.0);
     out.uv = in.uv;
     return out;
 }

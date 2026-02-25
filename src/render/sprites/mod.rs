@@ -387,7 +387,7 @@ pub fn build_shadow_proxy_model(device: &wgpu::Device, cells: &[UnitRenderData],
         let dx = gx - center;
         let dy = gy - center;
         let curvature_offset = (dx * dx + dy * dy) * curvature_scale;
-        let z_base = gz - curvature_offset + step * 2.0; // above ground enough to exceed shadow bias
+        let z_base = gz - curvature_offset + 0.001; // at ground level; depth bias handled in shader
 
         let tid = tribe_index as i16;
 
@@ -403,10 +403,11 @@ pub fn build_shadow_proxy_model(device: &wgpu::Device, cells: &[UnitRenderData],
         let (src_dir, mirrored) = get_source_direction(display_dir);
         let tribe_row = tribe_index as usize * STORED_DIRECTIONS + src_dir;
         let uv_off_y = tribe_row as f32 / total_rows;
+        // Shadow proxy: world +X = screen-left (camera right ≈ -X), so swap U
         let (u_left, u_right) = if mirrored {
-            (uv_off_x + uv_scale_x, uv_off_x)
-        } else {
             (uv_off_x, uv_off_x + uv_scale_x)
+        } else {
+            (uv_off_x + uv_scale_x, uv_off_x)
         };
         let v_bottom = uv_off_y + uv_scale_y;
         let v_top = uv_off_y;
