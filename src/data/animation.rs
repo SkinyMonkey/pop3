@@ -107,6 +107,25 @@ pub const UNIT_IDLE_ANIMS: [(u8, usize); 6] = [
     (PERSON_SUBTYPE_SHAMAN,      20),
 ];
 
+/// Walk animation indices from g_PersonAnimationTable
+pub const UNIT_WALK_ANIMS: [(u8, usize); 5] = [
+    (PERSON_SUBTYPE_BRAVE,       21),
+    (PERSON_SUBTYPE_WARRIOR,     22),
+    (PERSON_SUBTYPE_PREACHER,    23),
+    (PERSON_SUBTYPE_SPY,         24),
+    (PERSON_SUBTYPE_FIREWARRIOR, 25),
+];
+
+/// Combined idle + walk animation indices per subtype (non-shaman).
+/// Format: (subtype, &[animation_indices])
+pub const UNIT_MULTI_ANIMS: [(u8, &[usize]); 5] = [
+    (PERSON_SUBTYPE_BRAVE,       &[15, 21]),
+    (PERSON_SUBTYPE_WARRIOR,     &[16, 22]),
+    (PERSON_SUBTYPE_PREACHER,    &[17, 23]),
+    (PERSON_SUBTYPE_SPY,         &[18, 24]),
+    (PERSON_SUBTYPE_FIREWARRIOR, &[19, 25]),
+];
+
 /******************************************************************************/
 
 pub enum ElementRotate {
@@ -566,6 +585,98 @@ pub fn build_tribe_atlas(
     }
 
     Some((atlas_w, atlas_h, rgba, fw, fh, max_frames as u32))
+}
+
+/// Build a combined atlas for multiple animations of the same subtype.
+/// Layout: frames from each animation are laid out side-by-side horizontally,
+/// sharing the same frame size (from a common bounding box).
+/// Returns (atlas_w, atlas_h, rgba, frame_w, frame_h, total_columns, offsets)
+/// where `offsets` maps: `offsets[i] = (anim_index, column_offset, frame_count)`.
+pub fn build_multi_anim_atlas(
+    sequences: &[AnimationSequence],
+    container: &ContainerPSFB,
+    palette: &[[u8; 4]],
+    anim_indices: &[usize],
+) -> Option<(u32, u32, Vec<u8>, u32, u32, u32, Vec<(usize, u32, u32)>)> {
+    if anim_indices.is_empty() { return None; }
+
+    // Compute shared bounding box across all requested animations
+    let mut bbox_min_x: i32 = 0;
+    let mut bbox_min_y: i32 = 0;
+    let mut bbox_max_x: i32 = 1;
+    let mut bbox_max_y: i32 = 1;
+
+    for &anim_idx in anim_indices {
+        let base = anim_idx * DIRS_PER_ANIM;
+        for dir in 0..STORED_DIRECTIONS {
+            let seq_idx = base + dir;
+            if seq_idx >= sequences.len() { continue; }
+            for frame in &sequences[seq_idx].frames {
+                for elem in &frame.sprites {
+                    if elem.is_hidden() { continue; }
+                    if elem.is_type_specific() { continue; } // skip for bbox
+                    if let Some(info) = container.get_info(elem.sprite_index) {
+                        let ex = elem.coord_x as i32;
+                        let ey = elem.coord_y as i32;
+                        bbox_min_x = bbox_min_x.min(ex);
+                        bbox_min_y = bbox_min_y.min(ey);
+                        bbox_max_x = bbox_max_x.max(ex + info.width as i32);
+                        bbox_max_y = bbox_max_y.max(ey + info.height as i32);
+                    }
+                }
+            }
+        }
+    }
+
+    let shared_bbox = (bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y);
+
+    // Build individual atlases with shared bbox
+    let mut sub_atlases: Vec<(usize, u32, u32, Vec<u8>, u32)> = Vec::new(); // (anim_idx, w, h, rgba, frames)
+    let mut fw = 0u32;
+    let mut fh = 0u32;
+
+    for &anim_idx in anim_indices {
+        if let Some((aw, ah, rgba, w, h, frames)) =
+            build_tribe_atlas(sequences, container, palette, anim_idx, Some(None), Some(shared_bbox))
+        {
+            fw = w;
+            fh = h;
+            sub_atlases.push((anim_idx, aw, ah, rgba, frames));
+        }
+    }
+
+    if sub_atlases.is_empty() { return None; }
+
+    let total_rows = (NUM_TRIBES * STORED_DIRECTIONS) as u32;
+    let total_columns: u32 = sub_atlases.iter().map(|(_, _, _, _, f)| *f).sum();
+    let atlas_w = fw * total_columns;
+    let atlas_h = fh * total_rows;
+
+    if atlas_w == 0 || atlas_h == 0 { return None; }
+
+    let mut combined = vec![0u8; (atlas_w * atlas_h * 4) as usize];
+    let mut col_offset = 0u32;
+    let mut offsets = Vec::new();
+
+    for (anim_idx, sub_w, _sub_h, sub_rgba, frames) in &sub_atlases {
+        offsets.push((*anim_idx, col_offset, *frames));
+
+        // Copy each row from sub-atlas into combined atlas at the right column offset
+        for row in 0..atlas_h {
+            let src_start = (row * sub_w * 4) as usize;
+            let src_end = src_start + (*sub_w * 4) as usize;
+            let dst_x = (col_offset * fw * 4) as usize;
+            let dst_start = (row * atlas_w * 4) as usize + dst_x;
+            if src_end <= sub_rgba.len() && dst_start + (sub_w * 4) as usize <= combined.len() {
+                combined[dst_start..dst_start + (*sub_w * 4) as usize]
+                    .copy_from_slice(&sub_rgba[src_start..src_end]);
+            }
+        }
+
+        col_offset += frames;
+    }
+
+    Some((atlas_w, atlas_h, combined, fw, fh, total_columns, offsets))
 }
 
 /******************************************************************************/

@@ -479,6 +479,7 @@ mod tests {
 
     fn make_unit(subtype: u8, tribe: u8) -> Unit {
         use crate::engine::movement::WorldCoord;
+        use crate::engine::units::animation::AnimationState;
         let defaults = person_type_defaults(subtype);
         Unit {
             id: 0,
@@ -504,6 +505,7 @@ mod tests {
             linked_obj_id: None,
             bloodlust: false,
             shielded: false,
+            anim: AnimationState::default(),
         }
     }
 

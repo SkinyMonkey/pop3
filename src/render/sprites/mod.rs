@@ -203,19 +203,34 @@ pub fn extract_level_objects(level_res: &LevelRes) -> Vec<LevelObject> {
 }
 
 /******************************************************************************/
+// Per-unit rendering data (engine → renderer boundary)
+
+/// Per-unit rendering data passed from engine to renderer each tick.
+pub struct UnitRenderData {
+    pub cell_x: f32,
+    pub cell_y: f32,
+    pub tribe_index: u8,
+    pub facing_angle: u16,
+    pub frame_index: u8,
+    pub animation_id: u16,
+}
+
+/******************************************************************************/
 // Per-unit-type rendering state
 
 /// Per-unit-type rendering state (texture atlas + bind group + model).
 pub struct UnitTypeRender {
     pub subtype: u8,
-    pub cells: Vec<(f32, f32, u8)>,  // (cell_x, cell_y, tribe_index)
+    pub cells: Vec<UnitRenderData>,
     #[allow(dead_code)]
     pub texture: GpuTexture,  // kept alive for GPU bind group
     pub bind_group: wgpu::BindGroup,
     pub model: Option<ModelEnvelop<TexModel>>,
     pub frame_width: u32,
     pub frame_height: u32,
-    pub frames_per_dir: u32,
+    pub frames_per_dir: u32,  // total columns in atlas
+    /// Maps animation_id → (column_offset, frame_count) within the atlas.
+    pub anim_offsets: Vec<(u16, u32, u32)>,
 }
 
 /******************************************************************************/
@@ -224,10 +239,11 @@ pub struct UnitTypeRender {
 /// Build camera-facing billboard quads for unit sprites.
 /// Each unit gets a single quad (6 vertices) oriented to face the camera.
 /// `frames_per_dir` and `frame_w`/`frame_h` come from the unit type's atlas.
-pub fn build_spawn_model(device: &wgpu::Device, cells: &[(f32, f32, u8)],
+pub fn build_spawn_model(device: &wgpu::Device, cells: &[UnitRenderData],
                      landscape: &LandscapeMesh<128>, curvature_scale: f32,
                      angle_x: i16, angle_z: i16,
                      frame_w: u32, frame_h: u32, frames_per_dir: u32,
+                     anim_offsets: &[(u16, u32, u32)],
 ) -> ModelEnvelop<TexModel> {
     let mut model: TexModel = MeshModel::new();
     let step = landscape.step();
@@ -261,9 +277,12 @@ pub fn build_spawn_model(device: &wgpu::Device, cells: &[(f32, f32, u8)],
     let total_rows = (NUM_TRIBES * STORED_DIRECTIONS) as f32;
     let uv_scale_x = 1.0 / fpd;
     let uv_scale_y = 1.0 / total_rows;
-    let uv_off_x = 0.0; // frame 0 (idle)
 
-    for &(cell_x, cell_y, tribe_index) in cells {
+    for unit_data in cells {
+        let cell_x = unit_data.cell_x;
+        let cell_y = unit_data.cell_y;
+        let tribe_index = unit_data.tribe_index;
+
         let vis_x = ((cell_x - shift.x as f32) % w + w) % w;
         let vis_y = ((cell_y - shift.y as f32) % w + w) % w;
         let gx = vis_x * step;
@@ -280,10 +299,17 @@ pub fn build_spawn_model(device: &wgpu::Device, cells: &[(f32, f32, u8)],
 
         let tid = tribe_index as i16;
 
-        // Per-unit sprite direction using game formula from RE_NOTES
-        let unit_facing = tribe_facing_direction(tribe_index);
-        let display_dir = sprite_direction_from_angle(angle_z, unit_facing);
+        // Per-unit sprite direction from actual facing angle
+        let display_dir = sprite_direction_from_angle(angle_z, unit_data.facing_angle);
         let (src_dir, mirrored) = get_source_direction(display_dir);
+
+        // Per-unit frame UV offset, accounting for animation column offset
+        let (col_offset, anim_frames) = anim_offsets.iter()
+            .find(|(id, _, _)| *id == unit_data.animation_id)
+            .map(|(_, off, fc)| (*off, *fc))
+            .unwrap_or((0, frames_per_dir));
+        let frame_idx = (unit_data.frame_index as u32).min(anim_frames.saturating_sub(1));
+        let uv_off_x = (col_offset + frame_idx) as f32 / fpd;
 
         let tribe_row = tribe_index as usize * STORED_DIRECTIONS + src_dir;
         let uv_off_y = tribe_row as f32 / total_rows;

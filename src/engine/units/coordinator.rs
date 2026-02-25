@@ -19,6 +19,7 @@ use super::person_state::{
     CombatPhase, SWING_READY_TICKS,
     COMBAT_DETECT_RANGE, COMBAT_MELEE_RANGE,
 };
+use super::animation::{AnimationState, select_animation, tick_animation};
 use super::selection::{SelectionState, DragState};
 use super::coords::{world_to_render_pos, toroidal_delta, cell_to_world};
 
@@ -35,6 +36,10 @@ pub struct UnitCoordinator {
 
     landscape_size: f32,
 
+    // Animation frame counts indexed by VSTART animation index.
+    // Populated from animation data during atlas rebuild.
+    pub anim_frame_counts: Vec<u8>,
+
     // State machine RNG (same LCG as original binary)
     pub rng: GameRng,
 }
@@ -50,6 +55,7 @@ impl UnitCoordinator {
             failure_cache: FailureCache::new(),
             used_targets: UsedTargetsCache::new(),
             landscape_size: 128.0,
+            anim_frame_counts: Vec::new(),
             rng: GameRng::new(0x1234),
         }
     }
@@ -111,10 +117,12 @@ impl UnitCoordinator {
                 linked_obj_id: None,
                 bloodlust: false,
                 shielded: false,
+                anim: AnimationState::default(),
             });
             // Initialize idle state with a random timer (matches Person_Init calling Person_SetState)
             let idx = self.units.len() - 1;
             enter_state(&mut self.units[idx], PersonState::Idle, &mut self.rng);
+            select_animation(&mut self.units[idx].anim, PersonState::Idle, raw.subtype, &self.anim_frame_counts);
         }
         log::info!("[unit-ctrl] loaded {} person units", self.units.len());
         for unit in &self.units {
@@ -168,7 +176,11 @@ impl UnitCoordinator {
             let result = tick_state(unit, &mut self.rng);
             if let TickResult::Transition(new_state) = result {
                 enter_state(unit, new_state, &mut self.rng);
+                select_animation(&mut unit.anim, new_state, unit.subtype, &self.anim_frame_counts);
             }
+
+            // Advance animation frame
+            tick_animation(&mut unit.anim);
 
             // Process movement for moving states
             if unit.movement.is_moving() {

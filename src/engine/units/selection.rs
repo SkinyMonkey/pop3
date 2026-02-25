@@ -89,6 +89,7 @@ mod tests {
             linked_obj_id: None,
             bloodlust: false,
             shielded: false,
+            anim: super::super::animation::AnimationState::default(),
         }
     }
 
