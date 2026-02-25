@@ -21,13 +21,13 @@ use winit::window::{Window, WindowAttributes};
 
 use clap::{Arg, Command};
 
-use pop3::gpu::context::GpuContext;
-use pop3::gpu::pipeline::create_pipeline;
-use pop3::gpu::buffer::GpuBuffer;
-use pop3::gpu::texture::GpuTexture;
+use pop3::render::gpu::context::GpuContext;
+use pop3::render::gpu::pipeline::create_pipeline;
+use pop3::render::gpu::buffer::GpuBuffer;
+use pop3::render::gpu::texture::GpuTexture;
 
-use pop3::pop::psfb::ContainerPSFB;
-use pop3::pop::types::BinDeserializer;
+use pop3::data::psfb::ContainerPSFB;
+use pop3::data::types::BinDeserializer;
 
 /******************************************************************************/
 // Animation definitions (ported from bevy_demo5/src/animation_data.rs)

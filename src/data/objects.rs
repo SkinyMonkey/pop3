@@ -1,0 +1,306 @@
+use std::path::Path;
+use std::io::Read;
+use core::mem::size_of;
+use core::slice::Iter;
+
+use cgmath::{Vector2, Vector3};
+
+use crate::render::model::{MeshModel, VertexModel};
+use crate::render::tex_model::{TexModel, TexVertex};
+use crate::data::types::{BinDeserializer, from_reader};
+use crate::data::level::ObjectPaths;
+
+/******************************************************************************/
+
+#[derive(Debug, Copy, Clone)]
+#[repr(C, packed)]
+pub struct ObjectRaw {
+    flags: u16,
+    facs_num: u16,
+    pnts_num: u16,
+    f1: u8,
+    morph_index: u8,
+    f2: u32,
+    coord_scale: u32,
+    facs_ptr: u32,
+    facs_ptr_end: u32,
+    pnts_ptr: u32,
+    pnts_ptr_end: u32,
+    f4: i16,
+    f5: i16,
+    f6: i16,
+    f7: u16,
+    f8: u16,
+    f9: u16,
+    shapes_index: u8,
+    u1: u8,
+    f10: u16,
+    f11: u16,
+    f12: u16,
+    f13: u16,
+}
+
+impl BinDeserializer for ObjectRaw {
+    fn from_reader<R: Read>(reader: &mut R) -> Option<Self> {
+        from_reader::<ObjectRaw, {size_of::<ObjectRaw>()}, R>(reader)
+    }
+}
+
+/******************************************************************************/
+
+#[derive(Debug, Copy, Clone)]
+#[repr(C, packed)]
+pub struct Shape {
+    pub width: u8,
+    pub height: u8,
+    pub origin_x: u8,
+    pub origin_z: u8,
+    pub cell_mask: [u8; 40],
+    pub shape_ref: u32,
+}
+
+impl BinDeserializer for Shape {
+    fn from_reader<R: Read>(reader: &mut R) -> Option<Self> {
+        from_reader::<Self, {size_of::<Self>()}, R>(reader)
+    }
+}
+
+/******************************************************************************/
+
+#[derive(Debug, Copy, Clone)]
+#[repr(C, packed)]
+pub struct PointRaw {
+    x: i16,
+    y: i16,
+    z: i16,
+}
+
+impl BinDeserializer for PointRaw {
+    fn from_reader<R: Read>(reader: &mut R) -> Option<Self> {
+        from_reader::<Self, {size_of::<Self>()}, R>(reader)
+    }
+}
+
+/******************************************************************************/
+
+#[derive(Debug, Copy, Clone)]
+#[repr(C, packed)]
+pub struct FaceRaw {
+    f0: u16,
+    tex_index: i16,
+    flags1: i16,
+    num_points: u8,
+    f11: u8,
+    point_1_u: u32,
+    point_1_v: u32,
+    point_2_u: u32,
+    point_2_v: u32,
+    point_3_u: u32,
+    point_3_v: u32,
+    point_4_u: u32,
+    point_4_v: u32,
+    point_1: u16,
+    point_2: u16,
+    point_3: u16,
+    point_4: u16,
+    f6: u16,
+    ff1: u16,
+    ff2: u16,
+    ff3: u16,
+    ff4: u16,
+    f8: u8,
+    flags2: u8,
+}
+
+impl BinDeserializer for FaceRaw {
+    fn from_reader<R: Read>(reader: &mut R) -> Option<Self> {
+        from_reader::<Self, {size_of::<Self>()}, R>(reader)
+    }
+}
+
+/******************************************************************************/
+
+const XYZ_SCALE: f32 = 1.0 / 300.0;
+const UV_SCALE: f32 = 4.768372e-7;
+
+#[derive(Debug, Copy, Clone)]
+pub struct Vertex {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub u: f32,
+    pub v: f32,
+}
+
+impl Vertex {
+    pub fn new() -> Self {
+        Vertex{x: 0.0, y: 0.0, z: 0.0, u: 0.0, v: 0.0}
+    }
+
+    pub fn from_point(&mut self, point: &PointRaw, u: u32, v: u32) {
+        self.x = point.x as f32 * XYZ_SCALE;
+        self.y = point.y as f32 * XYZ_SCALE;
+        self.z = point.z as f32 * XYZ_SCALE;
+        self.u = u as f32 * UV_SCALE;
+        self.v = v as f32 * UV_SCALE;
+    }
+}
+
+impl Default for Vertex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct Face {
+    pub texture_index: i16,
+    pub vertex_num: usize,
+    pub vertex: [Vertex; 4],
+}
+
+impl Face {
+    pub fn new(texture_index: i16, vertex_num: usize) -> Self {
+        Face{texture_index, vertex_num, vertex: [Vertex::default(); 4]}
+    }
+}
+
+/******************************************************************************/
+
+#[derive(Debug)]
+pub struct Object3D {
+    object: ObjectRaw,
+    faces: Vec<FaceRaw>,
+    points: Vec<PointRaw>,
+}
+
+impl Object3D {
+    pub fn create(object: &ObjectRaw, faces: &[FaceRaw], points: &[PointRaw]) -> Self {
+        let mut object_3d = Object3D{object: *object, faces: Vec::new(), points: Vec::new()};
+        for i in object.pnts_ptr..object.pnts_ptr_end {
+            object_3d.points.push(points[i as usize-1]);
+        }
+        for i in object.facs_ptr..object.facs_ptr_end {
+            object_3d.faces.push(faces[i as usize-1]);
+        }
+        object_3d
+    }
+
+    pub fn create_objects(objects: &[ObjectRaw], faces: &[FaceRaw], points: &[PointRaw]) -> Vec<Self> {
+        let mut objects_3d = Vec::new();
+        for object in objects {
+            if object.facs_num > 0 {
+                objects_3d.push(Self::create(object, faces, points));
+            }
+        }
+        objects_3d
+    }
+
+    pub fn from_file(base: &Path, bank_num: &str) -> Vec<Self> {
+        let paths = ObjectPaths::from_default_dir(base, bank_num);
+        let objects = ObjectRaw::from_file_vec(&paths.objs0_dat);
+        let points = PointRaw::from_file_vec(&paths.pnts0);
+        let faces = FaceRaw::from_file_vec(&paths.facs0);
+        Self::create_objects(&objects, &faces, &points)
+    }
+
+    /// Like `create_objects` but preserves file indices: returns `None` for
+    /// objects with no faces instead of dropping them.
+    pub fn create_objects_all(objects: &[ObjectRaw], faces: &[FaceRaw], points: &[PointRaw]) -> Vec<Option<Self>> {
+        objects.iter().map(|object| {
+            if object.facs_num > 0 {
+                Some(Self::create(object, faces, points))
+            } else {
+                None
+            }
+        }).collect()
+    }
+
+    pub fn from_file_all(base: &Path, bank_num: &str) -> Vec<Option<Self>> {
+        let paths = ObjectPaths::from_default_dir(base, bank_num);
+        let objects = ObjectRaw::from_file_vec(&paths.objs0_dat);
+        let points = PointRaw::from_file_vec(&paths.pnts0);
+        let faces = FaceRaw::from_file_vec(&paths.facs0);
+        Self::create_objects_all(&objects, &faces, &points)
+    }
+
+    pub fn iter_face(&self) -> FaceIter<Iter<FaceRaw>> {
+        FaceIter{iter: self.faces.iter(), points: &self.points}
+    }
+
+    pub fn coord_scale(&self) -> f32 {
+        self.object.coord_scale as f32
+    }
+
+    pub fn shapes_index(&self) -> u8 {
+        self.object.shapes_index
+    }
+
+    /// Returns the SHAPES.DAT footprint index for the given rotation (0-3).
+    /// Rotation is computed from angle: `((angle as u32 + 0x1FF) >> 9) & 3`
+    /// Returns i8 since negative values mean no footprint.
+    pub fn footprint_index(&self, rotation: usize) -> i8 {
+        match rotation & 3 {
+            0 => self.object.shapes_index as i8,
+            1 => self.object.u1 as i8,
+            2 => (self.object.f10 & 0xFF) as u8 as i8,
+            3 => (self.object.f10 >> 8) as u8 as i8,
+            _ => unreachable!(),
+        }
+    }
+}
+
+/******************************************************************************/
+
+pub struct FaceIter<'a, I> where I: Iterator<Item = &'a FaceRaw> {
+    iter: I,
+    points: &'a [PointRaw],
+}
+
+impl<'a, I> Iterator for FaceIter<'a, I> where I: Iterator<Item = &'a FaceRaw> {
+    type Item = Face;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.iter.next() {
+            Some(f) => {
+                let num_points = std::cmp::min(f.num_points as usize, 4);
+                let mut face_3d = Face::new(f.tex_index, num_points);
+                face_3d.vertex[0].from_point(&self.points[f.point_1 as usize], f.point_1_u, f.point_1_v);
+                face_3d.vertex[1].from_point(&self.points[f.point_2 as usize], f.point_2_u, f.point_2_v);
+                face_3d.vertex[2].from_point(&self.points[f.point_3 as usize], f.point_3_u, f.point_3_v);
+                if num_points == 4 {
+                    face_3d.vertex[3].from_point(&self.points[f.point_4 as usize], f.point_4_u, f.point_4_v);
+                }
+                Some(face_3d)
+            },
+            None => None,
+        }
+    }
+}
+
+/******************************************************************************/
+
+pub fn mk_tex_vertex(tex_index: i16, v: &Vertex) -> TexVertex {
+    TexVertex{coord: Vector3::new(v.x, v.y, v.z)
+             , uv: Vector2::new(v.u, v.v)
+             , tex_id: tex_index}
+}
+
+pub fn mk_pop_object(object: &Object3D) -> TexModel {
+    let mut model: TexModel = MeshModel::new();
+    for face in object.iter_face() {
+        if face.vertex_num == 3 {
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[0]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[1]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[2]));
+        } else {
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[0]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[1]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[2]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[2]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[3]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[0]));
+        }
+    }
+    model
+}

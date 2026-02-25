@@ -11,19 +11,19 @@ use clap::{Arg, ArgAction, Command};
 
 use cgmath::Vector3;
 
-use pop3::model::MeshModel;
-use pop3::tex_model::TexModel;
-use pop3::view::*;
+use pop3::render::model::MeshModel;
+use pop3::render::tex_model::TexModel;
+use pop3::render::camera::*;
 
-use pop3::pop::level::{LevelPaths, GlobeTextureParams};
-use pop3::pop::objects::{Object3D, mk_pop_object};
-use pop3::pop::bl320::make_bl320_texture_rgba;
+use pop3::data::level::{LevelPaths, GlobeTextureParams};
+use pop3::data::objects::{Object3D, mk_pop_object};
+use pop3::data::bl320::make_bl320_texture_rgba;
 
-use pop3::gpu::context::GpuContext;
-use pop3::gpu::pipeline::create_pipeline;
-use pop3::gpu::buffer::GpuBuffer;
-use pop3::gpu::texture::GpuTexture;
-use pop3::envelop::*;
+use pop3::render::gpu::context::GpuContext;
+use pop3::render::gpu::pipeline::create_pipeline;
+use pop3::render::gpu::buffer::GpuBuffer;
+use pop3::render::gpu::texture::GpuTexture;
+use pop3::render::envelop::*;
 
 /******************************************************************************/
 
