@@ -232,6 +232,8 @@ pub struct UnitTypeRender {
     pub frames_per_dir: u32,  // total columns in atlas
     /// Maps animation_id → (column_offset, frame_count) within the atlas.
     pub anim_offsets: Vec<(u16, u32, u32)>,
+    /// Fraction of frame height below the foot anchor (0.0–1.0).
+    pub foot_below_frac: f32,
 }
 
 /******************************************************************************/
@@ -245,6 +247,7 @@ pub fn build_spawn_model(device: &wgpu::Device, cells: &[UnitRenderData],
                      angle_x: i16, angle_z: i16,
                      frame_w: u32, frame_h: u32, frames_per_dir: u32,
                      anim_offsets: &[(u16, u32, u32)],
+                     foot_below_frac: f32,
 ) -> ModelEnvelop<TexModel> {
     let mut model: TexModel = MeshModel::new();
     let step = landscape.step();
@@ -322,10 +325,12 @@ pub fn build_spawn_model(device: &wgpu::Device, cells: &[UnitRenderData],
         let v_bottom = uv_off_y + uv_scale_y;
         let v_top = uv_off_y;
 
-        // Screen-facing billboard quad using right and up vectors
+        // Screen-facing billboard quad using right and up vectors.
+        // Shift base down so the foot pixel row (not the cell bottom) aligns with ground.
+        let foot_shift = foot_below_frac * sprite_h;
         let base = Vector3::new(gx, gy, z_base);
-        let bl = base - right * half_w;
-        let br = base + right * half_w;
+        let bl = base - right * half_w - up * foot_shift;
+        let br = base + right * half_w - up * foot_shift;
         let tl = bl + up * sprite_h;
         let tr = br + up * sprite_h;
 

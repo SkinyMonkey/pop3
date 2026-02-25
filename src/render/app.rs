@@ -1052,7 +1052,7 @@ impl App {
                         &gpu.device, &ur.cells, &self.engine.landscape_mesh, cs,
                         self.engine.camera.angle_x, self.engine.camera.angle_z,
                         ur.frame_width, ur.frame_height, ur.frames_per_dir,
-                        &ur.anim_offsets,
+                        &ur.anim_offsets, ur.foot_below_frac,
                     ));
                     ur.shadow_model = Some(build_shadow_proxy_model(
                         &gpu.device, &ur.cells, &self.engine.landscape_mesh, cs,
@@ -1112,7 +1112,7 @@ impl App {
 
         // Non-shaman subtypes: build combined idle+walk atlas
         for &(subtype, anim_indices) in &UNIT_MULTI_ANIMS {
-            if let Some((atlas_w, atlas_h, rgba, fw, fh, total_cols, offsets)) =
+            if let Some((atlas_w, atlas_h, rgba, fw, fh, total_cols, offsets, max_y)) =
                 build_multi_anim_atlas(&sequences, &container, &palette, anim_indices)
             {
                 let tex = GpuTexture::new_2d(
@@ -1131,6 +1131,7 @@ impl App {
                 let anim_offsets: Vec<(u16, u32, u32)> = offsets.iter()
                     .map(|(idx, off, fc)| (*idx as u16, *off, *fc))
                     .collect();
+                let foot_below_frac = max_y.max(0) as f32 / fh.max(1) as f32;
                 self.unit_renders.push(UnitTypeRender {
                     subtype,
                     cells: Vec::new(),
@@ -1142,6 +1143,7 @@ impl App {
                     frame_height: fh,
                     frames_per_dir: total_cols,
                     anim_offsets,
+                    foot_below_frac,
                 });
             }
         }
@@ -1149,7 +1151,7 @@ impl App {
         // Shaman: pre-rendered per-tribe sprites (not VELE composited)
         {
             let subtype = PERSON_SUBTYPE_SHAMAN;
-            if let Some((atlas_w, atlas_h, rgba, fw, fh, total_cols, offsets)) =
+            if let Some((atlas_w, atlas_h, rgba, fw, fh, total_cols, offsets, max_y)) =
                 build_direct_multi_anim_atlas(&container, &palette, &SHAMAN_ANIMS)
             {
                 let tex = GpuTexture::new_2d(
@@ -1168,6 +1170,7 @@ impl App {
                 let anim_offsets: Vec<(u16, u32, u32)> = offsets.iter()
                     .map(|(idx, off, fc)| (*idx as u16, *off, *fc))
                     .collect();
+                let foot_below_frac = max_y.max(0) as f32 / fh.max(1) as f32;
                 self.unit_renders.push(UnitTypeRender {
                     subtype,
                     cells: Vec::new(),
@@ -1179,6 +1182,7 @@ impl App {
                     frame_height: fh,
                     frames_per_dir: total_cols,
                     anim_offsets,
+                    foot_below_frac,
                 });
             }
         }

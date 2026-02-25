@@ -611,7 +611,7 @@ impl ViewerState {
         // Use the shared build_tribe_atlas with explicit combo override and global bbox
         let combo_override = Some(unit_combo);
         let vstart_base = anim_index * DIRS_PER_ANIM;
-        if let Some((atlas_w, atlas_h, rgba, _fw, _fh, max_frames)) =
+        if let Some((atlas_w, atlas_h, rgba, _fw, _fh, max_frames, _max_y)) =
             build_tribe_atlas(sequences, container, palette, vstart_base, combo_override, Some(global_bbox))
         {
             let atlas = SpriteAtlas { frames_per_dir: max_frames };
@@ -927,7 +927,7 @@ impl ApplicationHandler for App {
         let total_anims = self.sequences.len() / DIRS_PER_ANIM;
 
         let initial_vstart = initial_anim * DIRS_PER_ANIM;
-        let (atlas_w, atlas_h, rgba, _fw, _fh, max_frames) = build_tribe_atlas(
+        let (atlas_w, atlas_h, rgba, _fw, _fh, max_frames, _max_y) = build_tribe_atlas(
             &self.sequences, &self.container, &self.palette,
             initial_vstart, Some(None), Some(self.global_bbox),
         ).expect("Failed to build initial animation atlas");
