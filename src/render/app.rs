@@ -20,9 +20,8 @@ use crate::data::psfb::ContainerPSFB;
 use crate::data::types::BinDeserializer;
 use crate::data::animation::{
     AnimationsData, AnimationSequence,
-    build_direct_sprite_atlas, build_multi_anim_atlas,
-    UNIT_MULTI_ANIMS,
-    SHAMAN_IDLE_SPRITES, SHAMAN_FRAMES_PER_DIR,
+    build_multi_anim_atlas, build_direct_multi_anim_atlas,
+    UNIT_MULTI_ANIMS, SHAMAN_ANIMS,
 };
 use crate::engine::state::constants::*;
 
@@ -617,7 +616,7 @@ impl App {
                 sunlight,
                 show_objects: true,
                 hud_tab: HudTab::Spells,
-                hud_visible: true,
+                hud_visible: false,
                 hud_panel_sprite_count: 0,
                 unit_coordinator: UnitCoordinator::new(),
                 game_world: {
@@ -1063,11 +1062,11 @@ impl App {
             }
         }
 
-        // Shaman: direct per-tribe sprites (idle only for now)
+        // Shaman: pre-rendered per-tribe sprites (not VELE composited)
         {
             let subtype = PERSON_SUBTYPE_SHAMAN;
-            if let Some((atlas_w, atlas_h, rgba, fw, fh, max_frames)) =
-                build_direct_sprite_atlas(&container, &palette, &SHAMAN_IDLE_SPRITES, SHAMAN_FRAMES_PER_DIR)
+            if let Some((atlas_w, atlas_h, rgba, fw, fh, total_cols, offsets)) =
+                build_direct_multi_anim_atlas(&container, &palette, &SHAMAN_ANIMS)
             {
                 let tex = GpuTexture::new_2d(
                     &gpu.device, &gpu.queue, atlas_w, atlas_h,
@@ -1082,8 +1081,9 @@ impl App {
                         wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
                     ],
                 });
-                // Shaman idle anim is index 20
-                let anim_offsets = vec![(20u16, 0u32, max_frames)];
+                let anim_offsets: Vec<(u16, u32, u32)> = offsets.iter()
+                    .map(|(idx, off, fc)| (*idx as u16, *off, *fc))
+                    .collect();
                 self.unit_renders.push(UnitTypeRender {
                     subtype,
                     cells: Vec::new(),
@@ -1092,7 +1092,7 @@ impl App {
                     model: None,
                     frame_width: fw,
                     frame_height: fh,
-                    frames_per_dir: max_frames,
+                    frames_per_dir: total_cols,
                     anim_offsets,
                 });
             }
