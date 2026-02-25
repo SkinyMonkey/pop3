@@ -159,15 +159,25 @@ See `scripts/` for usage examples.
 
 ```
 src/
-  main.rs           Main renderer
-  landscape.rs      Terrain mesh generation
-  view.rs           Camera/MVP matrices
-  model.rs          Mesh model traits
-  gpu/              wgpu abstraction (context, pipeline, buffer, texture)
-  pop/              Populous game format parsers (levels, units, objects, sprites, animations)
-  geometry/         Procedural mesh generation (cube, sphere, circle)
-  bin/              Additional viewer executables
-shaders/            WGSL shaders for all rendering modes
+  main.rs           CLI entry point
+  data/             Binary format parsers (levels, units, objects, sprites, animations)
+  engine/           Game logic — simulation, movement, units (no GPU dependency)
+    command.rs      Input → GameCommand translation
+    frame.rs        Per-frame output boundary for rendering
+    state/          Game simulation (tick loop, flags, RNG, tribes, victory)
+    movement/       Pathfinding and unit movement
+    units/          Unit state machines and selection
+  render/           Everything visual — meshes, GPU, HUD, camera, geometry
+    app.rs          Application struct, render loop, winit integration
+    terrain.rs      Landscape mesh generation
+    camera.rs       Camera / MVP matrices
+    buildings.rs    3D building mesh construction
+    sprites/        Sprite-based unit rendering
+    hud/            UI overlay rendering
+    gpu/            wgpu abstraction (context, pipeline, buffer, texture)
+    geometry/       Procedural mesh generation (cube, sphere, circle)
+  bin/              Standalone viewer executables
+shaders/            WGSL shaders
 scripts/            Testing and resource extraction tools
 docs/               Documentation and reverse engineering notes
 ```
