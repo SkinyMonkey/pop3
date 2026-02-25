@@ -31,6 +31,8 @@ pub enum GameCommand {
     NextShader,
     PrevShader,
     ToggleObjects,
+    ToggleShadows,
+    ToggleMarkers,
 
     // Sunlight
     AdjustSunlight { dx: f32, dy: f32 },
@@ -92,6 +94,8 @@ pub fn translate_key(key: KeyCode) -> Option<GameCommand> {
         // Toggles
         KeyCode::KeyC => Some(GameCommand::ToggleCurvature),
         KeyCode::KeyO => Some(GameCommand::ToggleObjects),
+        KeyCode::KeyG => Some(GameCommand::ToggleShadows),
+        KeyCode::KeyU => Some(GameCommand::ToggleMarkers),
 
         // Curvature adjustment
         KeyCode::BracketRight => Some(GameCommand::AdjustCurvature { factor: 1.2 }),
@@ -181,6 +185,8 @@ mod tests {
     fn test_translate_toggles() {
         assert!(matches!(translate_key(KeyCode::KeyC), Some(GameCommand::ToggleCurvature)));
         assert!(matches!(translate_key(KeyCode::KeyO), Some(GameCommand::ToggleObjects)));
+        assert!(matches!(translate_key(KeyCode::KeyG), Some(GameCommand::ToggleShadows)));
+        assert!(matches!(translate_key(KeyCode::KeyU), Some(GameCommand::ToggleMarkers)));
         assert!(matches!(translate_key(KeyCode::F5), Some(GameCommand::ToggleSimulation)));
     }
 

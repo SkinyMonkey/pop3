@@ -38,6 +38,11 @@ struct Transforms1 {
 @group(1) @binding(2) var tex: texture_2d<u32>;
 @group(1) @binding(3) var<storage, read> palette: array<u32>;
 
+// Group 2: Shadow map
+@group(2) @binding(0) var shadow_map: texture_depth_2d;
+@group(2) @binding(1) var shadow_samp: sampler_comparison;
+@group(2) @binding(2) var<uniform> shadow_light_mvp: mat4x4<f32>;
+
 // ---------- Vertex ----------
 
 struct VertexInput {
@@ -52,6 +57,7 @@ struct VertexOutput {
     @location(2) brightness: f32,
     @location(3) @interpolate(flat) primitive_id: u32,
     @location(4) viewport_fade: f32,
+    @location(5) curved_pos: vec3<f32>,
 };
 
 fn wat_height(x: u32, y: u32) -> u32 {
@@ -106,6 +112,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let coord = transforms.m_transform * transforms1.m_transform1 * vec4<f32>(curved, 1.0);
     out.position = coord;
     out.coord3d_out = vec3<f32>(coord3d.xy, coordf.z);
+    out.curved_pos = curved;
 
     // Brightness calculation
     let index1 = ((in.coord_in.y + u32(params.level_shift.y) + 1u) % w) * w + ((in.coord_in.x + u32(params.level_shift.x)) % w);
@@ -153,5 +160,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let color = textureLoad(tex, coords_int, 0).r;
     let c = mk_tex(color);
-    return vec4<f32>(c * in.viewport_fade, 0.0);
+
+    // Shadow mapping
+    let shadow_world = transforms1.m_transform1 * vec4<f32>(in.curved_pos, 1.0);
+    let light_pos = shadow_light_mvp * shadow_world;
+    let shadow_uv = light_pos.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
+    let shadow = textureSampleCompare(shadow_map, shadow_samp, shadow_uv, light_pos.z - 0.005);
+    let shadow_factor = 0.3 + 0.7 * shadow;
+
+    return vec4<f32>(c * shadow_factor * in.viewport_fade, 0.0);
 }
