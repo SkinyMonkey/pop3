@@ -2101,21 +2101,22 @@ impl ApplicationHandler for App {
                 }
             },
             WindowEvent::RedrawRequested => {
-                // Tick game simulation via GameWorld tick loop
+                // Tick game simulation via GameWorld tick loop.
+                // UnitCoordinator implements ObjectTick and is plugged into the
+                // objects slot, so person state machines run inside the proper
+                // tick order (after terrain, before water).
                 {
-                    let (mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h, mut i, mut j, mut k) =
-                        (NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp);
+                    let (mut a, mut c, mut d, mut e, mut f, mut g, mut h, mut i, mut j, mut k) =
+                        (NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp);
                     let mut subs = TickSubsystems {
-                        terrain: &mut a, objects: &mut b, water: &mut c,
+                        terrain: &mut a, objects: &mut self.engine.unit_coordinator,
+                        water: &mut c,
                         network: &mut d, actions: &mut e, game_time: &mut f,
                         single_player: &mut g, tutorial: &mut h, ai: &mut i,
                         population: &mut j, mana: &mut k,
                     };
                     let ticks = self.engine.game_world.simulation_tick(&self.engine.game_time, &mut subs);
                     if ticks > 0 {
-                        for _ in 0..ticks {
-                            self.engine.unit_coordinator.tick();
-                        }
                         self.rebuild_unit_models();
                         self.do_render = true;
                     }

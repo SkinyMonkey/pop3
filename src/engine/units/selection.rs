@@ -64,6 +64,7 @@ mod tests {
 
     fn make_unit(id: usize, cx: f32, cy: f32) -> Unit {
         use super::super::person_state::PersonState;
+        use crate::engine::movement::WorldCoord;
         Unit {
             id,
             model_type: ModelType::Person,
@@ -81,6 +82,13 @@ mod tests {
             target_unit: None,
             attacker_unit: None,
             alive: true,
+            home_pos: WorldCoord::new(0, 0),
+            behavior_flags: 0,
+            wander_duration: 0,
+            wander_range: 0,
+            linked_obj_id: None,
+            bloodlust: false,
+            shielded: false,
         }
     }
 

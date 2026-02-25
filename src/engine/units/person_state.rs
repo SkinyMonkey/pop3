@@ -124,24 +124,52 @@ fn enter_idle(unit: &mut Unit, rng: &mut GameRng) {
     unit.state_timer = (rng.next() % 50 + 50) as u16;
 }
 
-/// Wander: random direction, timer 32-96 ticks, set MOVING flag.
+/// Wander sub-phases stored in `state_counter`.
+/// Original: Person_ProcessIdleWanderState uses phase byte at +0x2D.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum WanderPhase {
+    /// Walking in random direction (32-63 ticks).
+    Walking  = 0,
+    /// Paused/idle, looking around (64-127 ticks).
+    Pausing  = 1,
+    /// Second walking phase (32-63 ticks).
+    Walking2 = 2,
+    /// Water escape — pathfind away from water, or idle (32-63 ticks).
+    WaterEscape = 3,
+}
+
+/// Wander: start in Walking phase with random direction.
 /// Original: case '\x04' in Person_SetState.
 fn enter_wander(unit: &mut Unit, rng: &mut GameRng) {
-    unit.state_timer = ((rng.next() & 0x3F) + 0x20) as u16; // 32-95
-    let angle = (rng.next() & 0x7FF) as u16; // 0-2047
+    unit.state_counter = WanderPhase::Walking as u8;
+    enter_wander_walking(unit, rng);
+}
+
+/// Set up a walking sub-phase: random direction, timer 32-63 ticks, MOVING flag.
+fn enter_wander_walking(unit: &mut Unit, rng: &mut GameRng) {
+    unit.state_timer = ((rng.next() & 0x1F) + 0x20) as u16; // 32-63
+    let angle = (rng.next() & 0x7FF) as u16;
     unit.movement.facing_angle = angle;
-    // Set MOVING and BLOCKED flags (original: flags1 |= 0x1080)
     unit.movement.flags1 |= 0x1080;
-    // Restore subtype speed
     let defaults = person_type_defaults(unit.subtype);
     unit.movement.speed = defaults.speed;
 }
 
-/// Fighting: face target.
+/// Set up a pausing sub-phase: stop moving, timer 64-127 ticks.
+fn enter_wander_pausing(unit: &mut Unit, rng: &mut GameRng) {
+    unit.state_timer = ((rng.next() & 0x3F) + 0x40) as u16; // 64-127
+    unit.movement.flags1 &= !0x1000; // Stop moving
+    unit.movement.speed = 0;
+}
+
+/// Fighting: enter Seek phase, stop moving.
 /// Original: case '\x19' → Person_EnterFightingState (0x00437b40).
 fn enter_fighting(unit: &mut Unit) {
     unit.movement.speed = 0;
     unit.movement.flags1 &= !0x1000; // Stop moving
+    unit.state_counter = CombatPhase::Seek as u8;
+    unit.state_timer = 0;
 }
 
 /// Fleeing: random direction, speed=0x6E, timer=0x40.
@@ -184,11 +212,11 @@ pub enum TickResult {
 
 /// Per-tick state update for a single unit.
 /// Called each game tick from the coordinator.
-pub fn tick_state(unit: &mut Unit) -> TickResult {
+pub fn tick_state(unit: &mut Unit, rng: &mut GameRng) -> TickResult {
     match unit.state {
         PersonState::Idle => tick_idle(unit),
         PersonState::Moving | PersonState::GoToPoint | PersonState::GoToMarker => tick_moving(unit),
-        PersonState::Wander => tick_wander(unit),
+        PersonState::Wander => tick_wander(unit, rng),
         PersonState::Fighting => tick_fighting(unit),
         PersonState::Fleeing => tick_fleeing(unit),
         PersonState::Drowning => tick_drowning(unit),
@@ -197,10 +225,16 @@ pub fn tick_state(unit: &mut Unit) -> TickResult {
     }
 }
 
-/// Idle: stay idle until commanded.
-/// (The original binary's idle→wander cycle is more complex — deferred.)
-fn tick_idle(_unit: &mut Unit) -> TickResult {
-    TickResult::Continue
+/// Idle: countdown state_timer, transition to Wander when expired.
+/// Original: Object_ProcessPersonState case 0x01 — decrements timer,
+/// on expiry looks up default state from DAT_0059fe44[subtype*0x32].
+fn tick_idle(unit: &mut Unit) -> TickResult {
+    if unit.state_timer > 0 {
+        unit.state_timer -= 1;
+        TickResult::Continue
+    } else {
+        TickResult::Transition(PersonState::Wander)
+    }
 }
 
 /// Moving/GoToPoint/GoToMarker: check if movement completed.
@@ -213,28 +247,113 @@ fn tick_moving(unit: &mut Unit) -> TickResult {
     }
 }
 
-/// Wander: countdown timer, transition to Idle when expired.
+/// Wander: cycle through walking/pausing sub-phases.
+/// Original: Person_ProcessIdleWanderState — phase 0=walk, 1=pause, 2=walk, then → Idle.
 /// Movement (walking in random direction) is handled by the coordinator.
-fn tick_wander(unit: &mut Unit) -> TickResult {
+fn tick_wander(unit: &mut Unit, rng: &mut GameRng) -> TickResult {
     if unit.state_timer > 0 {
         unit.state_timer -= 1;
-        TickResult::Continue
-    } else {
-        // Stop moving when wander ends
-        unit.movement.flags1 &= !0x1000;
-        TickResult::Transition(PersonState::Idle)
+        return TickResult::Continue;
+    }
+
+    match unit.state_counter {
+        0 => {
+            // Walking → Pausing
+            unit.state_counter = WanderPhase::Pausing as u8;
+            enter_wander_pausing(unit, rng);
+            TickResult::Continue
+        }
+        1 => {
+            // Pausing → Walking2
+            unit.state_counter = WanderPhase::Walking2 as u8;
+            enter_wander_walking(unit, rng);
+            TickResult::Continue
+        }
+        2 => {
+            // Walking2 → back to Idle
+            unit.movement.flags1 &= !0x1000;
+            unit.movement.speed = 0;
+            TickResult::Transition(PersonState::Idle)
+        }
+        _ => {
+            // WaterEscape or unknown → Idle
+            unit.movement.flags1 &= !0x1000;
+            unit.movement.speed = 0;
+            TickResult::Transition(PersonState::Idle)
+        }
     }
 }
 
-/// Fighting: apply damage to target, check for target death or out-of-range.
-/// Actual damage application happens in the coordinator (needs access to both units).
-/// This just manages the timer for attack rate.
-fn tick_fighting(unit: &mut Unit) -> TickResult {
+/// Fighting: advance through combat sub-phases.
+/// Actual damage application and chase movement happen in the coordinator
+/// (needs access to both units). This manages the phase state machine.
+///
+/// Phase flow: Seek → Approach → SwingReady → Strike → LungeBack → LungeFwd → Recovering → Seek
+pub fn tick_fighting(unit: &mut Unit) -> TickResult {
     if unit.target_unit.is_none() {
-        // No target — go idle
         return TickResult::Transition(PersonState::Idle);
     }
-    TickResult::Continue
+
+    let phase = CombatPhase::from_counter(unit.state_counter);
+    match phase {
+        CombatPhase::Seek => {
+            // Coordinator will set Approach phase when target is detected
+            // (via process_combat chase logic)
+            TickResult::Continue
+        }
+        CombatPhase::Approach => {
+            // Coordinator handles movement toward target.
+            // When in melee range, coordinator sets SwingReady phase.
+            TickResult::Continue
+        }
+        CombatPhase::SwingReady => {
+            // Pre-strike pause
+            if unit.state_timer > 0 {
+                unit.state_timer -= 1;
+                TickResult::Continue
+            } else {
+                unit.state_counter = CombatPhase::Strike as u8;
+                TickResult::Continue
+            }
+        }
+        CombatPhase::Strike => {
+            // Damage is applied by coordinator when it sees Strike phase.
+            // Immediately transition to LungeBack.
+            unit.state_counter = CombatPhase::LungeBack as u8;
+            unit.state_timer = LUNGE_TICKS;
+            TickResult::Continue
+        }
+        CombatPhase::LungeBack => {
+            if unit.state_timer > 0 {
+                unit.state_timer -= 1;
+                TickResult::Continue
+            } else {
+                unit.state_counter = CombatPhase::LungeFwd as u8;
+                unit.state_timer = LUNGE_TICKS;
+                TickResult::Continue
+            }
+        }
+        CombatPhase::LungeFwd => {
+            if unit.state_timer > 0 {
+                unit.state_timer -= 1;
+                TickResult::Continue
+            } else {
+                unit.state_counter = CombatPhase::Recovering as u8;
+                unit.state_timer = RECOVERING_TICKS;
+                TickResult::Continue
+            }
+        }
+        CombatPhase::Recovering => {
+            if unit.state_timer > 0 {
+                unit.state_timer -= 1;
+                TickResult::Continue
+            } else {
+                // Back to Seek for next attack cycle
+                unit.state_counter = CombatPhase::Seek as u8;
+                TickResult::Continue
+            }
+        }
+    }
 }
 
 /// Fleeing: countdown timer, transition to Idle when expired.
@@ -276,20 +395,26 @@ fn tick_dead(unit: &mut Unit) -> TickResult {
 /// Calculate melee damage from attacker to defender.
 /// Original: Combat_ProcessMeleeDamage (0x004c5d20).
 /// damage = (fight_damage * health) / max_health, minimum 32.
+/// Bloodlust doubles the damage output.
 pub fn calculate_melee_damage(attacker: &Unit) -> u16 {
     let defaults = person_type_defaults(attacker.subtype);
     let base = defaults.fight_damage as u32;
-    let damage = (base * attacker.health as u32) / attacker.max_health.max(1) as u32;
+    let mut damage = (base * attacker.health as u32) / attacker.max_health.max(1) as u32;
+    if attacker.bloodlust {
+        damage *= 2;
+    }
     damage.max(0x20) as u16 // Min damage = 32
 }
 
-/// Apply damage to a unit.
+/// Apply damage to a unit, accounting for shield protection.
 /// Original: Object_ApplyDamage (0x00504f20).
+/// Shield halves incoming damage (right-shift by 1).
 pub fn apply_damage(unit: &mut Unit, damage: u16) {
-    if unit.health <= damage {
+    let effective = if unit.shielded { damage >> 1 } else { damage };
+    if unit.health <= effective {
         unit.health = 0;
     } else {
-        unit.health -= damage;
+        unit.health -= effective;
     }
 }
 
@@ -301,8 +426,50 @@ pub const COMBAT_DETECT_RANGE: i32 = 512;
 /// Units must be this close to deal damage.
 pub const COMBAT_MELEE_RANGE: i32 = 72;
 
-/// Ticks between melee attacks.
+/// Ticks between melee attacks (used as fallback; sub-phases have own timers).
 pub const COMBAT_ATTACK_INTERVAL: u16 = 8;
+
+/// Combat sub-phases stored in `state_counter` (offset 0x2D).
+/// Original: Person_ProcessCombatState uses phase byte to drive micro-states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CombatPhase {
+    /// Find/validate target, set initial approach direction.
+    Seek        = 0x00,
+    /// Walk toward enemy (facing updated each tick by coordinator).
+    Approach    = 0x22,
+    /// Pre-strike pause (0x10 = 16 ticks).
+    SwingReady  = 0x07,
+    /// Deliver damage this tick, then transition to lunge/recovery.
+    Strike      = 0x26,
+    /// Post-strike lunge backward (cosmetic, random angle offset).
+    LungeBack   = 0x27,
+    /// Post-strike lunge forward.
+    LungeFwd    = 0x28,
+    /// Post-attack cooldown (8 ticks), then back to Seek.
+    Recovering  = 0x0C,
+}
+
+/// Timer for SwingReady phase (original: 0x10 ticks).
+pub const SWING_READY_TICKS: u16 = 0x10;
+/// Timer for Recovering phase (original: 8 ticks).
+pub const RECOVERING_TICKS: u16 = 8;
+/// Timer for lunge phases (original: ~4 ticks each).
+pub const LUNGE_TICKS: u16 = 4;
+
+impl CombatPhase {
+    pub fn from_counter(val: u8) -> Self {
+        match val {
+            0x22 => CombatPhase::Approach,
+            0x07 => CombatPhase::SwingReady,
+            0x26 => CombatPhase::Strike,
+            0x27 => CombatPhase::LungeBack,
+            0x28 => CombatPhase::LungeFwd,
+            0x0C => CombatPhase::Recovering,
+            _    => CombatPhase::Seek,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -311,6 +478,7 @@ mod tests {
     use crate::data::units::ModelType;
 
     fn make_unit(subtype: u8, tribe: u8) -> Unit {
+        use crate::engine::movement::WorldCoord;
         let defaults = person_type_defaults(subtype);
         Unit {
             id: 0,
@@ -329,6 +497,13 @@ mod tests {
             target_unit: None,
             attacker_unit: None,
             alive: true,
+            home_pos: WorldCoord::new(0, 0),
+            behavior_flags: 0,
+            wander_duration: 0,
+            wander_range: 0,
+            linked_obj_id: None,
+            bloodlust: false,
+            shielded: false,
         }
     }
 
@@ -400,53 +575,78 @@ mod tests {
     }
 
     #[test]
-    fn idle_stays_idle() {
+    fn idle_counts_down_to_wander() {
         let mut unit = make_unit(2, 0);
+        let mut rng = GameRng::new(99);
         unit.state = PersonState::Idle;
-        unit.state_timer = 0;
-        assert!(matches!(tick_state(&mut unit), TickResult::Continue));
-        assert!(matches!(tick_state(&mut unit), TickResult::Continue));
+        unit.state_timer = 2;
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
+        assert_eq!(unit.state_timer, 1);
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
+        assert_eq!(unit.state_timer, 0);
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Transition(PersonState::Wander)));
     }
 
     #[test]
-    fn wander_to_idle_transition() {
+    fn wander_sub_phases_walk_pause_walk_idle() {
         let mut unit = make_unit(2, 0);
-        unit.state = PersonState::Wander;
-        unit.state_timer = 1;
-        unit.movement.flags1 |= 0x1000;
-        assert!(matches!(tick_state(&mut unit), TickResult::Continue));
-        assert_eq!(unit.state_timer, 0);
-        match tick_state(&mut unit) {
-            TickResult::Transition(PersonState::Idle) => {},
-            other => panic!("Expected Transition(Idle), got {:?}", matches!(other, TickResult::Continue)),
+        let mut rng = GameRng::new(42);
+        enter_state(&mut unit, PersonState::Wander, &mut rng);
+        assert_eq!(unit.state_counter, WanderPhase::Walking as u8);
+        assert!(unit.state_timer >= 32 && unit.state_timer <= 63);
+        assert!(unit.movement.flags1 & 0x1000 != 0); // MOVING
+
+        // Drain walking timer
+        while unit.state_timer > 0 {
+            assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
         }
-        assert_eq!(unit.movement.flags1 & 0x1000, 0); // MOVING cleared
+        // Timer=0, should transition to Pausing
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
+        assert_eq!(unit.state_counter, WanderPhase::Pausing as u8);
+        assert!(unit.state_timer >= 64 && unit.state_timer <= 127);
+        assert_eq!(unit.movement.flags1 & 0x1000, 0); // NOT moving
+
+        // Drain pausing timer
+        while unit.state_timer > 0 {
+            assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
+        }
+        // Timer=0, should transition to Walking2
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
+        assert_eq!(unit.state_counter, WanderPhase::Walking2 as u8);
+        assert!(unit.state_timer >= 32 && unit.state_timer <= 63);
+
+        // Drain walking2 timer
+        while unit.state_timer > 0 {
+            assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
+        }
+        // Timer=0, should transition to Idle
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Transition(PersonState::Idle)));
     }
 
     #[test]
     fn moving_to_idle_when_arrived() {
         let mut unit = make_unit(2, 0);
+        let mut rng = GameRng::new(99);
         unit.state = PersonState::GoToPoint;
         unit.movement.flags1 |= 0x1000; // Still moving
-        assert!(matches!(tick_state(&mut unit), TickResult::Continue));
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
         unit.movement.flags1 &= !0x1000; // Arrived
-        assert!(matches!(tick_state(&mut unit), TickResult::Transition(PersonState::Idle)));
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Transition(PersonState::Idle)));
     }
 
     #[test]
     fn drowning_drains_health_to_death() {
         let mut unit = make_unit(2, 0); // Brave, HP=1400
+        let mut rng = GameRng::new(99);
         unit.state = PersonState::Drowning;
-        // Damage per tick = 1400/50 = 28
         let initial_hp = unit.health;
-        match tick_state(&mut unit) {
+        match tick_state(&mut unit, &mut rng) {
             TickResult::Continue => {},
             _ => panic!("Should continue"),
         }
         assert!(unit.health < initial_hp);
-        // Drain until death
         for _ in 0..200 {
-            if let TickResult::Transition(PersonState::Dead) = tick_state(&mut unit) {
+            if let TickResult::Transition(PersonState::Dead) = tick_state(&mut unit, &mut rng) {
                 assert_eq!(unit.health, 0);
                 return;
             }
@@ -457,26 +657,28 @@ mod tests {
     #[test]
     fn dead_counts_down_then_not_alive() {
         let mut unit = make_unit(2, 0);
+        let mut rng = GameRng::new(99);
         unit.state = PersonState::Dead;
         unit.state_counter = 3;
         unit.alive = true;
         for _ in 0..3 {
-            tick_state(&mut unit);
+            tick_state(&mut unit, &mut rng);
             assert!(unit.alive);
         }
-        tick_state(&mut unit); // counter hits 0
+        tick_state(&mut unit, &mut rng);
         assert!(!unit.alive);
     }
 
     #[test]
     fn fleeing_counts_down_to_idle() {
         let mut unit = make_unit(2, 0);
+        let mut rng = GameRng::new(99);
         unit.state = PersonState::Fleeing;
         unit.state_timer = 2;
         unit.movement.flags1 |= 0x1000;
-        assert!(matches!(tick_state(&mut unit), TickResult::Continue));
-        assert!(matches!(tick_state(&mut unit), TickResult::Continue));
-        match tick_state(&mut unit) {
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
+        match tick_state(&mut unit, &mut rng) {
             TickResult::Transition(PersonState::Idle) => {},
             _ => panic!("Expected Idle transition"),
         }
@@ -485,9 +687,60 @@ mod tests {
     #[test]
     fn fighting_without_target_goes_idle() {
         let mut unit = make_unit(2, 0);
+        let mut rng = GameRng::new(99);
         unit.state = PersonState::Fighting;
         unit.target_unit = None;
-        assert!(matches!(tick_state(&mut unit), TickResult::Transition(PersonState::Idle)));
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Transition(PersonState::Idle)));
+    }
+
+    #[test]
+    fn combat_phase_cycle() {
+        let mut unit = make_unit(3, 0); // Warrior
+        let mut rng = GameRng::new(42);
+        enter_state(&mut unit, PersonState::Fighting, &mut rng);
+        unit.target_unit = Some(1);
+        assert_eq!(unit.state_counter, CombatPhase::Seek as u8);
+
+        // Seek stays in Seek (coordinator drives Seek→Approach)
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
+
+        // Simulate coordinator setting SwingReady
+        unit.state_counter = CombatPhase::SwingReady as u8;
+        unit.state_timer = 2;
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue)); // timer 2→1
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue)); // timer 1→0
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue)); // → Strike
+        assert_eq!(unit.state_counter, CombatPhase::Strike as u8);
+
+        // Strike → LungeBack
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
+        assert_eq!(unit.state_counter, CombatPhase::LungeBack as u8);
+        assert_eq!(unit.state_timer, LUNGE_TICKS);
+
+        // Drain LungeBack
+        for _ in 0..LUNGE_TICKS {
+            assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
+        }
+        // → LungeFwd
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
+        assert_eq!(unit.state_counter, CombatPhase::LungeFwd as u8);
+
+        // Drain LungeFwd
+        for _ in 0..LUNGE_TICKS {
+            assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
+        }
+        // → Recovering
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
+        assert_eq!(unit.state_counter, CombatPhase::Recovering as u8);
+        assert_eq!(unit.state_timer, RECOVERING_TICKS);
+
+        // Drain Recovering
+        for _ in 0..RECOVERING_TICKS {
+            assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
+        }
+        // → Seek
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
+        assert_eq!(unit.state_counter, CombatPhase::Seek as u8);
     }
 
     #[test]
@@ -511,6 +764,23 @@ mod tests {
         assert_eq!(unit.health, 50);
         apply_damage(&mut unit, 200); // More than remaining
         assert_eq!(unit.health, 0);
+    }
+
+    #[test]
+    fn bloodlust_doubles_damage() {
+        let mut unit = make_unit(3, 0); // Warrior, fight_damage=400
+        assert_eq!(calculate_melee_damage(&unit), 400);
+        unit.bloodlust = true;
+        assert_eq!(calculate_melee_damage(&unit), 800);
+    }
+
+    #[test]
+    fn shield_halves_incoming_damage() {
+        let mut unit = make_unit(2, 0);
+        unit.health = 200;
+        unit.shielded = true;
+        apply_damage(&mut unit, 100); // 100 >> 1 = 50
+        assert_eq!(unit.health, 150);
     }
 
     #[test]
