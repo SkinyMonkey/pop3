@@ -46,7 +46,8 @@ use crate::render::sprites::{
     obj_colors, convert_palette,
     pack_palette_rgba, rgb_to_rgba,
     extract_level_objects,
-    build_spawn_model, build_object_markers, build_unit_markers, build_selection_rings,
+    build_spawn_model, build_shadow_proxy_model,
+    build_object_markers, build_unit_markers, build_selection_rings,
 };
 
 use crate::render::gpu::context::GpuContext;
@@ -1053,8 +1054,14 @@ impl App {
                         ur.frame_width, ur.frame_height, ur.frames_per_dir,
                         &ur.anim_offsets,
                     ));
+                    ur.shadow_model = Some(build_shadow_proxy_model(
+                        &gpu.device, &ur.cells, &self.engine.landscape_mesh, cs,
+                        ur.frame_width, ur.frame_height, ur.frames_per_dir,
+                        &ur.anim_offsets,
+                    ));
                 } else {
                     ur.model = None;
+                    ur.shadow_model = None;
                 }
             }
         }
@@ -1130,6 +1137,7 @@ impl App {
                     texture: tex,
                     bind_group,
                     model: None,
+                    shadow_model: None,
                     frame_width: fw,
                     frame_height: fh,
                     frames_per_dir: total_cols,
@@ -1166,6 +1174,7 @@ impl App {
                     texture: tex,
                     bind_group,
                     model: None,
+                    shadow_model: None,
                     frame_width: fw,
                     frame_height: fh,
                     frames_per_dir: total_cols,
@@ -1628,14 +1637,14 @@ impl App {
                     }
                 }
 
-                // Shadow cast: sprites
+                // Shadow cast: sprites (flat proxy quads, not camera-facing billboards)
                 if let Some(ref pipeline) = self.shadow_depth_sprite_pipeline {
                     shadow_pass.set_pipeline(pipeline);
                     shadow_pass.set_bind_group(0, shadow_g0, &[]);
                     for ur in &self.unit_renders {
-                        if let Some(ref model) = ur.model {
+                        if let Some(ref shadow_model) = ur.shadow_model {
                             shadow_pass.set_bind_group(1, &ur.bind_group, &[]);
-                            model.draw(&mut shadow_pass);
+                            shadow_model.draw(&mut shadow_pass);
                         }
                     }
                 }

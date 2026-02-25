@@ -1,5 +1,6 @@
-// shadow_depth_sprite.wgsl — Shadow pass for sprites: standard alpha test.
-// Same vertex transform as building depth shader, but discards transparent sprite pixels.
+// shadow_depth_sprite.wgsl — Shadow pass for sprite shadow proxies.
+// Renders flat ground-level quads (not camera-facing billboards) into the
+// shadow depth texture. Alpha test discards transparent sprite pixels.
 
 struct LightMVP {
     matrix: mat4x4<f32>,
