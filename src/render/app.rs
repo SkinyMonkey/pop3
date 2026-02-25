@@ -988,10 +988,24 @@ impl App {
         let sequences = AnimationSequence::from_data(&anim_data);
         let sampler = GpuTexture::create_sampler(&gpu.device, true);
 
-        // Extract frame counts from all animation sequences for the engine
-        self.engine.unit_coordinator.anim_frame_counts = sequences.iter()
-            .map(|seq| seq.frames.len().min(255) as u8)
-            .collect();
+        // Extract frame counts per animation ID (using shape table indirection).
+        // Animation IDs map through ANIM_SHAPE_TABLE to VSTART bases;
+        // frame_count = max frames across the 5 stored directions.
+        use crate::data::animation::{STORED_DIRECTIONS, anim_shape, ANIM_SHAPE_TABLE};
+        let num_anim_ids = ANIM_SHAPE_TABLE.len();
+        let mut frame_counts = vec![1u8; num_anim_ids + 1];
+        for anim_id in 0..num_anim_ids {
+            let (vstart_base, _sprite_type) = anim_shape(anim_id as u16);
+            let mut max_frames = 0usize;
+            for dir in 0..STORED_DIRECTIONS {
+                let seq_idx = vstart_base + dir;
+                if seq_idx < sequences.len() {
+                    max_frames = max_frames.max(sequences[seq_idx].frames.len());
+                }
+            }
+            frame_counts[anim_id] = max_frames.min(255) as u8;
+        }
+        self.engine.unit_coordinator.anim_frame_counts = frame_counts;
 
         self.unit_renders.clear();
 

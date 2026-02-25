@@ -170,13 +170,21 @@ pub fn lookup_animation(state: PersonState, subtype: u8) -> Option<u16> {
 
 /// Select and set animation based on current state.
 /// Equivalent to Person_SelectAnimation + Person_SetAnimation.
-/// `frame_counts` maps VSTART animation index → number of frames in that sequence.
-pub fn select_animation(anim: &mut AnimationState, state: PersonState, subtype: u8, frame_counts: &[u8]) {
-    let new_id = match lookup_animation(state, subtype) {
-        Some(id) => id,
-        None => {
+/// `frame_counts` maps animation index → number of frames.
+/// `is_moving` overrides walk→idle when unit is stationary (matches decomp wander_timer==0 check).
+pub fn select_animation(anim: &mut AnimationState, state: PersonState, subtype: u8, frame_counts: &[u8], is_moving: bool) {
+    let mut anim_type = state_to_anim_type(state);
+    // Override: walk type but not actually moving → use idle (matches decomp)
+    if anim_type == 1 && !is_moving {
+        anim_type = 0;
+    }
+    let col = (subtype as usize).min(8);
+    let new_id = {
+        let val = PERSON_ANIMATION_TABLE[anim_type as usize][col];
+        if val >= 0 {
+            val as u16
+        } else {
             // Fallback to idle
-            let col = (subtype as usize).min(8);
             let idle_val = PERSON_ANIMATION_TABLE[0][col];
             if idle_val >= 0 { idle_val as u16 } else { 0 }
         }
@@ -307,7 +315,7 @@ mod tests {
     fn select_animation_sets_idle_brave() {
         let fc = test_frame_counts();
         let mut anim = AnimationState::default();
-        select_animation(&mut anim, PersonState::Idle, PERSON_SUBTYPE_BRAVE, &fc);
+        select_animation(&mut anim, PersonState::Idle, PERSON_SUBTYPE_BRAVE, &fc, false);
         assert_eq!(anim.animation_id, 15);
         assert_eq!(anim.frame_index, 0);
         assert_eq!(anim.frame_count, 4);
@@ -318,9 +326,9 @@ mod tests {
     fn select_animation_walk_changes_id() {
         let fc = test_frame_counts();
         let mut anim = AnimationState::default();
-        select_animation(&mut anim, PersonState::Idle, PERSON_SUBTYPE_BRAVE, &fc);
+        select_animation(&mut anim, PersonState::Idle, PERSON_SUBTYPE_BRAVE, &fc, false);
         assert_eq!(anim.animation_id, 15);
-        select_animation(&mut anim, PersonState::GoToPoint, PERSON_SUBTYPE_BRAVE, &fc);
+        select_animation(&mut anim, PersonState::GoToPoint, PERSON_SUBTYPE_BRAVE, &fc, true);
         assert_eq!(anim.animation_id, 21);
         assert_eq!(anim.frame_index, 0); // reset on change
         assert_eq!(anim.frame_count, 6); // walk brave frame count
@@ -330,11 +338,11 @@ mod tests {
     fn select_animation_same_id_no_reset() {
         let fc = test_frame_counts();
         let mut anim = AnimationState::default();
-        select_animation(&mut anim, PersonState::Idle, PERSON_SUBTYPE_BRAVE, &fc);
+        select_animation(&mut anim, PersonState::Idle, PERSON_SUBTYPE_BRAVE, &fc, false);
         anim.frame_index = 3;
         anim.tick_counter = 2;
         // Same state, same subtype → same animation_id → no reset
-        select_animation(&mut anim, PersonState::Idle, PERSON_SUBTYPE_BRAVE, &fc);
+        select_animation(&mut anim, PersonState::Idle, PERSON_SUBTYPE_BRAVE, &fc, false);
         assert_eq!(anim.frame_index, 3);
         assert_eq!(anim.tick_counter, 2);
     }

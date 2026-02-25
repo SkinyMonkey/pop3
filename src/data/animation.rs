@@ -96,6 +96,107 @@ pub const DIRS_PER_ANIM: usize = 8;
 pub const STORED_DIRECTIONS: usize = 5;
 pub const NUM_TRIBES: usize = 4;
 
+/// Animation shape table — maps animation_id → (vstart_base, sprite_type).
+/// Extracted from DAT_0059f638 in the original binary.
+/// The sprite_type selects which body layers are composited (different per subtype).
+/// vstart_base is the starting VSTART sequence index for direction 0.
+pub const ANIM_SHAPE_TABLE: [(u16, u8); 161] = [
+    /*   0 */ (   8, 13), /*   1 */ (   0, 13), /*   2 */ (  16, 13), /*   3 */ (  32, 13),
+    /*   4 */ (  24, 13), /*   5 */ (   0, 13), /*   6 */ (   0, 13), /*   7 */ (   0, 13),
+    /*   8 */ (   0, 13), /*   9 */ (   0, 13), /*  10 */ (   0, 13), /*  11 */ (   0, 13),
+    /*  12 */ (   0, 13), /*  13 */ (   0, 13), /*  14 */ (   0, 13),
+    /*  15 brave idle  */ (  48, 14), /*  16 warr idle  */ (  48, 15),
+    /*  17 prea idle   */ (  48, 16), /*  18 spy idle   */ (  48, 17),
+    /*  19 fw idle     */ (  48, 18), /*  20 sham idle  */ ( 424, 14),
+    /*  21 brave walk  */ (  40, 14), /*  22 warr walk  */ (  40, 15),
+    /*  23 prea walk   */ (  40, 16), /*  24 spy walk   */ (  40, 17),
+    /*  25 fw walk     */ (  40, 18), /*  26 sham walk  */ ( 616, 13),
+    /*  27 brave die   */ (  88, 14), /*  28 warr die   */ (  88, 15),
+    /*  29 prea die    */ (  88, 16), /*  30 fw die     */ (  88, 17),
+    /*  31 spy die     */ (  88, 18),
+    /*  32 brave actn  */ (  64, 14), /*  33 warr actn  */ (  64, 15),
+    /*  34 prea actn   */ (  64, 16), /*  35 spy actn   */ (  64, 17),
+    /*  36 fw actn     */ (  64, 18), /*  37 sham actn  */ ( 744, 14),
+    /*  38 brave celeb */ (  96, 14), /*  39 warr celeb */ (  96, 15),
+    /*  40 prea celeb  */ (  96, 16), /*  41 spy celeb  */ (  96, 17),
+    /*  42 fw celeb    */ (  96, 18),
+    /*  43 brave spidl */ (  80, 14), /*  44 warr spidl */ (  80, 15),
+    /*  45 prea spidl  */ (  80, 16), /*  46 spy spidl  */ (  80, 17),
+    /*  47 fw spidl    */ (  80, 18),
+    /*  48 brave spwlk */ (  72, 14), /*  49 warr spwlk */ (  72, 15),
+    /*  50 prea spwlk  */ (  72, 16), /*  51 spy spwlk  */ (  72, 17),
+    /*  52 fw spwlk    */ (  72, 18),
+    /*  53 brave wrk1  */ ( 104, 14), /*  54 warr wrk1  */ ( 104, 15),
+    /*  55 prea wrk1   */ ( 104, 16), /*  56 spy wrk1   */ ( 104, 17),
+    /*  57 fw wrk1     */ ( 104, 18),
+    /*  58 brave wrk2  */ ( 112, 14), /*  59 warr wrk2  */ ( 112, 15),
+    /*  60 prea wrk2   */ ( 112, 16), /*  61 spy wrk2   */ ( 112, 17),
+    /*  62 fw wrk2     */ ( 112, 18),
+    /*  63 brave wrk3  */ ( 120, 14), /*  64 warr wrk3  */ ( 120, 15),
+    /*  65 prea wrk3   */ ( 120, 16), /*  66 spy wrk3   */ ( 120, 17),
+    /*  67 fw wrk3     */ ( 120, 18),
+    /*  68 brave wrk4  */ ( 128, 14), /*  69 warr wrk4  */ ( 128, 15),
+    /*  70 prea wrk4   */ ( 128, 16), /*  71 spy wrk4   */ ( 128, 17),
+    /*  72 fw wrk4     */ ( 128, 18),
+    /*  73 brave wrk5  */ ( 144, 14), /*  74 warr wrk5  */ ( 144, 15),
+    /*  75 prea wrk5   */ ( 144, 16), /*  76 spy wrk5   */ ( 144, 17),
+    /*  77 fw wrk5     */ ( 144, 18),
+    /*  78 brave vhcl  */ ( 152, 14), /*  79 warr vhcl  */ ( 152, 15),
+    /*  80 prea vhcl   */ ( 152, 16), /*  81 spy vhcl   */ ( 152, 17),
+    /*  82 fw vhcl     */ ( 152, 18),
+    /*  83 brave swim  */ ( 160, 14), /*  84 warr swim  */ ( 160, 15),
+    /*  85 prea swim   */ ( 160, 16), /*  86 spy swim   */ ( 160, 17),
+    /*  87 fw swim     */ ( 160, 18),
+    /*  88 brave carry */ ( 168, 14), /*  89 warr carry */ ( 168, 15),
+    /*  90 prea carry  */ ( 168, 16), /*  91 spy carry  */ ( 168, 17),
+    /*  92 fw carry    */ ( 168, 18),
+    /*  93 */ ( 0, 13),
+    /*  94 sham spec   */ ( 176, 19),
+    /*  95 */ ( 0, 13), /*  96 */ ( 0, 13), /*  97 */ ( 0, 13), /*  98 */ ( 0, 13), /*  99 */ ( 0, 13),
+    /* 100 brave spec  */ ( 136, 19), /* 101 fw spec    */ ( 136, 22),
+    /* 102 */ ( 0, 14), /* 103 */ ( 0, 14), /* 104 */ ( 0, 14), /* 105 */ ( 0, 14),
+    /* 106 sham wrk1   */ ( 456, 14), /* 107 sham vhcl  */ ( 488, 14),
+    /* 108 wild vhcl   */ ( 248, 13), /* 109 sham ??    */ ( 520, 14),
+    /* 110 brave ride  */ ( 296, 14), /* 111 warr ride  */ ( 296, 15),
+    /* 112 prea ride   */ ( 296, 16), /* 113 spy ride   */ ( 296, 17),
+    /* 114 fw ride     */ ( 296, 18),
+    /* 115 brave dig   */ ( 304, 14), /* 116 warr dig   */ ( 304, 15),
+    /* 117 prea dig    */ ( 304, 16), /* 118 spy dig    */ ( 304, 17),
+    /* 119 fw dig      */ ( 304, 18),
+    /* 120 brave bld   */ ( 320, 14), /* 121 warr bld   */ ( 320, 15),
+    /* 122 prea bld    */ ( 320, 16), /* 123 spy bld    */ ( 320, 17),
+    /* 124 fw bld      */ ( 320, 18),
+    /* 125 sham swim   */ ( 552, 14), /* 126 sham dig   */ ( 680, 14),
+    /* 127 sham carry  */ ( 352, 14), /* 128 sham bld   */ ( 360, 14),
+    /* 129 sham ride   */ ( 584, 14), /* 130 wild ride  */ ( 248, 13),
+    /* 131 brave sit1  */ ( 384, 14), /* 132 warr sit1  */ ( 384, 15),
+    /* 133 prea sit1   */ ( 384, 16), /* 134 spy sit1   */ ( 384, 17),
+    /* 135 fw sit1     */ ( 384, 18),
+    /* 136 brave sit2  */ ( 392, 14), /* 137 warr sit2  */ ( 392, 15),
+    /* 138 prea sit2   */ ( 392, 16), /* 139 spy sit2   */ ( 392, 17),
+    /* 140 fw sit2     */ ( 392, 18),
+    /* 141 brave sit3  */ ( 400, 14), /* 142 warr sit3  */ ( 400, 15),
+    /* 143 prea sit3   */ ( 400, 16), /* 144 spy sit3   */ ( 400, 17),
+    /* 145 fw sit3     */ ( 400, 18),
+    /* 146 brave sit4  */ ( 408, 14), /* 147 warr sit4  */ ( 408, 15),
+    /* 148 prea sit4   */ ( 408, 16), /* 149 spy sit4   */ ( 408, 17),
+    /* 150 fw sit4     */ ( 408, 18),
+    /* 151-155 unused  */ ( 0, 14), ( 0, 14), ( 0, 14), ( 0, 14), ( 0, 14),
+    /* 156 brave run   */ ( 416, 14), /* 157 warr run   */ ( 416, 15),
+    /* 158 prea run    */ ( 416, 16), /* 159 spy run    */ ( 416, 17),
+    /* 160 fw run      */ ( 416, 18),
+];
+
+/// Resolve animation_id → (vstart_base, sprite_type) using the shape table.
+pub fn anim_shape(anim_id: u16) -> (usize, u8) {
+    if (anim_id as usize) < ANIM_SHAPE_TABLE.len() {
+        let (vstart, typ) = ANIM_SHAPE_TABLE[anim_id as usize];
+        (vstart as usize, typ)
+    } else {
+        (0, 13)
+    }
+}
+
 /// Idle animation indices from g_PersonAnimationTable (RE'd from original binary)
 /// Format: (subtype, animation_index)
 pub const UNIT_IDLE_ANIMS: [(u8, usize); 6] = [
@@ -105,15 +206,6 @@ pub const UNIT_IDLE_ANIMS: [(u8, usize); 6] = [
     (PERSON_SUBTYPE_SPY,         18),
     (PERSON_SUBTYPE_FIREWARRIOR, 19),
     (PERSON_SUBTYPE_SHAMAN,      20),
-];
-
-/// Walk animation indices from g_PersonAnimationTable
-pub const UNIT_WALK_ANIMS: [(u8, usize); 5] = [
-    (PERSON_SUBTYPE_BRAVE,       21),
-    (PERSON_SUBTYPE_WARRIOR,     22),
-    (PERSON_SUBTYPE_PREACHER,    23),
-    (PERSON_SUBTYPE_SPY,         24),
-    (PERSON_SUBTYPE_FIREWARRIOR, 25),
 ];
 
 /// Combined idle + walk animation indices per subtype (non-shaman).
@@ -475,11 +567,11 @@ pub fn build_tribe_atlas(
     sequences: &[AnimationSequence],
     container: &ContainerPSFB,
     palette: &[[u8; 4]],
-    anim_index: usize,
+    vstart_base: usize,
     unit_combo_override: Option<Option<(u16, u16)>>,
     bbox_override: Option<(i32, i32, i32, i32)>,
 ) -> Option<(u32, u32, Vec<u8>, u32, u32, u32)> {
-    let base = anim_index * DIRS_PER_ANIM;
+    let base = vstart_base;
 
     // Count max frames per direction
     let mut max_frames = 0usize;
@@ -588,17 +680,22 @@ pub fn build_tribe_atlas(
 }
 
 /// Build a combined atlas for multiple animations of the same subtype.
-/// Layout: frames from each animation are laid out side-by-side horizontally,
-/// sharing the same frame size (from a common bounding box).
+/// `anim_ids` are animation IDs from the person animation table (not VSTART indices).
+/// Resolves each through ANIM_SHAPE_TABLE to get the correct VSTART base.
 /// Returns (atlas_w, atlas_h, rgba, frame_w, frame_h, total_columns, offsets)
-/// where `offsets` maps: `offsets[i] = (anim_index, column_offset, frame_count)`.
+/// where `offsets` maps: `offsets[i] = (anim_id, column_offset, frame_count)`.
 pub fn build_multi_anim_atlas(
     sequences: &[AnimationSequence],
     container: &ContainerPSFB,
     palette: &[[u8; 4]],
-    anim_indices: &[usize],
+    anim_ids: &[usize],
 ) -> Option<(u32, u32, Vec<u8>, u32, u32, u32, Vec<(usize, u32, u32)>)> {
-    if anim_indices.is_empty() { return None; }
+    if anim_ids.is_empty() { return None; }
+
+    // Resolve animation IDs to VSTART bases
+    let resolved: Vec<(usize, usize)> = anim_ids.iter()
+        .map(|&id| { let (vb, _) = anim_shape(id as u16); (id, vb) })
+        .collect();
 
     // Compute shared bounding box across all requested animations
     let mut bbox_min_x: i32 = 0;
@@ -606,10 +703,9 @@ pub fn build_multi_anim_atlas(
     let mut bbox_max_x: i32 = 1;
     let mut bbox_max_y: i32 = 1;
 
-    for &anim_idx in anim_indices {
-        let base = anim_idx * DIRS_PER_ANIM;
+    for &(_, vstart_base) in &resolved {
         for dir in 0..STORED_DIRECTIONS {
-            let seq_idx = base + dir;
+            let seq_idx = vstart_base + dir;
             if seq_idx >= sequences.len() { continue; }
             for frame in &sequences[seq_idx].frames {
                 for elem in &frame.sprites {
@@ -631,17 +727,17 @@ pub fn build_multi_anim_atlas(
     let shared_bbox = (bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y);
 
     // Build individual atlases with shared bbox
-    let mut sub_atlases: Vec<(usize, u32, u32, Vec<u8>, u32)> = Vec::new(); // (anim_idx, w, h, rgba, frames)
+    let mut sub_atlases: Vec<(usize, u32, u32, Vec<u8>, u32)> = Vec::new(); // (anim_id, w, h, rgba, frames)
     let mut fw = 0u32;
     let mut fh = 0u32;
 
-    for &anim_idx in anim_indices {
+    for &(anim_id, vstart_base) in &resolved {
         if let Some((aw, ah, rgba, w, h, frames)) =
-            build_tribe_atlas(sequences, container, palette, anim_idx, Some(None), Some(shared_bbox))
+            build_tribe_atlas(sequences, container, palette, vstart_base, Some(None), Some(shared_bbox))
         {
             fw = w;
             fh = h;
-            sub_atlases.push((anim_idx, aw, ah, rgba, frames));
+            sub_atlases.push((anim_id, aw, ah, rgba, frames));
         }
     }
 
