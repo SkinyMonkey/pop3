@@ -387,7 +387,7 @@ pub fn build_shadow_proxy_model(device: &wgpu::Device, cells: &[UnitRenderData],
         let dx = gx - center;
         let dy = gy - center;
         let curvature_offset = (dx * dx + dy * dy) * curvature_scale;
-        let z_base = gz - curvature_offset + 0.02; // slightly above ground
+        let z_base = gz - curvature_offset + step * 2.0; // above ground enough to exceed shadow bias
 
         let tid = tribe_index as i16;
 
