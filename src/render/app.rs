@@ -20,8 +20,8 @@ use crate::data::psfb::ContainerPSFB;
 use crate::data::types::BinDeserializer;
 use crate::data::animation::{
     AnimationsData, AnimationSequence,
-    build_tribe_atlas, build_direct_sprite_atlas,
-    UNIT_IDLE_ANIMS,
+    build_direct_sprite_atlas, build_multi_anim_atlas,
+    UNIT_MULTI_ANIMS,
     SHAMAN_IDLE_SPRITES, SHAMAN_FRAMES_PER_DIR,
 };
 use crate::engine::state::constants::*;
@@ -46,7 +46,7 @@ use crate::render::sprites::{
     LevelObject, UnitTypeRender,
     obj_colors, convert_palette,
     pack_palette_rgba, rgb_to_rgba,
-    extract_all_unit_cells, extract_level_objects,
+    extract_level_objects,
     build_spawn_model, build_object_markers, build_unit_markers, build_selection_rings,
 };
 
@@ -661,9 +661,9 @@ impl App {
     fn center_on_tribe0_shaman(&mut self) {
         let shaman_cell = self.unit_renders.iter()
             .find(|ur| ur.subtype == PERSON_SUBTYPE_SHAMAN)
-            .and_then(|ur| ur.cells.iter().find(|(_, _, t)| *t == 0))
-            .copied();
-        if let Some((cx, cy, _)) = shaman_cell {
+            .and_then(|ur| ur.cells.iter().find(|c| c.tribe_index == 0));
+        let shaman_pos = shaman_cell.map(|c| (c.cell_x, c.cell_y));
+        if let Some((cx, cy)) = shaman_pos {
             let n = self.engine.landscape_mesh.width() as i32;
             let v = self.engine.camera_focus_vertex() as i32;
             let sx = ((cx as i32 - v) % n + n) % n;
@@ -707,19 +707,15 @@ impl App {
         self.rebuild_unit_atlases(&base, &level_res.params.palette);
 
         // Rebuild unit cells and object markers
-        let unit_cells = extract_all_unit_cells(&level_res);
-        for ur in &mut self.unit_renders {
-            ur.cells = unit_cells.iter()
-                .find(|(st, _)| *st == ur.subtype)
-                .map(|(_, c)| c.clone())
-                .unwrap_or_default();
-        }
         self.engine.level_objects = extract_level_objects(&level_res);
 
         // Extract person units into the coordinator (they become live entities)
         self.engine.unit_coordinator.load_level(&level_res.units, &level_res.landscape.height, level_res.landscape.land_size());
         // Remove persons from static markers — they're now rendered by the coordinator
         self.engine.level_objects.retain(|obj| obj.model_type != ModelType::Person);
+
+        // Populate unit_renders cells from live coordinator units
+        self.sync_unit_render_cells();
 
         // Flatten terrain under buildings (modifies heightmap + re-uploads GPU buffer)
         self.flatten_terrain_under_buildings();
@@ -931,6 +927,27 @@ impl App {
         true
     }
 
+    /// Sync unit_renders cells from live coordinator units.
+    fn sync_unit_render_cells(&mut self) {
+        use crate::render::sprites::UnitRenderData;
+        for ur in &mut self.unit_renders {
+            ur.cells.clear();
+        }
+        for unit in &self.engine.unit_coordinator.units {
+            if !unit.alive { continue; }
+            if let Some(ur) = self.unit_renders.iter_mut().find(|u| u.subtype == unit.subtype) {
+                ur.cells.push(UnitRenderData {
+                    cell_x: unit.cell_x,
+                    cell_y: unit.cell_y,
+                    tribe_index: unit.tribe_index,
+                    facing_angle: unit.movement.facing_angle,
+                    frame_index: unit.anim.frame_index,
+                    animation_id: unit.anim.animation_id,
+                });
+            }
+        }
+    }
+
     fn rebuild_spawn_model(&mut self) {
         if let Some(ref gpu) = self.gpu {
             let cs = if self.engine.curvature_enabled { self.engine.curvature_scale } else { 0.0 };
@@ -940,6 +957,7 @@ impl App {
                         &gpu.device, &ur.cells, &self.engine.landscape_mesh, cs,
                         self.engine.camera.angle_x, self.engine.camera.angle_z,
                         ur.frame_width, ur.frame_height, ur.frames_per_dir,
+                        &ur.anim_offsets,
                     ));
                 } else {
                     ur.model = None;
@@ -970,15 +988,32 @@ impl App {
         let sequences = AnimationSequence::from_data(&anim_data);
         let sampler = GpuTexture::create_sampler(&gpu.device, true);
 
+        // Extract frame counts per animation ID (using shape table indirection).
+        // Animation IDs map through ANIM_SHAPE_TABLE to VSTART bases;
+        // frame_count = max frames across the 5 stored directions.
+        use crate::data::animation::{STORED_DIRECTIONS, anim_shape, ANIM_SHAPE_TABLE};
+        let num_anim_ids = ANIM_SHAPE_TABLE.len();
+        let mut frame_counts = vec![1u8; num_anim_ids + 1];
+        for anim_id in 0..num_anim_ids {
+            let (vstart_base, _sprite_type) = anim_shape(anim_id as u16);
+            let mut max_frames = 0usize;
+            for dir in 0..STORED_DIRECTIONS {
+                let seq_idx = vstart_base + dir;
+                if seq_idx < sequences.len() {
+                    max_frames = max_frames.max(sequences[seq_idx].frames.len());
+                }
+            }
+            frame_counts[anim_id] = max_frames.min(255) as u8;
+        }
+        self.engine.unit_coordinator.anim_frame_counts = frame_counts;
+
         self.unit_renders.clear();
-        for &(subtype, anim_idx) in &UNIT_IDLE_ANIMS {
-            // Shamans use direct per-tribe sprites, not VELE compositing
-            let atlas_result = if subtype == PERSON_SUBTYPE_SHAMAN {
-                build_direct_sprite_atlas(&container, &palette, &SHAMAN_IDLE_SPRITES, SHAMAN_FRAMES_PER_DIR)
-            } else {
-                build_tribe_atlas(&sequences, &container, &palette, anim_idx, Some(None), None)
-            };
-            if let Some((atlas_w, atlas_h, rgba, fw, fh, max_frames)) = atlas_result {
+
+        // Non-shaman subtypes: build combined idle+walk atlas
+        for &(subtype, anim_indices) in &UNIT_MULTI_ANIMS {
+            if let Some((atlas_w, atlas_h, rgba, fw, fh, total_cols, offsets)) =
+                build_multi_anim_atlas(&sequences, &container, &palette, anim_indices)
+            {
                 let tex = GpuTexture::new_2d(
                     &gpu.device, &gpu.queue, atlas_w, atlas_h,
                     wgpu::TextureFormat::Rgba8UnormSrgb, &rgba,
@@ -992,6 +1027,44 @@ impl App {
                         wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
                     ],
                 });
+                let anim_offsets: Vec<(u16, u32, u32)> = offsets.iter()
+                    .map(|(idx, off, fc)| (*idx as u16, *off, *fc))
+                    .collect();
+                self.unit_renders.push(UnitTypeRender {
+                    subtype,
+                    cells: Vec::new(),
+                    texture: tex,
+                    bind_group,
+                    model: None,
+                    frame_width: fw,
+                    frame_height: fh,
+                    frames_per_dir: total_cols,
+                    anim_offsets,
+                });
+            }
+        }
+
+        // Shaman: direct per-tribe sprites (idle only for now)
+        {
+            let subtype = PERSON_SUBTYPE_SHAMAN;
+            if let Some((atlas_w, atlas_h, rgba, fw, fh, max_frames)) =
+                build_direct_sprite_atlas(&container, &palette, &SHAMAN_IDLE_SPRITES, SHAMAN_FRAMES_PER_DIR)
+            {
+                let tex = GpuTexture::new_2d(
+                    &gpu.device, &gpu.queue, atlas_w, atlas_h,
+                    wgpu::TextureFormat::Rgba8UnormSrgb, &rgba,
+                    &format!("unit_atlas_st{}", subtype),
+                );
+                let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(&format!("unit_bg1_st{}", subtype)),
+                    layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&tex.view) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                    ],
+                });
+                // Shaman idle anim is index 20
+                let anim_offsets = vec![(20u16, 0u32, max_frames)];
                 self.unit_renders.push(UnitTypeRender {
                     subtype,
                     cells: Vec::new(),
@@ -1001,6 +1074,7 @@ impl App {
                     frame_width: fw,
                     frame_height: fh,
                     frames_per_dir: max_frames,
+                    anim_offsets,
                 });
             }
         }
@@ -1908,19 +1982,14 @@ impl ApplicationHandler for App {
         // Build per-unit-type sprite atlases
         self.rebuild_unit_atlases(&base2, &level_res2.params.palette);
 
-        // Extract all person unit positions, assign to unit_renders
-        let unit_cells = extract_all_unit_cells(&level_res2);
-        for ur in &mut self.unit_renders {
-            ur.cells = unit_cells.iter()
-                .find(|(st, _)| *st == ur.subtype)
-                .map(|(_, c)| c.clone())
-                .unwrap_or_default();
-        }
         self.engine.level_objects = extract_level_objects(&level_res2);
 
         // Extract person units into the coordinator (they become live entities)
         self.engine.unit_coordinator.load_level(&level_res2.units, &level_res2.landscape.height, level_res2.landscape.land_size());
         self.engine.level_objects.retain(|obj| obj.model_type != ModelType::Person);
+
+        // Populate unit_renders cells from live coordinator units
+        self.sync_unit_render_cells();
 
         // Flatten terrain under buildings (modifies heightmap + re-uploads GPU buffer)
         self.flatten_terrain_under_buildings();
@@ -2117,6 +2186,8 @@ impl ApplicationHandler for App {
                     };
                     let ticks = self.engine.game_world.simulation_tick(&self.engine.game_time, &mut subs);
                     if ticks > 0 {
+                        self.sync_unit_render_cells();
+                        self.rebuild_spawn_model();
                         self.rebuild_unit_models();
                         self.do_render = true;
                     }

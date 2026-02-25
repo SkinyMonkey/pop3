@@ -3,6 +3,7 @@
 use crate::engine::movement::{PersonMovement, WorldCoord};
 use crate::data::units::ModelType;
 use super::person_state::PersonState;
+use super::animation::AnimationState;
 
 pub type UnitId = usize;
 
@@ -41,4 +42,7 @@ pub struct Unit {
     // Combat modifiers
     pub bloodlust: bool,       // bloodlust spell active — doubles damage
     pub shielded: bool,        // inside shield — halves incoming damage
+
+    // Animation state (offsets +0x33..+0x3a in original binary)
+    pub anim: AnimationState,
 }

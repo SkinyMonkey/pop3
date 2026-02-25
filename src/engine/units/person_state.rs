@@ -225,16 +225,16 @@ pub fn tick_state(unit: &mut Unit, rng: &mut GameRng) -> TickResult {
     }
 }
 
-/// Idle: countdown state_timer, transition to Wander when expired.
+/// Idle: countdown state_timer; on expiry, look up default state from unit type table.
 /// Original: Object_ProcessPersonState case 0x01 — decrements timer,
 /// on expiry looks up default state from DAT_0059fe44[subtype*0x32].
+/// For most subtypes the default state is 0 (= no transition, stay idle).
+/// Wander is NOT triggered by idle timer — it's an AI/command-driven state.
 fn tick_idle(unit: &mut Unit) -> TickResult {
     if unit.state_timer > 0 {
         unit.state_timer -= 1;
-        TickResult::Continue
-    } else {
-        TickResult::Transition(PersonState::Wander)
     }
+    TickResult::Continue
 }
 
 /// Moving/GoToPoint/GoToMarker: check if movement completed.
@@ -479,6 +479,7 @@ mod tests {
 
     fn make_unit(subtype: u8, tribe: u8) -> Unit {
         use crate::engine::movement::WorldCoord;
+        use crate::engine::units::animation::AnimationState;
         let defaults = person_type_defaults(subtype);
         Unit {
             id: 0,
@@ -504,6 +505,7 @@ mod tests {
             linked_obj_id: None,
             bloodlust: false,
             shielded: false,
+            anim: AnimationState::default(),
         }
     }
 
@@ -575,7 +577,7 @@ mod tests {
     }
 
     #[test]
-    fn idle_counts_down_to_wander() {
+    fn idle_counts_down_and_stays_idle() {
         let mut unit = make_unit(2, 0);
         let mut rng = GameRng::new(99);
         unit.state = PersonState::Idle;
@@ -584,7 +586,9 @@ mod tests {
         assert_eq!(unit.state_timer, 1);
         assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
         assert_eq!(unit.state_timer, 0);
-        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Transition(PersonState::Wander)));
+        // Timer expired — unit stays idle (default state for brave is 0 = no transition)
+        assert!(matches!(tick_state(&mut unit, &mut rng), TickResult::Continue));
+        assert_eq!(unit.state, PersonState::Idle);
     }
 
     #[test]
