@@ -11,3 +11,4 @@ pub mod sprites;
 pub mod hud;
 pub mod gpu;
 pub mod geometry;
+pub mod app;
