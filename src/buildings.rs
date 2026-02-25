@@ -4,8 +4,8 @@ use crate::model::{VertexModel, MeshModel};
 use crate::tex_model::{TexModel, TexVertex};
 use crate::envelop::{ModelEnvelop, RenderType};
 use crate::landscape::LandscapeMesh;
-use crate::pop::objects::{Object3D, Shape, mk_pop_object};
-use crate::pop::units::object_3d_index;
+use crate::data::objects::{Object3D, Shape, mk_pop_object};
+use crate::data::units::object_3d_index;
 
 use crate::sprites::LevelObject;
 

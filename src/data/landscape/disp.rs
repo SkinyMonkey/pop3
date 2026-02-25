@@ -1,5 +1,5 @@
-use crate::pop::level::GlobeTextureParams;
-use crate::pop::types::{Image, ImageStorage};
+use crate::data::level::GlobeTextureParams;
+use crate::data::types::{Image, ImageStorage};
 
 /*
  * Disp memory consists of 256x256 (65k) bytes.

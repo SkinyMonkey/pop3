@@ -1,7 +1,7 @@
 // Live unit entity — a person unit with mutable position and movement state.
 
 use crate::movement::PersonMovement;
-use crate::pop::units::ModelType;
+use crate::data::units::ModelType;
 use super::person_state::PersonState;
 
 pub type UnitId = usize;

@@ -2,7 +2,7 @@
 
 use crate::gpu::buffer::GpuBuffer;
 use crate::gpu::texture::GpuTexture;
-use crate::pop::psfb::ContainerPSFB;
+use crate::data::psfb::ContainerPSFB;
 
 // ---------------------------------------------------------------------------
 // Types

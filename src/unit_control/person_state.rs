@@ -308,7 +308,7 @@ pub const COMBAT_ATTACK_INTERVAL: u16 = 8;
 mod tests {
     use super::*;
     use crate::movement::PersonMovement;
-    use crate::pop::units::ModelType;
+    use crate::data::units::ModelType;
 
     fn make_unit(subtype: u8, tribe: u8) -> Unit {
         let defaults = person_type_defaults(subtype);

@@ -18,9 +18,9 @@ use pop3::tex_model::TexModel;
 use pop3::color_model::ColorModel;
 use pop3::view::*;
 
-use pop3::pop::psfb::ContainerPSFB;
-use pop3::pop::types::BinDeserializer;
-use pop3::pop::animation::{
+use pop3::data::psfb::ContainerPSFB;
+use pop3::data::types::BinDeserializer;
+use pop3::data::animation::{
     AnimationsData, AnimationSequence,
     build_tribe_atlas, build_direct_sprite_atlas,
     UNIT_IDLE_ANIMS,
@@ -35,11 +35,11 @@ use pop3::landscape::{
     LandscapeUniformData, LandscapeVariant, LandscapeProgramContainer,
     make_landscape_model, LANDSCAPE_SCALE, LANDSCAPE_OFFSET,
 };
-use pop3::pop::level::{LevelRes, ObjectPaths};
-use pop3::pop::units::{ModelType, object_3d_index};
-use pop3::pop::objects::{Object3D, Shape};
-use pop3::pop::bl320::make_bl320_texture_rgba;
-use pop3::pop::landscape::{make_texture_land, draw_texture_u8};
+use pop3::data::level::{LevelRes, ObjectPaths};
+use pop3::data::units::{ModelType, object_3d_index};
+use pop3::data::objects::{Object3D, Shape};
+use pop3::data::bl320::make_bl320_texture_rgba;
+use pop3::data::landscape::{make_texture_land, draw_texture_u8};
 
 use pop3::unit_control::{UnitCoordinator, DragState, Unit};
 use pop3::unit_control::coords::{cell_to_world, triangle_to_cell, project_to_screen, nearest_screen_hit};

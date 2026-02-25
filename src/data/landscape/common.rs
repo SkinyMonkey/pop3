@@ -1,5 +1,5 @@
 use std::marker::PhantomData;
-use crate::pop::level::Landscape;
+use crate::data::level::Landscape;
 
 /******************************************************************************/
 

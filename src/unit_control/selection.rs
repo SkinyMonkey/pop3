@@ -60,7 +60,7 @@ pub fn find_unit_at_cell(units: &[Unit], cell_x: f32, cell_y: f32, threshold: f3
 mod tests {
     use super::*;
     use crate::movement::PersonMovement;
-    use crate::pop::units::ModelType;
+    use crate::data::units::ModelType;
 
     fn make_unit(id: usize, cx: f32, cy: f32) -> Unit {
         use super::super::person_state::PersonState;

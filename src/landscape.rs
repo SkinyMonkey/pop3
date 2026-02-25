@@ -6,7 +6,7 @@ use cgmath::{Vector4, Vector3, Vector2};
 
 use crate::model::{Triangle, VertexModel, MeshModel};
 use crate::envelop::{GpuModel, ModelEnvelop, RenderType};
-use crate::pop::objects::Shape;
+use crate::data::objects::Shape;
 
 pub type LandscapeModel = MeshModel<Vector2<u8>, u16>;
 

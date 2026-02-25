@@ -3,7 +3,7 @@ use winit::keyboard::KeyCode;
 
 use crate::hud::{HudTab, HudState};
 use crate::landscape::LandscapeMesh;
-use crate::pop::objects::{Object3D, Shape};
+use crate::data::objects::{Object3D, Shape};
 use crate::sprites::LevelObject;
 use crate::unit_control::{UnitCoordinator, DragState};
 use crate::view::{Camera, Screen};

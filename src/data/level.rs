@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek};
 
-use crate::pop::types::BinDeserializer;
-use crate::pop::units::{UnitRaw, TribeConfigRaw};
+use crate::data::types::BinDeserializer;
+use crate::data::units::{UnitRaw, TribeConfigRaw};
 
 /******************************************************************************/
 
@@ -246,8 +246,8 @@ fn read_disp(path: &Path) -> Vec<i8> {
 #[cfg(test)]
 mod tests {
     use super::read_fixed_unit_slots;
-    use crate::pop::types::BinDeserializer;
-    use crate::pop::units::UnitRaw;
+    use crate::data::types::BinDeserializer;
+    use crate::data::units::UnitRaw;
     use std::io::Cursor;
 
     fn unit_raw_bytes(subtype: u8, model: u8, tribe_index: u8, loc_x: u16, loc_y: u16, angle: u32) -> [u8; 55] {

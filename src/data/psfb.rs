@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use crate::pop::types::{BinDeserializer, Image, ImageStorage, ImageInfo, ImageStorageSource};
+use crate::data::types::{BinDeserializer, Image, ImageStorage, ImageInfo, ImageStorageSource};
 
 /******************************************************************************/
 

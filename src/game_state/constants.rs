@@ -124,16 +124,12 @@ pub const NET_PACKET_STATE_SYNC_SIZE: usize = 0x55;
 /// Celebration/victory dance state.
 pub const PERSON_STATE_CELEBRATE: u8 = 0x29;
 
-// --- Person Subtypes ---
-
-pub const PERSON_SUBTYPE_WILD: u8 = 1;
-pub const PERSON_SUBTYPE_BRAVE: u8 = 2;
-pub const PERSON_SUBTYPE_WARRIOR: u8 = 3;
-pub const PERSON_SUBTYPE_PREACHER: u8 = 4;
-pub const PERSON_SUBTYPE_SPY: u8 = 5;
-pub const PERSON_SUBTYPE_FIREWARRIOR: u8 = 6;
-pub const PERSON_SUBTYPE_SHAMAN: u8 = 7;
-pub const PERSON_SUBTYPE_AOD: u8 = 8;
+// --- Person Subtypes (re-exported from data layer) ---
+pub use crate::data::constants::{
+    PERSON_SUBTYPE_WILD, PERSON_SUBTYPE_BRAVE, PERSON_SUBTYPE_WARRIOR,
+    PERSON_SUBTYPE_PREACHER, PERSON_SUBTYPE_SPY, PERSON_SUBTYPE_FIREWARRIOR,
+    PERSON_SUBTYPE_SHAMAN, PERSON_SUBTYPE_AOD,
+};
 
 // --- RNG ---
 

@@ -2,7 +2,7 @@ use std::path::Path;
 use std::fs::File;
 use std::io::Read;
 
-use crate::pop::types::{ImageStorage, ImageStorageSource, AllocatorEqual, pal_image_allocator_1d_vertical};
+use crate::data::types::{ImageStorage, ImageStorageSource, AllocatorEqual, pal_image_allocator_1d_vertical};
 
 /******************************************************************************/
 

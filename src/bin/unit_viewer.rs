@@ -31,9 +31,9 @@ use pop3::gpu::pipeline::create_pipeline;
 use pop3::gpu::buffer::GpuBuffer;
 use pop3::gpu::texture::GpuTexture;
 
-use pop3::pop::psfb::ContainerPSFB;
-use pop3::pop::types::BinDeserializer;
-use pop3::pop::animation::{
+use pop3::data::psfb::ContainerPSFB;
+use pop3::data::types::BinDeserializer;
+use pop3::data::animation::{
     AnimationsData, AnimationSequence,
     discover_unit_combos, build_tribe_atlas, compute_global_bbox,
     NUM_TRIBES,

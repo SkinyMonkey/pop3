@@ -7,10 +7,10 @@ pub mod disp;
 
 /******************************************************************************/
 
-use crate::pop::level::LevelRes;
+use crate::data::level::LevelRes;
 
-use crate::pop::landscape::common::{LandPos, LandscapeFull};
-use crate::pop::landscape::land::texture_land;
+use crate::data::landscape::common::{LandPos, LandscapeFull};
+use crate::data::landscape::land::texture_land;
 
 pub fn draw_texture_u8(pal: &[u8], width: usize, texture: &[u8]) -> Vec<u8> {
     let mut img = vec![0u8; 3 * width * width];

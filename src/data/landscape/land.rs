@@ -1,6 +1,6 @@
-use crate::pop::level::GlobeTextureParams;
-use crate::pop::types::{ImageInfo, ImageStorage, ImageTileSource, Image, TiledComposer, ImageSourceComposed};
-use crate::pop::landscape::common::{LandTile, LandTileQuad, LandPosQuad, LandPosQ, LandscapeFull, DispProvider};
+use crate::data::level::GlobeTextureParams;
+use crate::data::types::{ImageInfo, ImageStorage, ImageTileSource, Image, TiledComposer, ImageSourceComposed};
+use crate::data::landscape::common::{LandTile, LandTileQuad, LandPosQuad, LandPosQ, LandscapeFull, DispProvider};
 
 struct DispProvider32<'a> {
     x: usize,

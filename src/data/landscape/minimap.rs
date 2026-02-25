@@ -1,5 +1,5 @@
-use crate::pop::landscape::common::{LandPosPoint, LandscapeFull};
-use crate::pop::types::{Image, ImageStorage};
+use crate::data::landscape::common::{LandPosPoint, LandscapeFull};
+use crate::data::types::{Image, ImageStorage};
 
 /******************************************************************************/
 

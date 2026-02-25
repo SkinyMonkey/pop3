@@ -10,7 +10,7 @@ use crate::movement::{
     state_goto, process_route_movement, move_point_by_angle,
     atan2,
 };
-use crate::pop::units::{ModelType, UnitRaw};
+use crate::data::units::{ModelType, UnitRaw};
 use super::unit::Unit;
 use super::person_state::{
     PersonState, person_type_defaults, enter_state, tick_state, TickResult,

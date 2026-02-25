@@ -30,7 +30,7 @@ use clap::{Arg, Command};
 use pop3::gpu::context::GpuContext;
 use pop3::gpu::buffer::GpuBuffer;
 use pop3::gpu::texture::GpuTexture;
-use pop3::pop::level::{Landscape, LevelRes};
+use pop3::data::level::{Landscape, LevelRes};
 use pop3::movement::{
     self, RegionMap, TileCoord, Waypoint, PathfindDebug, PathfindResult,
 };

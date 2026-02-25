@@ -7,9 +7,9 @@ use crate::envelop::{ModelEnvelop, RenderType};
 use crate::landscape::LandscapeMesh;
 use crate::gpu::texture::GpuTexture;
 
-use crate::pop::level::LevelRes;
-use crate::pop::units::{ModelType, object_3d_index};
-use crate::pop::animation::{NUM_TRIBES, STORED_DIRECTIONS};
+use crate::data::level::LevelRes;
+use crate::data::units::{ModelType, object_3d_index};
+use crate::data::animation::{NUM_TRIBES, STORED_DIRECTIONS};
 use crate::game_state::constants::*;
 
 use crate::unit_control::{UnitCoordinator, Unit};

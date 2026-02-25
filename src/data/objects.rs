@@ -7,8 +7,8 @@ use cgmath::{Vector2, Vector3};
 
 use crate::model::{MeshModel, VertexModel};
 use crate::tex_model::{TexModel, TexVertex};
-use crate::pop::types::{BinDeserializer, from_reader};
-use crate::pop::level::ObjectPaths;
+use crate::data::types::{BinDeserializer, from_reader};
+use crate::data::level::ObjectPaths;
 
 /******************************************************************************/
 

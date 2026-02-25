@@ -1,5 +1,5 @@
-use crate::pop::level::GlobeTextureParams;
-use crate::pop::types::{Image, ImageStorage};
+use crate::data::level::GlobeTextureParams;
+use crate::data::types::{Image, ImageStorage};
 
 /*
  * Bigf0 contains land and water textures. The texture is 3 dimensional.

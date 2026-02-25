@@ -1,7 +1,7 @@
 use std::io::Read;
 use core::mem::size_of;
 
-use crate::pop::types::{BinDeserializer, from_reader};
+use crate::data::types::{BinDeserializer, from_reader};
 
 /******************************************************************************/
 

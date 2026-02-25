@@ -3,8 +3,8 @@ use std::fs::File;
 use std::io::Read;
 use core::mem::size_of;
 
-use crate::pop::types::{BinDeserializer, from_reader, ImageInfo};
-use crate::game_state::constants::*;
+use crate::data::types::{BinDeserializer, from_reader, ImageInfo};
+use crate::data::constants::*;
 
 /******************************************************************************/
 
@@ -88,7 +88,7 @@ impl AnimationsData {
     }
 }
 
-use crate::pop::psfb::ContainerPSFB;
+use crate::data::psfb::ContainerPSFB;
 
 /******************************************************************************/
 

@@ -15,9 +15,9 @@ use pop3::model::MeshModel;
 use pop3::tex_model::TexModel;
 use pop3::view::*;
 
-use pop3::pop::level::{LevelPaths, GlobeTextureParams};
-use pop3::pop::objects::{Object3D, mk_pop_object};
-use pop3::pop::bl320::make_bl320_texture_rgba;
+use pop3::data::level::{LevelPaths, GlobeTextureParams};
+use pop3::data::objects::{Object3D, mk_pop_object};
+use pop3::data::bl320::make_bl320_texture_rgba;
 
 use pop3::gpu::context::GpuContext;
 use pop3::gpu::pipeline::create_pipeline;
