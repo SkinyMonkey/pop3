@@ -3,8 +3,8 @@
 // Provides the bridge between user input (selection, move orders) and
 // the movement system (pathfinding, per-tick position updates).
 
-use crate::game_state::rng::GameRng;
-use crate::movement::{
+use crate::engine::state::rng::GameRng;
+use crate::engine::movement::{
     RegionMap, SegmentPool, FailureCache, UsedTargetsCache,
     PersonMovement, WorldCoord, RouteResult,
     state_goto, process_route_movement, move_point_by_angle,

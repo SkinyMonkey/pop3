@@ -13,7 +13,7 @@
 // So: world.x → cell_y (flipped), world.z → cell_x
 
 use cgmath::{Matrix4, Vector4};
-use crate::movement::WorldCoord;
+use crate::engine::movement::WorldCoord;
 
 /// Convert world coordinates to cell coordinates for rendering.
 /// `n` is landscape size (typically 128.0).

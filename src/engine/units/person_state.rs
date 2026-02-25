@@ -5,7 +5,7 @@
 // (Idle, Moving, Wander, GoToPoint, Fighting, Fleeing, Drowning, Dead)
 // have real implementations in this phase.
 
-use crate::game_state::rng::GameRng;
+use crate::engine::state::rng::GameRng;
 use super::unit::Unit;
 
 /// All person states from the original binary's Person_SetState switch.
@@ -307,7 +307,7 @@ pub const COMBAT_ATTACK_INTERVAL: u16 = 8;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::movement::PersonMovement;
+    use crate::engine::movement::PersonMovement;
     use crate::data::units::ModelType;
 
     fn make_unit(subtype: u8, tribe: u8) -> Unit {

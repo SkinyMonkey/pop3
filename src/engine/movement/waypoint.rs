@@ -160,7 +160,7 @@ fn release_segment(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::movement::types::{TileCoord, WorldCoord};
+    use crate::engine::movement::types::{TileCoord, WorldCoord};
 
     fn setup_segment_pool_with_path(waypoints: &[(u8, u8)]) -> (SegmentPool, u16) {
         let mut pool = SegmentPool::new();

@@ -4,7 +4,7 @@ use crate::hud::HudState;
 use crate::landscape::LandscapeMesh;
 use crate::data::objects::{Object3D, Shape};
 use crate::sprites::LevelObject;
-use crate::unit_control::{UnitCoordinator, DragState};
+use crate::engine::units::{UnitCoordinator, DragState};
 use crate::view::{Camera, Screen};
 
 /// Output boundary — everything the renderer needs to produce one frame.
