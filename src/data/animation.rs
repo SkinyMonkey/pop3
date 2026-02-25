@@ -209,6 +209,7 @@ pub const UNIT_IDLE_ANIMS: [(u8, usize); 6] = [
 ];
 
 /// Combined idle + walk animation indices per subtype (non-shaman).
+/// Shamans use pre-rendered per-tribe sprites, not VELE compositing.
 /// Format: (subtype, &[animation_indices])
 pub const UNIT_MULTI_ANIMS: [(u8, &[usize]); 5] = [
     (PERSON_SUBTYPE_BRAVE,       &[15, 21]),
@@ -777,10 +778,14 @@ pub fn build_multi_anim_atlas(
 
 /******************************************************************************/
 
-/// Per-tribe shaman sprite start indices (idle animation).
+/// Per-tribe shaman sprite start indices and frame counts.
 /// Shamans use complete pre-rendered per-tribe sprites, not VELE compositing.
-pub const SHAMAN_IDLE_SPRITES: [u16; 4] = [7578, 7618, 7658, 7698];
-pub const SHAMAN_FRAMES_PER_DIR: usize = 8;
+/// Derived from VSTART→VFRA→VELE chain: tribe offset = frames_per_dir × 5 stored directions.
+pub const SHAMAN_ANIMS: [(u16, [u16; 4], usize); 2] = [
+    // (anim_id, per-tribe starts, frames_per_dir)
+    (20, [6879, 6899, 6919, 6939], 4),  // idle: 4 unique frames × 5 dirs = 20 sprites/tribe
+    (26, [7578, 7618, 7658, 7698], 8),  // walk: 8 frames × 5 dirs = 40 sprites/tribe
+];
 
 /// Build a sprite atlas from direct PSFB sprite indices (non-composited).
 /// Used for shamans which have complete per-tribe sprites, not VELE layers.
@@ -859,6 +864,90 @@ pub fn build_direct_sprite_atlas(
     }
 
     Some((atlas_w, atlas_h, rgba, fw, fh, frames_per_dir as u32))
+}
+
+/// Build a combined atlas for multiple direct-sprite animations.
+/// Each entry is (anim_id, per-tribe starts, frames_per_dir).
+/// Returns the same format as `build_multi_anim_atlas`:
+/// (atlas_w, atlas_h, rgba, frame_w, frame_h, total_columns, offsets)
+/// where `offsets[i] = (anim_id, column_offset, frame_count)`.
+pub fn build_direct_multi_anim_atlas(
+    container: &ContainerPSFB,
+    palette: &[[u8; 4]],
+    anims: &[(u16, [u16; 4], usize)],
+) -> Option<(u32, u32, Vec<u8>, u32, u32, u32, Vec<(usize, u32, u32)>)> {
+    if anims.is_empty() { return None; }
+
+    // Compute shared max frame size across all animations
+    let mut fw: u32 = 0;
+    let mut fh: u32 = 0;
+    for &(_, ref starts, fpd) in anims {
+        for tribe in 0..NUM_TRIBES {
+            let start = starts[tribe] as usize;
+            for dir in 0..STORED_DIRECTIONS {
+                for f in 0..fpd {
+                    let idx = start + dir * fpd + f;
+                    if let Some(info) = container.get_info(idx) {
+                        fw = fw.max(info.width as u32);
+                        fh = fh.max(info.height as u32);
+                    }
+                }
+            }
+        }
+    }
+    if fw == 0 || fh == 0 { return None; }
+
+    let total_cols: u32 = anims.iter().map(|(_, _, fpd)| *fpd as u32).sum();
+    let total_rows = (NUM_TRIBES * STORED_DIRECTIONS) as u32;
+    let atlas_w = fw * total_cols;
+    let atlas_h = fh * total_rows;
+    let mut rgba = vec![0u8; (atlas_w * atlas_h * 4) as usize];
+    let mut col_offset = 0u32;
+    let mut offsets = Vec::new();
+
+    for &(anim_id, ref starts, fpd) in anims {
+        offsets.push((anim_id as usize, col_offset, fpd as u32));
+        for tribe in 0..NUM_TRIBES {
+            let start = starts[tribe] as usize;
+            for dir in 0..STORED_DIRECTIONS {
+                for f in 0..fpd {
+                    let idx = start + dir * fpd + f;
+                    let image = match container.get_image(idx) {
+                        Some(img) => img,
+                        None => continue,
+                    };
+                    let info = match container.get_info(idx) {
+                        Some(i) => i,
+                        None => continue,
+                    };
+                    let sw = info.width as u32;
+                    let sh = info.height as u32;
+                    let ox = (fw - sw) / 2;
+                    let oy = (fh - sh) / 2;
+                    let cell_x = (col_offset + f as u32) * fw;
+                    let row = (tribe * STORED_DIRECTIONS + dir) as u32;
+                    let cell_y = row * fh;
+                    for y in 0..sh {
+                        for x in 0..sw {
+                            let src = image.data[(y * sw + x) as usize];
+                            if src == 255 { continue; }
+                            let dst_x = cell_x + ox + x;
+                            let dst_y = cell_y + oy + y;
+                            let dst_off = ((dst_y * atlas_w + dst_x) * 4) as usize;
+                            let c = palette.get(src as usize).unwrap_or(&[255, 0, 255, 255]);
+                            rgba[dst_off] = c[0];
+                            rgba[dst_off + 1] = c[1];
+                            rgba[dst_off + 2] = c[2];
+                            rgba[dst_off + 3] = 255;
+                        }
+                    }
+                }
+            }
+        }
+        col_offset += fpd as u32;
+    }
+
+    Some((atlas_w, atlas_h, rgba, fw, fh, total_cols, offsets))
 }
 
 /******************************************************************************/
