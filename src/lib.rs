@@ -17,6 +17,7 @@ pub mod gpu {
     pub mod pipeline;
     pub mod buffer;
     pub mod texture;
+    pub mod bind_groups;
 }
 pub mod pop;
 pub mod landscape;
@@ -24,3 +25,5 @@ pub mod movement;
 pub mod unit_control;
 pub mod game_state;
 pub mod hud;
+pub mod sprites;
+pub mod buildings;

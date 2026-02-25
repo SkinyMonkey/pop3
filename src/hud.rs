@@ -1,8 +1,8 @@
-// HUD data types, layout computation, and pure rendering helpers.
-//
-// This module contains the data contract between game logic and the HUD renderer.
-// Game logic populates `HudState` each frame; the HUD renders whatever it receives.
-// No game-logic types (Unit, LandscapeMesh, etc.) are referenced here.
+// HUD data types, layout computation, rendering helpers, and GPU renderer.
+
+use crate::gpu::buffer::GpuBuffer;
+use crate::gpu::texture::GpuTexture;
+use crate::pop::psfb::ContainerPSFB;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -400,6 +400,505 @@ pub fn detect_tab_click(mouse_x: f32, mouse_y: f32, layout: &HudLayout) -> Optio
 /// Panel sprites are stored after the white pixel (1) + font glyphs (96).
 pub fn panel_sprite_index(font_region_start: usize, psfb_index: usize) -> usize {
     font_region_start + 96 + psfb_index
+}
+
+// ---------------------------------------------------------------------------
+// GPU Renderer
+// ---------------------------------------------------------------------------
+
+/// Screen-space 2D sprite/text renderer for the game HUD.
+pub struct HudRenderer {
+    pipeline: wgpu::RenderPipeline,
+    vertex_buffer: wgpu::Buffer,
+    uniform_buffer: GpuBuffer,
+    atlas_bind_group: wgpu::BindGroup,
+    bind_group_layout: wgpu::BindGroupLayout,
+    atlas_width: u32,
+    atlas_height: u32,
+    sprite_regions: Vec<SpriteRegion>,
+    /// Index of the 1x1 white pixel region for solid rectangles
+    white_region_idx: usize,
+    /// Index where font glyphs start in sprite_regions
+    font_region_start: usize,
+    vertices: Vec<HudVertex>,
+    // Minimap texture (updated per-frame)
+    minimap_bind_group: Option<wgpu::BindGroup>,
+    minimap_texture: Option<GpuTexture>,
+}
+
+impl HudRenderer {
+    pub const MAX_VERTICES: usize = 65536;
+
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+        screen_w: f32,
+        screen_h: f32,
+    ) -> Self {
+        // Bind group layout: uniform + texture + sampler
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("hud_bg_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        // Screen size uniform
+        let screen_data = [screen_w, screen_h, 0.0f32, 0.0f32];
+        let uniform_buffer = GpuBuffer::new_uniform_init(
+            device, bytemuck::bytes_of(&screen_data), "hud_uniforms");
+
+        // Build initial atlas with white pixel + font glyphs (so text works before sprites load)
+        let font_rgba = build_font_rgba();
+        let font_w = FONT_ATLAS_W;
+        let font_h = FONT_ATLAS_H;
+        // Atlas layout: white pixel at (0,0), font at (2,0)
+        let init_atlas_w = (2 + font_w).next_power_of_two();
+        let init_atlas_h = font_h.next_power_of_two();
+        let mut init_data = vec![0u8; (init_atlas_w * init_atlas_h * 4) as usize];
+        // White pixel at (0,0)
+        init_data[0] = 255; init_data[1] = 255; init_data[2] = 255; init_data[3] = 255;
+        // Blit font at (2, 0)
+        for fy in 0..font_h {
+            for fx in 0..font_w {
+                let src = ((fy * font_w + fx) * 4) as usize;
+                let dst = ((fy * init_atlas_w + 2 + fx) * 4) as usize;
+                if dst + 3 < init_data.len() && src + 3 < font_rgba.len() {
+                    init_data[dst..dst + 4].copy_from_slice(&font_rgba[src..src + 4]);
+                }
+            }
+        }
+        let atlas_tex = GpuTexture::new_2d(
+            device, queue, init_atlas_w, init_atlas_h,
+            wgpu::TextureFormat::Rgba8UnormSrgb, &init_data, "hud_atlas_initial");
+        let sampler = GpuTexture::create_sampler(device, true);
+
+        let atlas_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hud_atlas_bg"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: uniform_buffer.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&atlas_tex.view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
+            ],
+        });
+
+        // Pipeline
+        let shader_source = include_str!("../shaders/hud_sprite.wgsl");
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("hud_shader"),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("hud_pipeline_layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("hud_pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<HudVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 16, shader_location: 2 },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        // Vertex buffer (pre-allocated)
+        let vb_size = Self::MAX_VERTICES * std::mem::size_of::<HudVertex>();
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hud_vertex_buffer"),
+            size: vb_size as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Build sprite regions: white pixel + 96 font glyphs
+        let aw = init_atlas_w as f32;
+        let ah = init_atlas_h as f32;
+        let mut sprite_regions = Vec::new();
+
+        // White pixel region (index 0) — sample center of pixel
+        sprite_regions.push(SpriteRegion {
+            u0: 0.5 / aw, v0: 0.5 / ah,
+            u1: 0.5 / aw, v1: 0.5 / ah,
+            width: 1, height: 1,
+        });
+
+        // Font glyph regions (indices 1..97)
+        let u_step = FONT_GLYPH_W as f32 / aw;
+        let v_step = FONT_GLYPH_H as f32 / ah;
+        let font_u0 = 2.0 / aw;
+        let font_v0 = 0.0;
+        for idx in 0..96u32 {
+            let col = idx % FONT_COLS;
+            let row = idx / FONT_COLS;
+            sprite_regions.push(SpriteRegion {
+                u0: font_u0 + col as f32 * u_step,
+                v0: font_v0 + row as f32 * v_step,
+                u1: font_u0 + (col + 1) as f32 * u_step,
+                v1: font_v0 + (row + 1) as f32 * v_step,
+                width: FONT_GLYPH_W as u16,
+                height: FONT_GLYPH_H as u16,
+            });
+        }
+
+        HudRenderer {
+            pipeline,
+            vertex_buffer,
+            uniform_buffer,
+            atlas_bind_group,
+            bind_group_layout,
+            atlas_width: init_atlas_w,
+            atlas_height: init_atlas_h,
+            sprite_regions,
+            white_region_idx: 0,
+            font_region_start: 1,
+            vertices: Vec::with_capacity(4096),
+            minimap_bind_group: None,
+            minimap_texture: None,
+        }
+    }
+
+    /// Build the HUD atlas from plspanel.spr sprites + font glyphs.
+    /// `panel_sprites` is the PSFB container, `palette` is 1024-byte BGRA palette.
+    pub fn build_atlas(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        panel_sprites: &ContainerPSFB,
+        palette: &[u8],
+    ) {
+        // Phase 1: Convert all sprites to RGBA
+        let mut sprite_images: Vec<(u16, u16, Vec<u8>)> = Vec::new(); // (w, h, rgba)
+        for i in 0..panel_sprites.len() {
+            if let Some(img) = panel_sprites.get_image(i) {
+                let w = img.width as u16;
+                let h = img.height as u16;
+                let rgba = convert_indexed_to_rgba(&img.data, palette, 255);
+                sprite_images.push((w, h, rgba));
+            } else {
+                sprite_images.push((1, 1, vec![0, 0, 0, 0]));
+            }
+        }
+
+        // Phase 2: Calculate atlas dimensions using shelf packing
+        let font_w = FONT_ATLAS_W as u16;
+        let font_h = FONT_ATLAS_H as u16;
+        let atlas_w: u32 = 1024;
+
+        // Pack all items: white pixel (1x1), font atlas, then sprite images
+        let mut all_items: Vec<(u16, u16)> = Vec::with_capacity(2 + sprite_images.len());
+        all_items.push((1, 1)); // white pixel
+        all_items.push((font_w, font_h)); // font atlas
+        for (w, h, _) in &sprite_images {
+            all_items.push((*w, *h));
+        }
+        let (all_placements, atlas_h) = shelf_pack(&all_items, atlas_w);
+        let atlas_w = atlas_w.next_power_of_two();
+
+        // Extract placements
+        let font_placement_x = all_placements[1].0;
+        let font_placement_y = all_placements[1].1;
+        // Sprite placements start at index 2
+        let placements: Vec<(u32, u32)> = all_placements[2..].to_vec();
+
+        // Phase 3: Blit into atlas
+        let mut atlas_data = vec![0u8; (atlas_w * atlas_h * 4) as usize];
+
+        // Blit white pixel
+        let (wp_x, wp_y) = all_placements[0];
+        let wp = ((wp_y * atlas_w + wp_x) * 4) as usize;
+        atlas_data[wp] = 255;
+        atlas_data[wp + 1] = 255;
+        atlas_data[wp + 2] = 255;
+        atlas_data[wp + 3] = 255;
+
+        // Blit font atlas
+        let font_atlas_rgba = build_font_rgba();
+        for fy in 0..font_h as u32 {
+            for fx in 0..font_w as u32 {
+                let src = ((fy * font_w as u32 + fx) * 4) as usize;
+                let dst = (((font_placement_y + fy) * atlas_w + font_placement_x + fx) * 4) as usize;
+                if dst + 3 < atlas_data.len() && src + 3 < font_atlas_rgba.len() {
+                    atlas_data[dst..dst + 4].copy_from_slice(&font_atlas_rgba[src..src + 4]);
+                }
+            }
+        }
+
+        // Blit sprite images
+        for (i, (w, h, rgba)) in sprite_images.iter().enumerate() {
+            let (px, py) = placements[i];
+            for sy in 0..*h as u32 {
+                for sx in 0..*w as u32 {
+                    let src = ((sy * *w as u32 + sx) * 4) as usize;
+                    let dst = (((py + sy) * atlas_w + px + sx) * 4) as usize;
+                    if dst + 3 < atlas_data.len() && src + 3 < rgba.len() {
+                        atlas_data[dst..dst + 4].copy_from_slice(&rgba[src..src + 4]);
+                    }
+                }
+            }
+        }
+
+        // Phase 4: Build sprite regions
+        let aw = atlas_w as f32;
+        let ah = atlas_h as f32;
+        let mut regions = Vec::new();
+
+        // White pixel region (index 0)
+        regions.push(SpriteRegion {
+            u0: 0.5 / aw, v0: 0.5 / ah,
+            u1: 0.5 / aw, v1: 0.5 / ah,
+            width: 1, height: 1,
+        });
+
+        // Font glyph regions (indices 1..96)
+        let font_start = regions.len();
+        let u_step = FONT_GLYPH_W as f32 / aw;
+        let v_step = FONT_GLYPH_H as f32 / ah;
+        let font_u0 = font_placement_x as f32 / aw;
+        let font_v0 = font_placement_y as f32 / ah;
+        for idx in 0..96u32 {
+            let col = idx % FONT_COLS;
+            let row = idx / FONT_COLS;
+            regions.push(SpriteRegion {
+                u0: font_u0 + col as f32 * u_step,
+                v0: font_v0 + row as f32 * v_step,
+                u1: font_u0 + (col + 1) as f32 * u_step,
+                v1: font_v0 + (row + 1) as f32 * v_step,
+                width: FONT_GLYPH_W as u16,
+                height: FONT_GLYPH_H as u16,
+            });
+        }
+
+        // Panel sprite regions
+        for (i, (w, h, _)) in sprite_images.iter().enumerate() {
+            let (px, py) = placements[i];
+            regions.push(SpriteRegion {
+                u0: px as f32 / aw,
+                v0: py as f32 / ah,
+                u1: (px + *w as u32) as f32 / aw,
+                v1: (py + *h as u32) as f32 / ah,
+                width: *w,
+                height: *h,
+            });
+        }
+
+        // Phase 5: Upload atlas
+        let atlas_tex = GpuTexture::new_2d(
+            device, queue, atlas_w, atlas_h,
+            wgpu::TextureFormat::Rgba8UnormSrgb, &atlas_data, "hud_atlas");
+        let sampler = GpuTexture::create_sampler(device, true);
+
+        self.atlas_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hud_atlas_bg"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.uniform_buffer.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&atlas_tex.view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
+            ],
+        });
+
+        self.atlas_width = atlas_w;
+        self.atlas_height = atlas_h;
+        self.sprite_regions = regions;
+        self.white_region_idx = 0;
+        self.font_region_start = font_start;
+
+        log::info!("[hud] Atlas built: {}x{}, {} sprites, {} font glyphs, {} total regions",
+            atlas_w, atlas_h, sprite_images.len(), 96, self.sprite_regions.len());
+    }
+
+    pub fn begin_frame(&mut self) {
+        self.vertices.clear();
+    }
+
+    pub fn push_quad(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, u0: f32, v0: f32, u1: f32, v1: f32, color: [f32; 4]) {
+        self.vertices.extend_from_slice(&generate_quad_vertices(x0, y0, x1, y1, u0, v0, u1, v1, color));
+    }
+
+    /// Draw a solid colored rectangle.
+    pub fn draw_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
+        let r = &self.sprite_regions[self.white_region_idx];
+        self.push_quad(x, y, x + w, y + h, r.u0, r.v0, r.u1, r.v1, color);
+    }
+
+    /// Draw a sprite from the atlas at screen position (x, y) with scale.
+    pub fn draw_sprite(&mut self, sprite_idx: usize, x: f32, y: f32, scale_x: f32, scale_y: f32) {
+        if sprite_idx >= self.sprite_regions.len() { return; }
+        let r = self.sprite_regions[sprite_idx].clone();
+        let w = r.width as f32 * scale_x;
+        let h = r.height as f32 * scale_y;
+        self.push_quad(x, y, x + w, y + h, r.u0, r.v0, r.u1, r.v1, [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    /// Draw text using the embedded bitmap font.
+    pub fn draw_text(&mut self, text: &str, x0: f32, y0: f32, scale: f32, color: [f32; 4]) {
+        let mut cx = x0;
+        let mut cy = y0;
+        for ch in text.chars() {
+            if ch == '\n' {
+                cx = x0;
+                cy += scale;
+                continue;
+            }
+            let code = ch as u32;
+            if code < 32 || code > 126 {
+                cx += scale;
+                continue;
+            }
+            let glyph_idx = (code - 32) as usize;
+            let region_idx = self.font_region_start + glyph_idx;
+            if region_idx < self.sprite_regions.len() {
+                let r = self.sprite_regions[region_idx].clone();
+                self.push_quad(cx, cy, cx + scale, cy + scale, r.u0, r.v0, r.u1, r.v1, color);
+            }
+            cx += scale;
+        }
+    }
+
+    /// Get the sprite region index for panel sprites (offset past white pixel + font glyphs).
+    pub fn panel_sprite_index(&self, psfb_index: usize) -> usize {
+        panel_sprite_index(self.font_region_start, psfb_index)
+    }
+
+    /// Update the minimap texture from pre-built MinimapData.
+    pub fn update_minimap(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        data: &MinimapData,
+    ) {
+        let rgba = generate_minimap_rgba(data);
+
+        let tex = GpuTexture::new_2d(
+            device, queue, 128, 128,
+            wgpu::TextureFormat::Rgba8UnormSrgb, &rgba, "minimap");
+        let sampler = GpuTexture::create_sampler(device, false);
+
+        self.minimap_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("minimap_bg"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.uniform_buffer.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&tex.view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
+            ],
+        }));
+        self.minimap_texture = Some(tex);
+    }
+
+    /// Render the HUD. Issues draw calls with the atlas bind group, and optionally the minimap bind group.
+    pub fn render_full(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, queue: &wgpu::Queue,
+                   screen_w: f32, screen_h: f32, minimap_rect: Option<(f32, f32, f32, f32)>) {
+        if self.vertices.is_empty() && self.minimap_bind_group.is_none() { return; }
+
+        // Update screen size uniform
+        let screen_data = [screen_w, screen_h, 0.0f32, 0.0f32];
+        self.uniform_buffer.update(queue, 0, bytemuck::bytes_of(&screen_data));
+
+        // Upload vertex data
+        let data: &[u8] = bytemuck::cast_slice(&self.vertices);
+        queue.write_buffer(&self.vertex_buffer, 0, data);
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("hud_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
+        pass.set_pipeline(&self.pipeline);
+
+        // Draw minimap first (separate bind group)
+        if let (Some(ref mm_bg), Some((mx, my, mw, mh))) = (&self.minimap_bind_group, minimap_rect) {
+            // Build minimap quad inline (6 vertices at the very start)
+            let mm_verts = [
+                HudVertex { position: [mx, my], uv: [0.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+                HudVertex { position: [mx + mw, my], uv: [1.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+                HudVertex { position: [mx, my + mh], uv: [0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
+                HudVertex { position: [mx, my + mh], uv: [0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
+                HudVertex { position: [mx + mw, my], uv: [1.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+                HudVertex { position: [mx + mw, my + mh], uv: [1.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
+            ];
+            let mm_data: &[u8] = bytemuck::cast_slice(&mm_verts);
+            // Write minimap vertices at the end of the existing vertex data
+            let mm_offset = (self.vertices.len() * std::mem::size_of::<HudVertex>()) as u64;
+            queue.write_buffer(&self.vertex_buffer, mm_offset, mm_data);
+
+            pass.set_bind_group(0, mm_bg, &[]);
+            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            pass.draw(self.vertices.len() as u32..self.vertices.len() as u32 + 6, 0..1);
+        }
+
+        // Draw all other HUD elements with atlas bind group
+        if !self.vertices.is_empty() {
+            pass.set_bind_group(0, &self.atlas_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            pass.draw(0..self.vertices.len() as u32, 0..1);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
