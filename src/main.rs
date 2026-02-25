@@ -65,6 +65,7 @@ use pop3::envelop::*;
 use pop3::game_state::tick::{GameWorld, StdTimeSource, TickSubsystems};
 use pop3::game_state::state_machine::GameState;
 use pop3::game_state::traits::NoOp;
+use pop3::game_command::{GameCommand, FrameState, translate_key};
 
 use pop3::hud::{
     self, HudTab, HudState, HudRenderer,
@@ -75,36 +76,6 @@ use pop3::hud::{
 /******************************************************************************/
 
 type LandscapeMeshS = LandscapeMesh<128>;
-
-fn process_key(key: KeyCode, camera: &mut Camera, landscape_mesh: &mut LandscapeMeshS) {
-    match key {
-        // World rotation (orbit camera around scene center)
-        KeyCode::KeyQ => { camera.angle_z -= 5; },
-        KeyCode::KeyE => { camera.angle_z += 5; },
-        // Tilt (pitch) the view
-        KeyCode::ArrowUp => { camera.angle_x = (camera.angle_x + 5).min(-30); },
-        KeyCode::ArrowDown => { camera.angle_x = (camera.angle_x - 5).max(-90); },
-        // Scroll the world (toroidal panning, screen-relative)
-        KeyCode::KeyW | KeyCode::KeyA | KeyCode::KeyS | KeyCode::KeyD => {
-            let (dx, dy) = match key {
-                KeyCode::KeyW => (0.0f32, 1.0f32),
-                KeyCode::KeyS => (0.0, -1.0),
-                KeyCode::KeyA => (-1.0, 0.0),
-                KeyCode::KeyD => (1.0, 0.0),
-                _ => unreachable!(),
-            };
-            // Project screen direction through orbit camera orientation.
-            // Camera forward on XY = (-sin(az), -cos(az)),
-            // camera right on XY = (-cos(az), sin(az)).
-            let az = (camera.angle_z as f32).to_radians();
-            let gx = -dx * az.cos() - dy * az.sin();
-            let gy =  dx * az.sin() - dy * az.cos();
-            landscape_mesh.shift_x(gx.round() as i32);
-            landscape_mesh.shift_y(gy.round() as i32);
-        },
-        _ => (),
-    }
-}
 
 
 /******************************************************************************/
@@ -140,11 +111,399 @@ struct AppConfig {
     script: Option<PathBuf>,
 }
 
+/// All game-logic state — no GPU types. Produces FrameState for the renderer.
+struct GameEngine {
+    landscape_mesh: LandscapeMeshS,
+    camera: Camera,
+    screen: Screen,
+    curvature_scale: f32,
+    curvature_enabled: bool,
+    zoom: f32,
+    level_num: u8,
+    sunlight: Vector4<f32>,
+    show_objects: bool,
+    hud_tab: HudTab,
+    hud_panel_sprite_count: usize,
+
+    // Game simulation
+    unit_coordinator: UnitCoordinator,
+    game_world: GameWorld,
+    game_time: StdTimeSource,
+
+    // Level data
+    level_objects: Vec<LevelObject>,
+    objects_3d: Vec<Option<Object3D>>,
+    shapes: Vec<Shape>,
+
+    // Water animation
+    wat_offset: i32,
+    wat_interval: u32,
+    frame_count: u32,
+
+    // Config (read-only after init)
+    config: AppConfig,
+}
+
+/// Raw input state — mouse position and drag tracking.
+/// Lives on App, not GameEngine, because it's I/O-layer state.
+struct InputState {
+    mouse_pos: Point2<f32>,
+    drag_state: DragState,
+}
+
+impl GameEngine {
+    fn build_landscape_params(&self) -> LandscapeUniformData {
+        let shift = self.landscape_mesh.get_shift_vector();
+        LandscapeUniformData {
+            level_shift: [shift.x, shift.y, shift.z, shift.w],
+            height_scale: self.landscape_mesh.height_scale(),
+            step: self.landscape_mesh.step(),
+            width: self.landscape_mesh.width() as i32,
+            _pad_width: 0,
+            sunlight: [self.sunlight.x, self.sunlight.y, self.sunlight.z, self.sunlight.w],
+            wat_offset: self.wat_offset,
+            curvature_scale: if self.curvature_enabled { self.curvature_scale } else { 0.0 },
+            camera_focus: {
+                let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+                [center, center]
+            },
+            viewport_radius: {
+                let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+                center * 0.9
+            },
+            _pad2: [0.0; 3],
+        }
+    }
+
+    fn camera_focus_vertex(&self) -> f32 {
+        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+        let model_x = (center - LANDSCAPE_OFFSET) / LANDSCAPE_SCALE;
+        model_x / self.landscape_mesh.step()
+    }
+
+    fn camera_min_z(&self) -> f32 {
+        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+        let az = (self.camera.angle_z as f32).to_radians();
+        let ax = (self.camera.angle_x as f32).to_radians();
+        let radius = 1.5 / self.zoom;
+        let eye_x = center + radius * ax.cos() * az.sin();
+        let eye_y = center + radius * ax.cos() * az.cos();
+        let step = self.landscape_mesh.step();
+        let n = self.landscape_mesh.width();
+        let gx = (eye_x / step).clamp(0.0, (n - 1) as f32) as usize;
+        let gy = (eye_y / step).clamp(0.0, (n - 1) as f32) as usize;
+        let shift = self.landscape_mesh.get_shift_vector();
+        let sx = (gx + shift.x as usize) % n;
+        let sy = (gy + shift.y as usize) % n;
+        self.landscape_mesh.height_at(sx, sy) as f32 * self.landscape_mesh.height_scale() + 0.05
+    }
+
+    fn screen_to_cell(&self, mouse_pos: &Point2<f32>) -> Option<(f32, f32)> {
+        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+        let focus = Vector3::new(center, center, 0.0);
+        let min_z = self.camera_min_z();
+        let (v1, v2) = screen_to_scene_zoom(&self.screen, &self.camera, mouse_pos, self.zoom, focus, min_z);
+        let mvp_transform = Matrix4::from_translation(Vector3::new(LANDSCAPE_OFFSET, LANDSCAPE_OFFSET, 0.0))
+            * Matrix4::from_scale(LANDSCAPE_SCALE);
+        let iter = self.landscape_mesh.iter();
+        match intersect_iter(iter, &mvp_transform, v1, v2) {
+            Some((triangle_id, _)) => {
+                let shift = self.landscape_mesh.get_shift_vector();
+                Some(triangle_to_cell(
+                    triangle_id,
+                    self.landscape_mesh.width(),
+                    shift.x as usize,
+                    shift.y as usize,
+                ))
+            }
+            None => None,
+        }
+    }
+
+    fn unit_pvm(&self) -> Matrix4<f32> {
+        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+        let focus = Vector3::new(center, center, 0.0);
+        let min_z = self.camera_min_z();
+        let mvp = MVP::with_zoom(&self.screen, &self.camera, self.zoom, focus, min_z);
+        let model_transform = Matrix4::from_translation(Vector3::new(LANDSCAPE_OFFSET, LANDSCAPE_OFFSET, 0.0))
+            * Matrix4::from_scale(LANDSCAPE_SCALE);
+        mvp.projection * mvp.view * model_transform
+    }
+
+    fn unit_screen_pos(&self, unit: &Unit, pvm: &Matrix4<f32>) -> Option<(f32, f32)> {
+        let step = self.landscape_mesh.step();
+        let w = self.landscape_mesh.width() as f32;
+        let shift = self.landscape_mesh.get_shift_vector();
+        let height_scale = self.landscape_mesh.height_scale();
+        let center = (w - 1.0) * step / 2.0;
+        let cs = if self.curvature_enabled { self.curvature_scale } else { 0.0 };
+        let vis_x = ((unit.cell_x - shift.x as f32) % w + w) % w;
+        let vis_y = ((unit.cell_y - shift.y as f32) % w + w) % w;
+        let gx = vis_x * step;
+        let gy = vis_y * step;
+        let ix = (unit.cell_x as usize).min(127);
+        let iy = (unit.cell_y as usize).min(127);
+        let gz = self.landscape_mesh.height_at(ix, iy) as f32 * height_scale;
+        let dx = gx - center;
+        let dy = gy - center;
+        let curvature_offset = (dx * dx + dy * dy) * cs;
+        let z_base = gz - curvature_offset;
+        project_to_screen([gx, gy, z_base], pvm, self.screen.width as f32, self.screen.height as f32)
+    }
+
+    fn find_unit_at_screen_pos(&self, mouse: &Point2<f32>) -> Option<usize> {
+        let pvm = self.unit_pvm();
+        let candidates = self.unit_coordinator.units.iter().filter_map(|unit| {
+            self.unit_screen_pos(unit, &pvm).map(|(sx, sy)| (unit.id, sx, sy))
+        });
+        nearest_screen_hit(candidates, mouse.x, mouse.y, 20.0)
+    }
+
+    fn units_in_screen_rect(&self, corner_a: Point2<f32>, corner_b: Point2<f32>) -> Vec<usize> {
+        let min_x = corner_a.x.min(corner_b.x);
+        let max_x = corner_a.x.max(corner_b.x);
+        let min_y = corner_a.y.min(corner_b.y);
+        let max_y = corner_a.y.max(corner_b.y);
+        let pvm = self.unit_pvm();
+        let mut ids = Vec::new();
+        for unit in &self.unit_coordinator.units {
+            if let Some((sx, sy)) = self.unit_screen_pos(unit, &pvm) {
+                if sx >= min_x && sx <= max_x && sy >= min_y && sy <= max_y {
+                    ids.push(unit.id);
+                }
+            }
+        }
+        ids
+    }
+
+    fn build_hud_state(&self) -> HudState {
+        let dots: Vec<MinimapDot> = self.unit_coordinator.units.iter()
+            .filter(|u| u.alive)
+            .map(|u| MinimapDot {
+                cell_x: (u.cell_x as u8).min(127),
+                cell_y: (u.cell_y as u8).min(127),
+                tribe_index: u.tribe_index,
+            })
+            .collect();
+        let minimap = MinimapData {
+            heights: *self.landscape_mesh.heights(),
+            dots,
+        };
+        let panel_entries = match self.hud_tab {
+            HudTab::Spells => {
+                ["Burn", "Blast", "Lightning", "Whirlwind",
+                 "Plague", "Invisibility", "Firestorm", "Hypnotize",
+                 "Ghost Army", "Erosion", "Swamp", "Land Bridge",
+                 "Angel/Death", "Earthquake", "Flatten", "Volcano"]
+                    .iter()
+                    .map(|name| PanelEntry {
+                        label: name.to_string(),
+                        color: [0.8, 0.9, 1.0, 0.9],
+                    })
+                    .collect()
+            }
+            HudTab::Buildings => {
+                ["Hut", "Guard Tower", "Temple", "Spy Hut",
+                 "Warrior Hut", "Firewarrior Hut", "Prison", "Boat Hut"]
+                    .iter()
+                    .map(|name| PanelEntry {
+                        label: name.to_string(),
+                        color: [0.9, 0.85, 0.7, 0.9],
+                    })
+                    .collect()
+            }
+            HudTab::Units => {
+                let unit_types: [(u8, &str); 6] = [
+                    (PERSON_SUBTYPE_BRAVE, "Brave"),
+                    (PERSON_SUBTYPE_WARRIOR, "Warrior"),
+                    (PERSON_SUBTYPE_SPY, "Spy"),
+                    (PERSON_SUBTYPE_PREACHER, "Preacher"),
+                    (PERSON_SUBTYPE_FIREWARRIOR, "Firewarr"),
+                    (PERSON_SUBTYPE_SHAMAN, "Shaman"),
+                ];
+                unit_types.iter().map(|(subtype, name)| {
+                    let count = self.unit_coordinator.units.iter()
+                        .filter(|u| u.alive && u.subtype == *subtype && u.tribe_index == 0)
+                        .count();
+                    PanelEntry {
+                        label: format!("{}: {}", name, count),
+                        color: [0.7, 1.0, 0.7, 0.9],
+                    }
+                }).collect()
+            }
+        };
+        let mut tribe_counts = [0u32; 4];
+        for u in &self.unit_coordinator.units {
+            if u.alive && (u.tribe_index as usize) < 4 {
+                tribe_counts[u.tribe_index as usize] += 1;
+            }
+        }
+        let tribe_populations: Vec<TribePopulation> = (0..4u8)
+            .filter(|&t| tribe_counts[t as usize] > 0)
+            .map(|t| TribePopulation {
+                tribe_index: t,
+                count: tribe_counts[t as usize],
+                color: HUD_TRIBE_COLORS[t as usize],
+            })
+            .collect();
+        HudState {
+            active_tab: self.hud_tab,
+            minimap,
+            panel_entries,
+            tribe_populations,
+            level_num: self.level_num as u32,
+            frame_count: self.frame_count as u64,
+        }
+    }
+
+    /// Process a game command. Returns true if the renderer needs to redraw.
+    /// Sets dirty flags for specific rebuilds.
+    fn apply_command(&mut self, cmd: &GameCommand) -> bool {
+        match cmd {
+            GameCommand::RotateCamera { delta_z } => {
+                self.camera.angle_z += delta_z;
+                true
+            }
+            GameCommand::TiltCamera { delta_x } => {
+                self.camera.angle_x = (self.camera.angle_x + delta_x).clamp(-90, -30);
+                true
+            }
+            GameCommand::PanScreen { forward, right } => {
+                let az = (self.camera.angle_z as f32).to_radians();
+                let gx = -right * az.cos() - forward * az.sin();
+                let gy = right * az.sin() - forward * az.cos();
+                self.landscape_mesh.shift_x(gx.round() as i32);
+                self.landscape_mesh.shift_y(gy.round() as i32);
+                true
+            }
+            GameCommand::PanTerrain { dx, dy } => {
+                self.landscape_mesh.shift_x(*dx);
+                self.landscape_mesh.shift_y(*dy);
+                true
+            }
+            GameCommand::ResetCamera => {
+                self.camera.angle_x = -55;
+                self.camera.angle_y = 0;
+                self.camera.angle_z = 0;
+                self.camera.pos = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
+                true
+            }
+            GameCommand::TopDownView => {
+                self.camera.angle_x = -90;
+                true
+            }
+            GameCommand::CenterOnShaman => {
+                // Needs unit_renders (App-level data). The actual centering
+                // is done by App after apply_command returns.
+                true
+            }
+            GameCommand::SetZoom(z) => {
+                self.zoom = z.clamp(0.3, 5.0);
+                true
+            }
+            GameCommand::ToggleCurvature => {
+                self.curvature_enabled = !self.curvature_enabled;
+                log::info!("curvature {}", if self.curvature_enabled { "on" } else { "off" });
+                true
+            }
+            GameCommand::AdjustCurvature { factor } => {
+                self.curvature_scale *= factor;
+                log::info!("curvature_scale = {:.6}", self.curvature_scale);
+                true
+            }
+            GameCommand::NextLevel => {
+                self.level_num = (self.level_num + 1) % 26;
+                if self.level_num == 0 { self.level_num = 1; }
+                true
+            }
+            GameCommand::PrevLevel => {
+                self.level_num = if self.level_num == 1 { 25 } else { self.level_num - 1 };
+                true
+            }
+            GameCommand::NextShader | GameCommand::PrevShader => {
+                // Shader cycling stays renderer-side (program_container is GPU state)
+                true
+            }
+            GameCommand::ToggleObjects => {
+                self.show_objects = !self.show_objects;
+                log::info!("objects {}", if self.show_objects { "on" } else { "off" });
+                true
+            }
+            GameCommand::AdjustSunlight { dx, dy } => {
+                self.sunlight.x += dx;
+                self.sunlight.y += dy;
+                log::debug!("sunlight = {:?}", self.sunlight);
+                true
+            }
+            GameCommand::SelectUnit(id) => {
+                self.unit_coordinator.selection.select_single(*id);
+                true
+            }
+            GameCommand::SelectMultiple(ids) => {
+                self.unit_coordinator.selection.select_multiple(ids.clone());
+                true
+            }
+            GameCommand::ClearSelection => {
+                self.unit_coordinator.selection.clear();
+                true
+            }
+            GameCommand::OrderMove { x, z } => {
+                let target = pop3::movement::WorldCoord::new(*x as i16, *z as i16);
+                self.unit_coordinator.order_move(target);
+                true
+            }
+            GameCommand::ToggleSimulation => {
+                if self.game_world.state == GameState::InGame {
+                    self.game_world.state = GameState::Frontend;
+                    log::info!("game simulation OFF");
+                } else {
+                    self.game_world.state = GameState::InGame;
+                    log::info!("game simulation ON");
+                }
+                true
+            }
+            GameCommand::SetHudTab(tab) => {
+                self.hud_tab = *tab;
+                true
+            }
+            GameCommand::Quit => true,
+        }
+    }
+
+    /// Produce the output boundary for the renderer — a snapshot of all
+    /// game-logic state needed to draw one frame.
+    fn frame_state<'a>(&'a self, drag_state: &'a DragState) -> FrameState<'a> {
+        FrameState {
+            camera: &self.camera,
+            screen: &self.screen,
+            zoom: self.zoom,
+            landscape: &self.landscape_mesh,
+            curvature_scale: if self.curvature_enabled { self.curvature_scale } else { 0.0 },
+            sunlight: self.sunlight,
+            wat_offset: self.wat_offset,
+            show_objects: self.show_objects,
+            unit_coordinator: &self.unit_coordinator,
+            level_objects: &self.level_objects,
+            objects_3d: &self.objects_3d,
+            shapes: &self.shapes,
+            hud_state: self.build_hud_state(),
+            drag_state,
+            needs_spawn_rebuild: false,
+            needs_unit_rebuild: false,
+            needs_level_reload: false,
+        }
+    }
+}
+
 struct App {
+    engine: GameEngine,
+    input: InputState,
+
+    // Window / GPU
     window: Option<Arc<Window>>,
     gpu: Option<GpuContext>,
 
-    // Landscape
+    // Landscape rendering
     program_container: LandscapeProgramContainer,
     landscape_group0_layout: Option<wgpu::BindGroupLayout>,
     landscape_group0_bind_group: Option<wgpu::BindGroup>,
@@ -162,12 +521,8 @@ struct App {
     // Level object markers
     objects_marker_pipeline: Option<wgpu::RenderPipeline>,
     model_objects: Option<ModelEnvelop<ColorModel>>,
-    level_objects: Vec<LevelObject>,
-    show_objects: bool,
 
     // 3D building meshes
-    objects_3d: Vec<Option<Object3D>>,
-    shapes: Vec<Shape>,
     building_pipeline: Option<wgpu::RenderPipeline>,
     building_bind_group_1: Option<wgpu::BindGroup>,
     model_buildings: Option<ModelEnvelop<TexModel>>,
@@ -177,10 +532,8 @@ struct App {
     sky_bind_group: Option<wgpu::BindGroup>,
     sky_uniform_buffer: Option<GpuBuffer>,
 
-    // HUD renderer (replaces old overlay text system)
+    // HUD renderer
     hud: Option<HudRenderer>,
-    hud_tab: HudTab,
-    hud_panel_sprite_count: usize,
 
     // Shared uniform buffers
     mvp_buffer: Option<GpuBuffer>,
@@ -192,23 +545,12 @@ struct App {
     heights_buffer: Option<GpuBuffer>,
     watdisp_buffer: Option<GpuBuffer>,
 
-    // State
-    landscape_mesh: LandscapeMeshS,
-    camera: Camera,
-    screen: Screen,
-    curvature_scale: f32,
-    curvature_enabled: bool,
-    zoom: f32,
-    do_render: bool,
-    mouse_pos: Point2<f32>,
-    level_num: u8,
-    sunlight: Vector4<f32>,
-    wat_offset: i32,
-    wat_interval: u32,
-    frame_count: u32,
+    // Unit rendering
+    model_unit_markers: Option<ModelEnvelop<ColorModel>>,
+    model_selection_rings: Option<ModelEnvelop<ColorModel>>,
 
-    // Config
-    config: AppConfig,
+    // Render flag
+    do_render: bool,
 
     // Debug logging
     debug_log: BufWriter<File>,
@@ -217,14 +559,6 @@ struct App {
     // Script replay
     script_commands: Vec<String>,
     script_index: usize,
-
-    // Unit control
-    unit_coordinator: UnitCoordinator,
-    model_unit_markers: Option<ModelEnvelop<ColorModel>>,
-    model_selection_rings: Option<ModelEnvelop<ColorModel>>,
-    drag_state: DragState,
-    game_world: GameWorld,
-    game_time: StdTimeSource,
 }
 
 impl App {
@@ -256,7 +590,40 @@ impl App {
             })
             .unwrap_or_default();
 
+        let level_num = config.level.unwrap_or(1);
+
         App {
+            engine: GameEngine {
+                landscape_mesh,
+                camera,
+                screen: Screen { width: 800, height: 600 },
+                curvature_scale: 0.0512,
+                curvature_enabled: true,
+                zoom: 1.0,
+                level_num,
+                sunlight,
+                show_objects: true,
+                hud_tab: HudTab::Spells,
+                hud_panel_sprite_count: 0,
+                unit_coordinator: UnitCoordinator::new(),
+                game_world: {
+                    let mut w = GameWorld::new(12);
+                    w.state = GameState::InGame;
+                    w
+                },
+                game_time: StdTimeSource::new(),
+                level_objects: Vec::new(),
+                objects_3d: Vec::new(),
+                shapes: Vec::new(),
+                wat_offset: -1,
+                wat_interval: 5000,
+                frame_count: 0,
+                config,
+            },
+            input: InputState {
+                mouse_pos: Point2::<f32>::new(0.0, 0.0),
+                drag_state: DragState::None,
+            },
             window: None,
             gpu: None,
             program_container: LandscapeProgramContainer::new(),
@@ -270,10 +637,6 @@ impl App {
             unit_renders: Vec::new(),
             objects_marker_pipeline: None,
             model_objects: None,
-            level_objects: Vec::new(),
-            show_objects: true,
-            objects_3d: Vec::new(),
-            shapes: Vec::new(),
             building_pipeline: None,
             building_bind_group_1: None,
             model_buildings: None,
@@ -281,77 +644,20 @@ impl App {
             sky_bind_group: None,
             sky_uniform_buffer: None,
             hud: None,
-            hud_tab: HudTab::Spells,
-            hud_panel_sprite_count: 0,
             mvp_buffer: None,
             model_transform_buffer: None,
             landscape_params_buffer: None,
             select_params_buffer: None,
             heights_buffer: None,
             watdisp_buffer: None,
-            landscape_mesh,
-            camera,
-            screen: Screen { width: 800, height: 600 },
-            curvature_scale: 0.0512,
-            curvature_enabled: true,
-            zoom: 1.0,
+            model_unit_markers: None,
+            model_selection_rings: None,
             do_render: true,
-            mouse_pos: Point2::<f32>::new(0.0, 0.0),
-            level_num: config.level.unwrap_or(1),
-            sunlight,
-            wat_offset: -1,
-            wat_interval: 5000,
-            frame_count: 0,
-            config,
             debug_log,
             start_time: Instant::now(),
             script_commands,
             script_index: 0,
-
-            // Unit control
-            unit_coordinator: UnitCoordinator::new(),
-            model_unit_markers: None,
-            model_selection_rings: None,
-            drag_state: DragState::None,
-            game_world: {
-                let mut w = GameWorld::new(12); // 12 ticks/sec (original default)
-                w.state = GameState::InGame;     // start with simulation on
-                w
-            },
-            game_time: StdTimeSource::new(),
         }
-    }
-
-    fn build_landscape_params(&self) -> LandscapeUniformData {
-        let shift = self.landscape_mesh.get_shift_vector();
-        LandscapeUniformData {
-            level_shift: [shift.x, shift.y, shift.z, shift.w],
-            height_scale: self.landscape_mesh.height_scale(),
-            step: self.landscape_mesh.step(),
-            width: self.landscape_mesh.width() as i32,
-            _pad_width: 0,
-            sunlight: [self.sunlight.x, self.sunlight.y, self.sunlight.z, self.sunlight.w],
-            wat_offset: self.wat_offset,
-            curvature_scale: if self.curvature_enabled { self.curvature_scale } else { 0.0 },
-            camera_focus: {
-                let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
-                [center, center]
-            },
-            viewport_radius: {
-                let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
-                center * 0.9
-            },
-            _pad2: [0.0; 3],
-        }
-    }
-
-    /// The grid vertex that appears at the camera's focus point,
-    /// accounting for the landscape model transform.
-    fn camera_focus_vertex(&self) -> f32 {
-        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
-        // Camera focus is at world (center, center). Invert model transform to get model-space pos.
-        let model_x = (center - LANDSCAPE_OFFSET) / LANDSCAPE_SCALE;
-        model_x / self.landscape_mesh.step()
     }
 
     fn center_on_tribe0_shaman(&mut self) {
@@ -360,12 +666,12 @@ impl App {
             .and_then(|ur| ur.cells.iter().find(|(_, _, t)| *t == 0))
             .copied();
         if let Some((cx, cy, _)) = shaman_cell {
-            let n = self.landscape_mesh.width() as i32;
-            let v = self.camera_focus_vertex() as i32;
+            let n = self.engine.landscape_mesh.width() as i32;
+            let v = self.engine.camera_focus_vertex() as i32;
             let sx = ((cx as i32 - v) % n + n) % n;
             let sy = ((cy as i32 - v) % n + n) % n;
             log::info!("[center] shaman at cell ({}, {}), camera_vertex={}, shift -> ({}, {})", cx, cy, v, sx, sy);
-            self.landscape_mesh.set_shift(sx as usize, sy as usize);
+            self.engine.landscape_mesh.set_shift(sx as usize, sy as usize);
             self.rebuild_spawn_model();
         } else {
             log::warn!("[center] no tribe 0 shaman in unit_renders");
@@ -373,12 +679,12 @@ impl App {
     }
 
     fn update_level(&mut self) {
-        let base = self.config.base.clone().unwrap_or_else(|| Path::new("/opt/sandbox/pop").to_path_buf());
-        let level_type = self.config.landtype.as_deref();
-        let level_res = LevelRes::new(&base, self.level_num, level_type);
+        let base = self.engine.config.base.clone().unwrap_or_else(|| Path::new("/opt/sandbox/pop").to_path_buf());
+        let level_type = self.engine.config.landtype.as_deref();
+        let level_res = LevelRes::new(&base, self.engine.level_num, level_type);
 
         let shores = level_res.landscape.make_shores();
-        self.landscape_mesh.set_heights(&shores.height);
+        self.engine.landscape_mesh.set_heights(&shores.height);
 
         {
             let gpu = self.gpu.as_ref().unwrap();
@@ -410,12 +716,12 @@ impl App {
                 .map(|(_, c)| c.clone())
                 .unwrap_or_default();
         }
-        self.level_objects = extract_level_objects(&level_res);
+        self.engine.level_objects = extract_level_objects(&level_res);
 
         // Extract person units into the coordinator (they become live entities)
-        self.unit_coordinator.load_level(&level_res.units, &level_res.landscape.height, level_res.landscape.land_size());
+        self.engine.unit_coordinator.load_level(&level_res.units, &level_res.landscape.height, level_res.landscape.land_size());
         // Remove persons from static markers — they're now rendered by the coordinator
-        self.level_objects.retain(|obj| obj.model_type != ModelType::Person);
+        self.engine.level_objects.retain(|obj| obj.model_type != ModelType::Person);
 
         // Flatten terrain under buildings (modifies heightmap + re-uploads GPU buffer)
         self.flatten_terrain_under_buildings();
@@ -426,7 +732,7 @@ impl App {
         // Rebuild HUD atlas with new palette
         let panel_path = base.join("data").join("plspanel.spr");
         if let Some(panel_container) = ContainerPSFB::from_file(&panel_path) {
-            self.hud_panel_sprite_count = panel_container.len();
+            self.engine.hud_panel_sprite_count = panel_container.len();
             if let Some(ref mut hud) = self.hud {
                 let gpu = self.gpu.as_ref().unwrap();
                 hud.build_atlas(&gpu.device, &gpu.queue, &panel_container, &level_res.params.palette);
@@ -434,134 +740,24 @@ impl App {
         }
     }
 
-    /// Compute the terrain height under the orbit camera eye position.
-    fn camera_min_z(&self) -> f32 {
-        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
-        let az = (self.camera.angle_z as f32).to_radians();
-        let ax = (self.camera.angle_x as f32).to_radians();
-        let radius = 1.5 / self.zoom;
-        let eye_x = center + radius * ax.cos() * az.sin();
-        let eye_y = center + radius * ax.cos() * az.cos();
-        let step = self.landscape_mesh.step();
-        let n = self.landscape_mesh.width();
-        let gx = (eye_x / step).clamp(0.0, (n - 1) as f32) as usize;
-        let gy = (eye_y / step).clamp(0.0, (n - 1) as f32) as usize;
-        // Add shift to match what the shader renders at this world position
-        let shift = self.landscape_mesh.get_shift_vector();
-        let sx = (gx + shift.x as usize) % n;
-        let sy = (gy + shift.y as usize) % n;
-        self.landscape_mesh.height_at(sx, sy) as f32 * self.landscape_mesh.height_scale() + 0.05
-    }
-
-    /// Ray-cast a screen click onto the landscape mesh and return cell coordinates.
-    /// Returns None if the ray misses the terrain entirely.
-    fn screen_to_cell(&self) -> Option<(f32, f32)> {
-        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
-        let focus = Vector3::new(center, center, 0.0);
-        let min_z = self.camera_min_z();
-        let (v1, v2) = screen_to_scene_zoom(&self.screen, &self.camera, &self.mouse_pos, self.zoom, focus, min_z);
-
-        // Must use the actual landscape model transform (translate + scale)
-        let mvp_transform = Matrix4::from_translation(Vector3::new(LANDSCAPE_OFFSET, LANDSCAPE_OFFSET, 0.0))
-            * Matrix4::from_scale(LANDSCAPE_SCALE);
-        let iter = self.landscape_mesh.iter();
-
-        match intersect_iter(iter, &mvp_transform, v1, v2) {
-            Some((triangle_id, _)) => {
-                let shift = self.landscape_mesh.get_shift_vector();
-                Some(triangle_to_cell(
-                    triangle_id,
-                    self.landscape_mesh.width(),
-                    shift.x as usize,
-                    shift.y as usize,
-                ))
-            }
-            None => None,
-        }
-    }
-
-    /// Build the projection-view-model matrix for unit screen projection.
-    fn unit_pvm(&self) -> Matrix4<f32> {
-        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
-        let focus = Vector3::new(center, center, 0.0);
-        let min_z = self.camera_min_z();
-        let mvp = MVP::with_zoom(&self.screen, &self.camera, self.zoom, focus, min_z);
-        let model_transform = Matrix4::from_translation(Vector3::new(LANDSCAPE_OFFSET, LANDSCAPE_OFFSET, 0.0))
-            * Matrix4::from_scale(LANDSCAPE_SCALE);
-        mvp.projection * mvp.view * model_transform
-    }
-
-    /// Project a unit's billboard center to screen coordinates.
-    /// Returns None if behind camera.
-    fn unit_screen_pos(&self, unit: &Unit, pvm: &Matrix4<f32>) -> Option<(f32, f32)> {
-        let step = self.landscape_mesh.step();
-        let w = self.landscape_mesh.width() as f32;
-        let shift = self.landscape_mesh.get_shift_vector();
-        let height_scale = self.landscape_mesh.height_scale();
-        let center = (w - 1.0) * step / 2.0;
-        let cs = if self.curvature_enabled { self.curvature_scale } else { 0.0 };
-
-        let vis_x = ((unit.cell_x - shift.x as f32) % w + w) % w;
-        let vis_y = ((unit.cell_y - shift.y as f32) % w + w) % w;
-        let gx = vis_x * step;
-        let gy = vis_y * step;
-        let ix = (unit.cell_x as usize).min(127);
-        let iy = (unit.cell_y as usize).min(127);
-        let gz = self.landscape_mesh.height_at(ix, iy) as f32 * height_scale;
-        let dx = gx - center;
-        let dy = gy - center;
-        let curvature_offset = (dx * dx + dy * dy) * cs;
-        let z_base = gz - curvature_offset;
-
-        project_to_screen([gx, gy, z_base], pvm, self.screen.width as f32, self.screen.height as f32)
-    }
-
-    /// Find the unit whose billboard is closest to the screen click position.
-    fn find_unit_at_screen_pos(&self, mouse: &Point2<f32>) -> Option<usize> {
-        let pvm = self.unit_pvm();
-        let candidates = self.unit_coordinator.units.iter().filter_map(|unit| {
-            self.unit_screen_pos(unit, &pvm).map(|(sx, sy)| (unit.id, sx, sy))
-        });
-        nearest_screen_hit(candidates, mouse.x, mouse.y, 20.0)
-    }
-
-    /// Find all units whose billboard centers project into a screen rectangle.
-    fn units_in_screen_rect(&self, corner_a: Point2<f32>, corner_b: Point2<f32>) -> Vec<usize> {
-        let min_x = corner_a.x.min(corner_b.x);
-        let max_x = corner_a.x.max(corner_b.x);
-        let min_y = corner_a.y.min(corner_b.y);
-        let max_y = corner_a.y.max(corner_b.y);
-
-        let pvm = self.unit_pvm();
-        let mut ids = Vec::new();
-        for unit in &self.unit_coordinator.units {
-            if let Some((sx, sy)) = self.unit_screen_pos(unit, &pvm) {
-                if sx >= min_x && sx <= max_x && sy >= min_y && sy <= max_y {
-                    ids.push(unit.id);
-                }
-            }
-        }
-        ids
-    }
-
     fn log_camera_state(&mut self, event: &str) {
         let t = self.start_time.elapsed().as_secs_f64();
-        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
-        let az = (self.camera.angle_z as f32).to_radians();
-        let ax = (self.camera.angle_x as f32).to_radians();
-        let radius = 1.5 / self.zoom;
+        let center = (self.engine.landscape_mesh.width() - 1) as f32 * self.engine.landscape_mesh.step() / 2.0;
+        let az = (self.engine.camera.angle_z as f32).to_radians();
+        let ax = (self.engine.camera.angle_x as f32).to_radians();
+        let radius = 1.5 / self.engine.zoom;
         let eye_x = center + radius * ax.cos() * az.sin();
         let eye_y = center + radius * ax.cos() * az.cos();
         let eye_z_orbit = -radius * ax.sin();
-        let min_z = self.camera_min_z();
+        let min_z = self.engine.camera_min_z();
         let eye_z = eye_z_orbit.max(min_z);
-        let shift = self.landscape_mesh.get_shift_vector();
+        let shift = self.engine.landscape_mesh.get_shift_vector();
         let _ = writeln!(
             self.debug_log,
             r#"{{"t":{:.3},"event":"{}","angle_x":{},"angle_z":{},"zoom":{:.3},"radius":{:.4},"eye":[{:.4},{:.4},{:.4}],"eye_z_orbit":{:.4},"min_z":{:.4},"focus":[{:.4},{:.4},0.0],"shift":[{},{}]}}"#,
             t, event,
-            self.camera.angle_x, self.camera.angle_z,
-            self.zoom, radius,
+            self.engine.camera.angle_x, self.engine.camera.angle_z,
+            self.engine.zoom, radius,
             eye_x, eye_y, eye_z, eye_z_orbit, min_z,
             center, center,
             shift.x, shift.y,
@@ -597,16 +793,16 @@ impl App {
             let parts: Vec<&str> = coords.trim().split_whitespace().collect();
             if parts.len() == 2 {
                 if let (Ok(x), Ok(y)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>()) {
-                    self.mouse_pos = Point2::new(x, y);
+                    self.input.mouse_pos = Point2::new(x, y);
                     log::info!("[script] click at ({}, {})", x, y);
                     // Simulate left press + release (selection)
-                    match self.find_unit_at_screen_pos(&self.mouse_pos) {
+                    match self.engine.find_unit_at_screen_pos(&self.input.mouse_pos) {
                         Some(id) => {
-                            self.unit_coordinator.selection.select_single(id);
+                            self.engine.unit_coordinator.selection.select_single(id);
                             log::info!("[script] selected unit {}", id);
                         }
                         None => {
-                            self.unit_coordinator.selection.clear();
+                            self.engine.unit_coordinator.selection.clear();
                             log::info!("[script] no unit at click, selection cleared");
                         }
                     }
@@ -622,14 +818,16 @@ impl App {
             let parts: Vec<&str> = coords.trim().split_whitespace().collect();
             if parts.len() == 2 {
                 if let (Ok(x), Ok(y)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>()) {
-                    self.mouse_pos = Point2::new(x, y);
+                    self.input.mouse_pos = Point2::new(x, y);
                     log::info!("[script] rightclick at ({}, {})", x, y);
-                    if let Some((cx, cy)) = self.screen_to_cell() {
-                        let target = cell_to_world(cx, cy, self.landscape_mesh.width() as f32);
-                        let walkable = self.unit_coordinator.region_map().is_walkable(target.to_tile());
+                    if let Some((cx, cy)) = self.engine.screen_to_cell(&self.input.mouse_pos) {
+                        let target = cell_to_world(cx, cy, self.engine.landscape_mesh.width() as f32);
+                        let walkable = self.engine.unit_coordinator.region_map().is_walkable(target.to_tile());
                         log::info!("[script] rightclick cell=({:.1}, {:.1}) → world=({}, {}) walkable={}",
                             cx, cy, target.x, target.z, walkable);
-                        self.unit_coordinator.order_move(target);
+                        self.engine.apply_command(&GameCommand::OrderMove {
+                            x: target.x as f32, z: target.z as f32,
+                        });
                     } else {
                         log::warn!("[script] rightclick: screen_to_cell returned None");
                     }
@@ -641,9 +839,9 @@ impl App {
 
         // Parse dump command: log all unit screen positions
         if cmd.trim() == "dump_units" {
-            let pvm = self.unit_pvm();
-            for unit in &self.unit_coordinator.units {
-                if let Some((sx, sy)) = self.unit_screen_pos(unit, &pvm) {
+            let pvm = self.engine.unit_pvm();
+            for unit in &self.engine.unit_coordinator.units {
+                if let Some((sx, sy)) = self.engine.unit_screen_pos(unit, &pvm) {
                     log::info!("[dump] unit {} tribe={} cell=({:.2}, {:.2}) screen=({:.0}, {:.0})",
                         unit.id, unit.tribe_index, unit.cell_x, unit.cell_y, sx, sy);
                 } else {
@@ -657,7 +855,7 @@ impl App {
         // Parse zoom command
         if let Some(val) = cmd.strip_prefix("zoom ") {
             if let Ok(z) = val.trim().parse::<f32>() {
-                self.zoom = z.clamp(0.3, 5.0);
+                self.engine.apply_command(&GameCommand::SetZoom(z));
                 self.log_camera_state("zoom");
                 self.do_render = true;
                 return true;
@@ -690,64 +888,59 @@ impl App {
             }
         };
 
-        // Replay through the same logic as the keyboard handler
-        match key {
-            KeyCode::KeyR => {
-                self.camera.angle_x = -55;
-                self.camera.angle_y = 0;
-                self.camera.angle_z = 0;
-                self.camera.pos = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
-                self.rebuild_spawn_model();
-                self.log_camera_state("reset");
-            },
-            KeyCode::KeyT => {
-                self.camera.angle_x = -90;
-                self.log_camera_state("KeyT");
-            },
-            KeyCode::Space => {
-                self.center_on_tribe0_shaman();
-                self.log_camera_state("space_center");
-            },
-            KeyCode::KeyC => {
-                self.curvature_enabled = !self.curvature_enabled;
-                self.rebuild_spawn_model();
-            },
-            KeyCode::KeyO => {
-                self.show_objects = !self.show_objects;
-            },
-            KeyCode::BracketRight => {
-                self.curvature_scale *= 1.2;
-                self.rebuild_spawn_model();
-            },
-            KeyCode::BracketLeft => {
-                self.curvature_scale *= 0.8;
-                self.rebuild_spawn_model();
-            },
-            _ => {
-                let prev_shift = self.landscape_mesh.get_shift_vector();
-                let prev_angle_z = self.camera.angle_z;
-                let prev_angle_x = self.camera.angle_x;
-                process_key(key, &mut self.camera, &mut self.landscape_mesh);
-                let new_shift = self.landscape_mesh.get_shift_vector();
-                let shift_changed = new_shift != prev_shift;
-                if shift_changed || self.camera.angle_z != prev_angle_z || self.camera.angle_x != prev_angle_x {
+        // Replay through translate_key → apply_command
+        if let Some(cmd) = translate_key(key) {
+            let prev_shift = self.engine.landscape_mesh.get_shift_vector();
+            self.engine.apply_command(&cmd);
+
+            // App-level side effects (same as keyboard handler)
+            match &cmd {
+                GameCommand::Quit => { return false; }
+                GameCommand::NextShader => { self.program_container.next(); }
+                GameCommand::PrevShader => { self.program_container.prev(); }
+                GameCommand::NextLevel | GameCommand::PrevLevel => {
+                    self.update_level();
+                }
+                GameCommand::CenterOnShaman => {
+                    self.center_on_tribe0_shaman();
+                    self.log_camera_state("space_center");
+                }
+                GameCommand::ResetCamera => {
+                    self.rebuild_spawn_model();
+                    self.log_camera_state("reset");
+                }
+                GameCommand::TopDownView => {
+                    self.log_camera_state("KeyT");
+                }
+                GameCommand::ToggleCurvature | GameCommand::AdjustCurvature { .. } => {
+                    self.rebuild_spawn_model();
+                }
+                GameCommand::PanScreen { .. } | GameCommand::PanTerrain { .. } => {
+                    let new_shift = self.engine.landscape_mesh.get_shift_vector();
+                    if new_shift != prev_shift {
+                        self.rebuild_spawn_model();
+                        self.log_camera_state(&format!("{:?}", key));
+                    }
+                }
+                GameCommand::RotateCamera { .. } | GameCommand::TiltCamera { .. } => {
                     self.rebuild_spawn_model();
                     self.log_camera_state(&format!("{:?}", key));
                 }
-            },
+                _ => {}
+            }
+            self.do_render = true;
         }
-        self.do_render = true;
         true
     }
 
     fn rebuild_spawn_model(&mut self) {
         if let Some(ref gpu) = self.gpu {
-            let cs = if self.curvature_enabled { self.curvature_scale } else { 0.0 };
+            let cs = if self.engine.curvature_enabled { self.engine.curvature_scale } else { 0.0 };
             for ur in &mut self.unit_renders {
                 if !ur.cells.is_empty() {
                     ur.model = Some(build_spawn_model(
-                        &gpu.device, &ur.cells, &self.landscape_mesh, cs,
-                        self.camera.angle_x, self.camera.angle_z,
+                        &gpu.device, &ur.cells, &self.engine.landscape_mesh, cs,
+                        self.engine.camera.angle_x, self.engine.camera.angle_z,
                         ur.frame_width, ur.frame_height, ur.frames_per_dir,
                     ));
                 } else {
@@ -817,30 +1010,30 @@ impl App {
 
     fn rebuild_unit_models(&mut self) {
         if let Some(ref gpu) = self.gpu {
-            let cs = if self.curvature_enabled { self.curvature_scale } else { 0.0 };
+            let cs = if self.engine.curvature_enabled { self.engine.curvature_scale } else { 0.0 };
             self.model_unit_markers = build_unit_markers(
-                &gpu.device, &self.unit_coordinator.units, &self.landscape_mesh, cs,
-                self.camera.angle_x, self.camera.angle_z,
+                &gpu.device, &self.engine.unit_coordinator.units, &self.engine.landscape_mesh, cs,
+                self.engine.camera.angle_x, self.engine.camera.angle_z,
             );
             self.model_selection_rings = build_selection_rings(
-                &gpu.device, &self.unit_coordinator,
-                &self.landscape_mesh, cs,
+                &gpu.device, &self.engine.unit_coordinator,
+                &self.engine.landscape_mesh, cs,
             );
         }
     }
 
     /// Flatten terrain under all building footprints (matching original game's
-    /// Building_FlattenTerrain @ 0x0042F2A0). Modifies self.landscape_mesh heights
+    /// Building_FlattenTerrain @ 0x0042F2A0). Modifies self.engine.landscape_mesh heights
     /// and re-uploads the GPU heights buffer.
     fn flatten_terrain_under_buildings(&mut self) {
-        for obj in &self.level_objects {
+        for obj in &self.engine.level_objects {
             if obj.model_type != ModelType::Building { continue; }
             let idx = match object_3d_index(&obj.model_type, obj.subtype, obj.tribe_index) {
                 Some(i) => i,
                 None => continue,
             };
-            let obj3d = match idx < self.objects_3d.len() {
-                true => match &self.objects_3d[idx] {
+            let obj3d = match idx < self.engine.objects_3d.len() {
+                true => match &self.engine.objects_3d[idx] {
                     Some(o) => o,
                     None => continue,
                 },
@@ -850,9 +1043,9 @@ impl App {
             // rotation = (angle + 0x1FF) >> 9
             let rotation = ((obj.angle.wrapping_add(0x1FF)) >> 9) as usize & 3;
             let fp_idx = obj3d.footprint_index(rotation);
-            if fp_idx < 0 || (fp_idx as usize) >= self.shapes.len() { continue; }
-            let shape = &self.shapes[fp_idx as usize];
-            self.landscape_mesh.flatten_building_footprint(
+            if fp_idx < 0 || (fp_idx as usize) >= self.engine.shapes.len() { continue; }
+            let shape = &self.engine.shapes[fp_idx as usize];
+            self.engine.landscape_mesh.flatten_building_footprint(
                 obj.cell_x as usize, obj.cell_y as usize,
                 shape,
                 true, // use average height (default for most building types)
@@ -862,7 +1055,7 @@ impl App {
         // Re-upload modified heights to GPU
         if let Some(ref gpu) = self.gpu {
             if let Some(ref heights_buf) = self.heights_buffer {
-                let heights_vec = self.landscape_mesh.heights_to_gpu_vec();
+                let heights_vec = self.engine.landscape_mesh.heights_to_gpu_vec();
                 let heights_bytes: &[u8] = bytemuck::cast_slice(&heights_vec);
                 heights_buf.update(&gpu.queue, 0, heights_bytes);
             }
@@ -871,14 +1064,14 @@ impl App {
 
     fn rebuild_object_markers(&mut self) {
         if let Some(ref gpu) = self.gpu {
-            let cs = if self.curvature_enabled { self.curvature_scale } else { 0.0 };
+            let cs = if self.engine.curvature_enabled { self.engine.curvature_scale } else { 0.0 };
             self.model_objects = Some(build_object_markers(
-                &gpu.device, &self.level_objects, &self.landscape_mesh, cs,
-                self.camera.angle_x, self.camera.angle_z,
+                &gpu.device, &self.engine.level_objects, &self.engine.landscape_mesh, cs,
+                self.engine.camera.angle_x, self.engine.camera.angle_z,
             ));
             self.model_buildings = Some(build_building_meshes(
-                &gpu.device, &self.level_objects, &self.objects_3d,
-                &self.shapes, &self.landscape_mesh, cs,
+                &gpu.device, &self.engine.level_objects, &self.engine.objects_3d,
+                &self.engine.shapes, &self.engine.landscape_mesh, cs,
             ));
         }
         self.rebuild_unit_models();
@@ -888,93 +1081,6 @@ impl App {
         // HUD is rebuilt each frame in draw_hud(), nothing needed here
     }
 
-    /// Build HudState from current game state (game logic → HUD data contract).
-    fn build_hud_state(&self) -> HudState {
-        // Build minimap data
-        let dots: Vec<MinimapDot> = self.unit_coordinator.units.iter()
-            .filter(|u| u.alive)
-            .map(|u| MinimapDot {
-                cell_x: (u.cell_x as u8).min(127),
-                cell_y: (u.cell_y as u8).min(127),
-                tribe_index: u.tribe_index,
-            })
-            .collect();
-        let minimap = MinimapData {
-            heights: *self.landscape_mesh.heights(),
-            dots,
-        };
-
-        // Build panel entries for the active tab
-        let panel_entries = match self.hud_tab {
-            HudTab::Spells => {
-                ["Burn", "Blast", "Lightning", "Whirlwind",
-                 "Plague", "Invisibility", "Firestorm", "Hypnotize",
-                 "Ghost Army", "Erosion", "Swamp", "Land Bridge",
-                 "Angel/Death", "Earthquake", "Flatten", "Volcano"]
-                    .iter()
-                    .map(|name| PanelEntry {
-                        label: name.to_string(),
-                        color: [0.8, 0.9, 1.0, 0.9],
-                    })
-                    .collect()
-            }
-            HudTab::Buildings => {
-                ["Hut", "Guard Tower", "Temple", "Spy Hut",
-                 "Warrior Hut", "Firewarrior Hut", "Prison", "Boat Hut"]
-                    .iter()
-                    .map(|name| PanelEntry {
-                        label: name.to_string(),
-                        color: [0.9, 0.85, 0.7, 0.9],
-                    })
-                    .collect()
-            }
-            HudTab::Units => {
-                let unit_types: [(u8, &str); 6] = [
-                    (PERSON_SUBTYPE_BRAVE, "Brave"),
-                    (PERSON_SUBTYPE_WARRIOR, "Warrior"),
-                    (PERSON_SUBTYPE_SPY, "Spy"),
-                    (PERSON_SUBTYPE_PREACHER, "Preacher"),
-                    (PERSON_SUBTYPE_FIREWARRIOR, "Firewarr"),
-                    (PERSON_SUBTYPE_SHAMAN, "Shaman"),
-                ];
-                unit_types.iter().map(|(subtype, name)| {
-                    let count = self.unit_coordinator.units.iter()
-                        .filter(|u| u.alive && u.subtype == *subtype && u.tribe_index == 0)
-                        .count();
-                    PanelEntry {
-                        label: format!("{}: {}", name, count),
-                        color: [0.7, 1.0, 0.7, 0.9],
-                    }
-                }).collect()
-            }
-        };
-
-        // Build tribe populations
-        let mut tribe_counts = [0u32; 4];
-        for u in &self.unit_coordinator.units {
-            if u.alive && (u.tribe_index as usize) < 4 {
-                tribe_counts[u.tribe_index as usize] += 1;
-            }
-        }
-        let tribe_populations: Vec<TribePopulation> = (0..4u8)
-            .filter(|&t| tribe_counts[t as usize] > 0)
-            .map(|t| TribePopulation {
-                tribe_index: t,
-                count: tribe_counts[t as usize],
-                color: HUD_TRIBE_COLORS[t as usize],
-            })
-            .collect();
-
-        HudState {
-            active_tab: self.hud_tab,
-            minimap,
-            panel_entries,
-            tribe_populations,
-            level_num: self.level_num as u32,
-            frame_count: self.frame_count as u64,
-        }
-    }
-
     fn draw_hud(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
         let gpu = match self.gpu.as_ref() {
             Some(g) => g,
@@ -982,8 +1088,8 @@ impl App {
         };
 
         // Build HUD data from game state (decoupled)
-        let hud_state = self.build_hud_state();
-        let layout = hud::compute_hud_layout(self.screen.width as f32, self.screen.height as f32);
+        let hud_state = self.engine.build_hud_state();
+        let layout = hud::compute_hud_layout(self.engine.screen.width as f32, self.engine.screen.height as f32);
 
         let hud = match self.hud.as_mut() {
             Some(h) => h,
@@ -1064,7 +1170,7 @@ impl App {
         self.program_container = LandscapeProgramContainer::new();
 
         // CPU palette index variant
-        if self.config.cpu {
+        if self.engine.config.cpu {
             let land_texture = make_texture_land(level_res, None);
             let size = (level_res.landscape.land_size() * 32) as u32;
 
@@ -1113,7 +1219,7 @@ impl App {
         }
 
         // CPU full texture variant
-        if self.config.cpu_full {
+        if self.engine.config.cpu_full {
             let land_texture = make_texture_land(level_res, None);
             let size = (level_res.landscape.land_size() * 32) as u32;
             let full_tex_data = draw_texture_u8(&level_res.params.palette, size as usize, &land_texture);
@@ -1240,13 +1346,14 @@ impl App {
     }
 
     fn render(&mut self) {
+        let frame = self.engine.frame_state(&self.input.drag_state);
         let gpu = self.gpu.as_ref().unwrap();
 
         // Update uniforms
-        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+        let center = (frame.landscape.width() - 1) as f32 * frame.landscape.step() / 2.0;
         let focus = Vector3::new(center, center, 0.0);
-        let min_z = self.camera_min_z();
-        let mvp = MVP::with_zoom(&self.screen, &self.camera, self.zoom, focus, min_z);
+        let min_z = self.engine.camera_min_z();
+        let mvp = MVP::with_zoom(frame.screen, frame.camera, frame.zoom, focus, min_z);
         let mvp_m = mvp.projection * mvp.view * mvp.transform;
         let mvp_raw: TransformRaw = mvp_m.into();
         self.mvp_buffer.as_ref().unwrap().update(&gpu.queue, 0, bytemuck::bytes_of(&mvp_raw));
@@ -1257,7 +1364,7 @@ impl App {
         }
 
         // Update landscape params
-        let params = self.build_landscape_params();
+        let params = self.engine.build_landscape_params();
         self.landscape_params_buffer.as_ref().unwrap().update(&gpu.queue, 0, bytemuck::bytes_of(&params));
 
         // Update selection uniform
@@ -1270,7 +1377,7 @@ impl App {
         // Update sky yaw offset
         if let Some(ref sky_buf) = self.sky_uniform_buffer {
             // angle_z is in degrees; map to 0..1 range for UV offset
-            let yaw = (self.camera.angle_z as f32) / 360.0;
+            let yaw = (frame.camera.angle_z as f32) / 360.0;
             sky_buf.update(&gpu.queue, 0, bytemuck::bytes_of(&[yaw, 0.0f32, 0.0f32, 0.0f32]));
         }
 
@@ -1345,7 +1452,7 @@ impl App {
             }
 
             // Draw 3D building meshes (identity model transform, same as markers)
-            if self.show_objects {
+            if frame.show_objects {
                 if let (Some(ref pipeline), Some(ref bg1)) =
                     (&self.building_pipeline, &self.building_bind_group_1)
                 {
@@ -1360,7 +1467,7 @@ impl App {
             }
 
             // Draw level object markers (non-building objects)
-            if self.show_objects {
+            if frame.show_objects {
                 if let Some(ref marker_pipeline) = self.objects_marker_pipeline {
                     render_pass.set_pipeline(marker_pipeline);
                     render_pass.set_bind_group(0, self.objects_group0_bind_group.as_ref().unwrap(), &[]);
@@ -1385,8 +1492,9 @@ impl App {
         }
 
         // HUD pass (2D overlay — no depth, load existing color)
-        // End the `gpu` borrow before calling draw_hud (needs &mut self)
+        // End borrows before calling draw_hud (needs &mut self)
         let _ = gpu;
+        drop(frame);
         self.draw_hud(&mut encoder, &view);
 
         let gpu = self.gpu.as_ref().unwrap();
@@ -1411,12 +1519,12 @@ impl ApplicationHandler for App {
         let gpu = pollster::block_on(GpuContext::new(window));
         let device = &gpu.device;
 
-        let base = self.config.base.clone().unwrap_or_else(|| Path::new("/opt/sandbox/pop").to_path_buf());
-        let level_type = self.config.landtype.as_deref();
-        let level_res = LevelRes::new(&base, self.level_num, level_type);
+        let base = self.engine.config.base.clone().unwrap_or_else(|| Path::new("/opt/sandbox/pop").to_path_buf());
+        let level_type = self.engine.config.landtype.as_deref();
+        let level_res = LevelRes::new(&base, self.engine.level_num, level_type);
 
         let shores = level_res.landscape.make_shores();
-        self.landscape_mesh.set_heights(&shores.height);
+        self.engine.landscape_mesh.set_heights(&shores.height);
 
         // Heights storage buffer
         let heights_vec = shores.to_vec();
@@ -1433,7 +1541,7 @@ impl ApplicationHandler for App {
         let model_transform_buffer = GpuBuffer::new_uniform(device, 64, "model_transform_buffer");
         let landscape_params_buffer = GpuBuffer::new_uniform_init(
             device,
-            bytemuck::bytes_of(&self.build_landscape_params()),
+            bytemuck::bytes_of(&self.engine.build_landscape_params()),
             "landscape_params_buffer",
         );
 
@@ -1488,7 +1596,7 @@ impl ApplicationHandler for App {
         });
 
         // Landscape model
-        let model_main = make_landscape_model(device, &self.landscape_mesh);
+        let model_main = make_landscape_model(device, &self.engine.landscape_mesh);
 
         // Shaman sprite atlas and pipeline
         let sprite_group1_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1764,7 +1872,7 @@ impl ApplicationHandler for App {
         // HUD renderer (replaces old overlay text pipeline)
         let hud_renderer = HudRenderer::new(
             device, &gpu.queue, gpu.surface_format(),
-            self.screen.width as f32, self.screen.height as f32,
+            self.engine.screen.width as f32, self.engine.screen.height as f32,
         );
 
         // Store everything
@@ -1781,8 +1889,8 @@ impl ApplicationHandler for App {
         self.spawn_pipeline = Some(spawn_pipeline);
         self.sprite_group1_layout = Some(sprite_group1_layout);
         self.objects_marker_pipeline = Some(objects_marker_pipeline);
-        self.objects_3d = objects_3d;
-        self.shapes = shapes;
+        self.engine.objects_3d = objects_3d;
+        self.engine.shapes = shapes;
         self.building_pipeline = Some(building_pipeline);
         self.building_bind_group_1 = Some(building_bind_group_1);
         self.sky_pipeline = sky_pipeline;
@@ -1794,9 +1902,9 @@ impl ApplicationHandler for App {
         self.gpu = Some(gpu);
 
         // Build landscape variants (needs self.gpu, heights_buffer, etc.)
-        let base2 = self.config.base.clone().unwrap_or_else(|| Path::new("/opt/sandbox/pop").to_path_buf());
-        let level_type2 = self.config.landtype.as_deref();
-        let level_res2 = LevelRes::new(&base2, self.level_num, level_type2);
+        let base2 = self.engine.config.base.clone().unwrap_or_else(|| Path::new("/opt/sandbox/pop").to_path_buf());
+        let level_type2 = self.engine.config.landtype.as_deref();
+        let level_res2 = LevelRes::new(&base2, self.engine.level_num, level_type2);
         self.rebuild_landscape_variants(&level_res2);
 
         // Build per-unit-type sprite atlases
@@ -1810,11 +1918,11 @@ impl ApplicationHandler for App {
                 .map(|(_, c)| c.clone())
                 .unwrap_or_default();
         }
-        self.level_objects = extract_level_objects(&level_res2);
+        self.engine.level_objects = extract_level_objects(&level_res2);
 
         // Extract person units into the coordinator (they become live entities)
-        self.unit_coordinator.load_level(&level_res2.units, &level_res2.landscape.height, level_res2.landscape.land_size());
-        self.level_objects.retain(|obj| obj.model_type != ModelType::Person);
+        self.engine.unit_coordinator.load_level(&level_res2.units, &level_res2.landscape.height, level_res2.landscape.land_size());
+        self.engine.level_objects.retain(|obj| obj.model_type != ModelType::Person);
 
         // Flatten terrain under buildings (modifies heightmap + re-uploads GPU buffer)
         self.flatten_terrain_under_buildings();
@@ -1826,12 +1934,12 @@ impl ApplicationHandler for App {
         {
             let panel_path = base2.join("data").join("plspanel.spr");
             if let Some(panel_container) = ContainerPSFB::from_file(&panel_path) {
-                self.hud_panel_sprite_count = panel_container.len();
+                self.engine.hud_panel_sprite_count = panel_container.len();
                 if let Some(ref mut hud) = self.hud {
                     let gpu = self.gpu.as_ref().unwrap();
                     hud.build_atlas(&gpu.device, &gpu.queue, &panel_container, &level_res2.params.palette);
                 }
-                log::info!("[hud] Loaded {} sprites from plspanel.spr", self.hud_panel_sprite_count);
+                log::info!("[hud] Loaded {} sprites from plspanel.spr", self.engine.hud_panel_sprite_count);
             } else {
                 log::warn!("[hud] plspanel.spr not found at {:?}, using font-only atlas", panel_path);
             }
@@ -1843,8 +1951,8 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: winit::window::WindowId, event: WindowEvent) {
         match event {
             WindowEvent::Resized(physical_size) => {
-                self.screen.width = physical_size.width;
-                self.screen.height = physical_size.height;
+                self.engine.screen.width = physical_size.width;
+                self.engine.screen.height = physical_size.height;
                 if let Some(gpu) = self.gpu.as_mut() {
                     gpu.resize(physical_size);
                 }
@@ -1852,81 +1960,84 @@ impl ApplicationHandler for App {
                 self.do_render = true;
             },
             WindowEvent::CursorMoved { position, .. } => {
-                self.mouse_pos = Point2::<f32>::new(position.x as f32, position.y as f32);
+                self.input.mouse_pos = Point2::<f32>::new(position.x as f32, position.y as f32);
 
                 // Update drag state
-                match self.drag_state {
+                match self.input.drag_state {
                     DragState::PendingDrag { start } => {
-                        let dx = self.mouse_pos.x - start.x;
-                        let dy = self.mouse_pos.y - start.y;
+                        let dx = self.input.mouse_pos.x - start.x;
+                        let dy = self.input.mouse_pos.y - start.y;
                         if dx * dx + dy * dy > 25.0 { // 5px threshold
-                            self.drag_state = DragState::Dragging { start, current: self.mouse_pos };
+                            self.input.drag_state = DragState::Dragging { start, current: self.input.mouse_pos };
                             self.do_render = true;
                         }
                     }
                     DragState::Dragging { start, .. } => {
-                        self.drag_state = DragState::Dragging { start, current: self.mouse_pos };
+                        self.input.drag_state = DragState::Dragging { start, current: self.input.mouse_pos };
                         self.do_render = true;
                     }
                     DragState::None => {}
                 }
             },
             WindowEvent::MouseInput { state, button, .. } => {
-                let layout = hud::compute_hud_layout(self.screen.width as f32, self.screen.height as f32);
-                let on_sidebar = self.mouse_pos.x < layout.sidebar_w;
+                let layout = hud::compute_hud_layout(self.engine.screen.width as f32, self.engine.screen.height as f32);
+                let on_sidebar = self.input.mouse_pos.x < layout.sidebar_w;
 
                 match (button, state) {
                     (MouseButton::Left, ElementState::Pressed) => {
                         if on_sidebar {
-                            if let Some(tab) = hud::detect_tab_click(self.mouse_pos.x, self.mouse_pos.y, &layout) {
-                                self.hud_tab = tab;
+                            if let Some(tab) = hud::detect_tab_click(self.input.mouse_pos.x, self.input.mouse_pos.y, &layout) {
+                                self.engine.apply_command(&GameCommand::SetHudTab(tab));
                             }
                             self.do_render = true;
                         } else {
                             // Start potential drag (game world interaction)
-                            self.drag_state = DragState::PendingDrag { start: self.mouse_pos };
+                            self.input.drag_state = DragState::PendingDrag { start: self.input.mouse_pos };
                         }
                     }
                     (MouseButton::Left, ElementState::Released) => {
                         if !on_sidebar {
-                            match self.drag_state {
+                            match self.input.drag_state {
                                 DragState::PendingDrag { .. } => {
-                                    // Short click (no drag) — single-select via billboard projection
-                                    match self.find_unit_at_screen_pos(&self.mouse_pos) {
-                                        Some(id) => self.unit_coordinator.selection.select_single(id),
-                                        None => self.unit_coordinator.selection.clear(),
-                                    }
+                                    // Short click (no drag) — resolve screen pos to unit command
+                                    let cmd = match self.engine.find_unit_at_screen_pos(&self.input.mouse_pos) {
+                                        Some(id) => GameCommand::SelectUnit(id),
+                                        None => GameCommand::ClearSelection,
+                                    };
+                                    self.engine.apply_command(&cmd);
                                 }
                                 DragState::Dragging { start, current } => {
-                                    // Drag release — box-select units in screen rectangle
-                                    let ids = self.units_in_screen_rect(start, current);
-                                    self.unit_coordinator.selection.select_multiple(ids);
+                                    // Drag release — resolve screen rect to unit IDs
+                                    let ids = self.engine.units_in_screen_rect(start, current);
+                                    self.engine.apply_command(&GameCommand::SelectMultiple(ids));
                                 }
                                 DragState::None => {}
                             }
                         }
-                        self.drag_state = DragState::None;
+                        self.input.drag_state = DragState::None;
                         self.rebuild_unit_models();
                     }
                     (MouseButton::Right, ElementState::Pressed) => {
                         if !on_sidebar {
-                            // Right-click: move order
-                            if let Some((cx, cy)) = self.screen_to_cell() {
-                                let target = cell_to_world(cx, cy, self.landscape_mesh.width() as f32);
-                                let selected = self.unit_coordinator.selection.selected.len();
+                            // Right-click: resolve screen pos to world coords, then issue move
+                            if let Some((cx, cy)) = self.engine.screen_to_cell(&self.input.mouse_pos) {
+                                let target = cell_to_world(cx, cy, self.engine.landscape_mesh.width() as f32);
+                                let selected = self.engine.unit_coordinator.selection.selected.len();
                                 log::info!("[move-order] click cell=({:.1}, {:.1}) → world=({}, {}) selected={}",
                                     cx, cy, target.x, target.z, selected);
                                 if selected > 0 {
-                                    let uid = self.unit_coordinator.selection.selected[0];
-                                    if let Some(u) = self.unit_coordinator.units.get(uid) {
-                                        let walkable = self.unit_coordinator.region_map()
+                                    let uid = self.engine.unit_coordinator.selection.selected[0];
+                                    if let Some(u) = self.engine.unit_coordinator.units.get(uid) {
+                                        let walkable = self.engine.unit_coordinator.region_map()
                                             .is_walkable(target.to_tile());
                                         log::info!("[move-order] unit {} at world=({}, {}) cell=({:.1}, {:.1}) target_walkable={}",
                                             uid, u.movement.position.x, u.movement.position.z,
                                             u.cell_x, u.cell_y, walkable);
                                     }
                                 }
-                                self.unit_coordinator.order_move(target);
+                                self.engine.apply_command(&GameCommand::OrderMove {
+                                    x: target.x as f32, z: target.z as f32,
+                                });
                             } else {
                                 log::warn!("[move-order] screen_to_cell returned None");
                             }
@@ -1941,8 +2052,8 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 50.0,
                 };
-                self.zoom *= 1.1_f32.powf(scroll_y);
-                self.zoom = self.zoom.clamp(0.3, 5.0);
+                let new_zoom = self.engine.zoom * 1.1_f32.powf(scroll_y);
+                self.engine.apply_command(&GameCommand::SetZoom(new_zoom));
                 self.log_camera_state("zoom");
                 self.do_render = true;
             },
@@ -1950,100 +2061,44 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
                     if let PhysicalKey::Code(key) = event.physical_key {
-                        match key {
-                            KeyCode::Escape => {
-                                event_loop.exit();
-                                return;
-                            },
-                            KeyCode::KeyR => {
-                                self.camera.angle_x = -55;
-                                self.camera.angle_y = 0;
-                                self.camera.angle_z = 0;
-                                self.camera.pos = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
-                                self.rebuild_spawn_model();
-                                self.log_camera_state("reset");
-                            },
-                            KeyCode::KeyT => {
-                                self.camera.angle_x = -90;
-                            },
-                            KeyCode::KeyN => {
-                                self.program_container.next();
-                            },
-                            KeyCode::KeyM => {
-                                self.program_container.prev();
-                            },
-                            KeyCode::KeyB => {
-                                self.level_num = (self.level_num + 1) % 26;
-                                if self.level_num == 0 { self.level_num = 1; }
-                                self.update_level();
-                            },
-                            KeyCode::KeyV => {
-                                self.level_num = if self.level_num == 1 { 25 } else { self.level_num - 1 };
-                                self.update_level();
-                            },
-                            KeyCode::KeyL => {
-                                self.landscape_mesh.shift_y(1);
-                            },
-                            KeyCode::KeyH => {
-                                self.landscape_mesh.shift_y(-1);
-                            },
-                            KeyCode::KeyJ => {
-                                self.landscape_mesh.shift_x(1);
-                            },
-                            KeyCode::KeyK => {
-                                self.landscape_mesh.shift_x(-1);
-                            },
-                            KeyCode::KeyY => {
-                                self.sunlight.x -= 1.0;
-                                self.sunlight.y -= 1.0;
-                                log::debug!("sunlight = {:?}", self.sunlight);
-                            },
-                            KeyCode::KeyC => {
-                                self.curvature_enabled = !self.curvature_enabled;
-                                log::info!("curvature {}", if self.curvature_enabled { "on" } else { "off" });
-                                self.rebuild_spawn_model();
-                            },
-                            KeyCode::KeyO => {
-                                self.show_objects = !self.show_objects;
-                                log::info!("objects {}", if self.show_objects { "on" } else { "off" });
-                            },
-                            KeyCode::BracketRight => {
-                                self.curvature_scale *= 1.2;
-                                log::info!("curvature_scale = {:.6}", self.curvature_scale);
-                                self.rebuild_spawn_model();
-                            },
-                            KeyCode::BracketLeft => {
-                                self.curvature_scale *= 0.8;
-                                log::info!("curvature_scale = {:.6}", self.curvature_scale);
-                                self.rebuild_spawn_model();
-                            },
-                            KeyCode::F5 => {
-                                if self.game_world.state == GameState::InGame {
-                                    self.game_world.state = GameState::Frontend;
-                                    log::info!("game simulation OFF");
-                                } else {
-                                    self.game_world.state = GameState::InGame;
-                                    log::info!("game simulation ON");
+                        if let Some(cmd) = translate_key(key) {
+                            let prev_shift = self.engine.landscape_mesh.get_shift_vector();
+                            self.engine.apply_command(&cmd);
+
+                            // App-level side effects that need GPU state
+                            match &cmd {
+                                GameCommand::Quit => { event_loop.exit(); return; }
+                                GameCommand::NextShader => { self.program_container.next(); }
+                                GameCommand::PrevShader => { self.program_container.prev(); }
+                                GameCommand::NextLevel | GameCommand::PrevLevel => {
+                                    self.update_level();
                                 }
-                            },
-                            KeyCode::Space => {
-                                self.center_on_tribe0_shaman();
-                                self.log_camera_state("space_center");
-                            },
-                            _ => {
-                                let prev_shift = self.landscape_mesh.get_shift_vector();
-                                let prev_angle_z = self.camera.angle_z;
-                                let prev_angle_x = self.camera.angle_x;
-                                process_key(key, &mut self.camera, &mut self.landscape_mesh);
-                                let new_shift = self.landscape_mesh.get_shift_vector();
-                                let shift_changed = new_shift != prev_shift;
-                                if shift_changed || self.camera.angle_z != prev_angle_z || self.camera.angle_x != prev_angle_x {
+                                GameCommand::CenterOnShaman => {
+                                    self.center_on_tribe0_shaman();
+                                    self.log_camera_state("space_center");
+                                }
+                                GameCommand::ResetCamera => {
+                                    self.rebuild_spawn_model();
+                                    self.log_camera_state("reset");
+                                }
+                                GameCommand::ToggleCurvature | GameCommand::AdjustCurvature { .. } => {
+                                    self.rebuild_spawn_model();
+                                }
+                                GameCommand::PanScreen { .. } | GameCommand::PanTerrain { .. } => {
+                                    let new_shift = self.engine.landscape_mesh.get_shift_vector();
+                                    if new_shift != prev_shift {
+                                        self.rebuild_spawn_model();
+                                        self.log_camera_state(&format!("{:?}", key));
+                                    }
+                                }
+                                GameCommand::RotateCamera { .. } | GameCommand::TiltCamera { .. } => {
                                     self.rebuild_spawn_model();
                                     self.log_camera_state(&format!("{:?}", key));
                                 }
-                            },
+                                _ => {}
+                            }
+                            self.do_render = true;
                         }
-                        self.do_render = true;
                     }
                 }
             },
@@ -2058,10 +2113,10 @@ impl ApplicationHandler for App {
                         single_player: &mut g, tutorial: &mut h, ai: &mut i,
                         population: &mut j, mana: &mut k,
                     };
-                    let ticks = self.game_world.simulation_tick(&self.game_time, &mut subs);
+                    let ticks = self.engine.game_world.simulation_tick(&self.engine.game_time, &mut subs);
                     if ticks > 0 {
                         for _ in 0..ticks {
-                            self.unit_coordinator.tick();
+                            self.engine.unit_coordinator.tick();
                         }
                         self.rebuild_unit_models();
                         self.do_render = true;
@@ -2069,9 +2124,9 @@ impl ApplicationHandler for App {
                 }
 
                 // Auto-animate water
-                self.frame_count = self.frame_count.wrapping_add(1);
-                if self.frame_count % self.wat_interval == 0 {
-                    self.wat_offset += 1;
+                self.engine.frame_count = self.engine.frame_count.wrapping_add(1);
+                if self.engine.frame_count % self.engine.wat_interval == 0 {
+                    self.engine.wat_offset += 1;
                     self.do_render = true;
                 }
                 if self.do_render && self.gpu.is_some() {

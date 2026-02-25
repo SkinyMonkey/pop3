@@ -27,3 +27,4 @@ pub mod game_state;
 pub mod hud;
 pub mod sprites;
 pub mod buildings;
+pub mod game_command;
