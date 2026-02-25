@@ -4,6 +4,7 @@
 // the movement system (pathfinding, per-tick position updates).
 
 use crate::engine::state::rng::GameRng;
+use crate::engine::state::traits::ObjectTick;
 use crate::engine::movement::{
     RegionMap, SegmentPool, FailureCache, UsedTargetsCache,
     PersonMovement, WorldCoord, RouteResult,
@@ -15,7 +16,8 @@ use super::unit::Unit;
 use super::person_state::{
     PersonState, person_type_defaults, enter_state, tick_state, TickResult,
     calculate_melee_damage, apply_damage,
-    COMBAT_DETECT_RANGE, COMBAT_MELEE_RANGE, COMBAT_ATTACK_INTERVAL,
+    CombatPhase, SWING_READY_TICKS,
+    COMBAT_DETECT_RANGE, COMBAT_MELEE_RANGE,
 };
 use super::selection::{SelectionState, DragState};
 use super::coords::{world_to_render_pos, toroidal_delta, cell_to_world};
@@ -83,6 +85,7 @@ impl UnitCoordinator {
             movement.unit_type = raw.subtype;
             movement.speed = defaults.speed;
 
+            let home = movement.position;
             let (cx, cy) = world_to_render_pos(&movement.position, self.landscape_size);
             self.units.push(Unit {
                 id: self.units.len(),
@@ -101,6 +104,13 @@ impl UnitCoordinator {
                 target_unit: None,
                 attacker_unit: None,
                 alive: true,
+                home_pos: home,
+                behavior_flags: 0,
+                wander_duration: 0,
+                wander_range: 0,
+                linked_obj_id: None,
+                bloodlust: false,
+                shielded: false,
             });
             // Initialize idle state with a random timer (matches Person_Init calling Person_SetState)
             let idx = self.units.len() - 1;
@@ -155,7 +165,7 @@ impl UnitCoordinator {
             if !unit.alive { continue; }
 
             // Run state machine tick
-            let result = tick_state(unit);
+            let result = tick_state(unit, &mut self.rng);
             if let TickResult::Transition(new_state) = result {
                 enter_state(unit, new_state, &mut self.rng);
             }
@@ -278,7 +288,11 @@ impl UnitCoordinator {
         }
     }
 
-    /// Process melee damage for fighting units.
+    /// Process combat: drive sub-phase transitions based on distance to target.
+    /// Original: Person_ProcessCombatState routes through sub-phases at offset 0x2D.
+    /// - Seek/Approach: chase when out of melee range
+    /// - SwingReady→Strike: pause then deal damage when in melee range
+    /// - Lunge/Recovering: managed by tick_fighting in person_state.rs
     fn process_combat(&mut self) {
         // Collect damage events: (target_index, damage, attacker_tribe)
         let mut damage_events: Vec<(usize, u16, u8)> = Vec::new();
@@ -300,27 +314,62 @@ impl UnitCoordinator {
 
             let target = &self.units[target_idx];
             if !target.alive || target.health == 0 {
-                continue; // Target already dead, tick_fighting will transition to Idle
+                continue;
             }
 
-            // Check melee range
-            let dx = toroidal_delta(unit.movement.position.x, target.movement.position.x) as i32;
-            let dz = toroidal_delta(unit.movement.position.z, target.movement.position.z) as i32;
+            let target_pos = target.movement.position;
+            let dx = toroidal_delta(unit.movement.position.x, target_pos.x) as i32;
+            let dz = toroidal_delta(unit.movement.position.z, target_pos.z) as i32;
             let dist = dx.abs() + dz.abs();
 
-            if dist <= COMBAT_MELEE_RANGE as i32 {
-                // Attack rate: only deal damage every COMBAT_ATTACK_INTERVAL ticks
-                // Use state_timer as attack cooldown
-                if self.units[i].state_timer == 0 {
+            let phase = CombatPhase::from_counter(self.units[i].state_counter);
+
+            match phase {
+                CombatPhase::Seek => {
+                    // Start approaching if within detect range
+                    if dist <= COMBAT_DETECT_RANGE as i32 {
+                        self.units[i].state_counter = CombatPhase::Approach as u8;
+                    } else {
+                        // Target escaped detect range — disengage
+                        self.units[i].target_unit = None;
+                    }
+                }
+                CombatPhase::Approach => {
+                    if dist <= COMBAT_MELEE_RANGE as i32 {
+                        // Arrived in melee range — stop and prepare to swing
+                        self.units[i].movement.flags1 &= !0x1000;
+                        self.units[i].movement.speed = 0;
+                        self.units[i].state_counter = CombatPhase::SwingReady as u8;
+                        self.units[i].state_timer = SWING_READY_TICKS;
+                    } else if dist <= COMBAT_DETECT_RANGE as i32 {
+                        // Chase: walk toward target
+                        let defaults = person_type_defaults(self.units[i].subtype);
+                        self.units[i].movement.speed = defaults.speed;
+                        self.units[i].movement.flags1 |= 0x1080;
+                        self.units[i].movement.facing_angle = atan2(
+                            toroidal_delta(self.units[i].movement.position.x, target_pos.x),
+                            -toroidal_delta(self.units[i].movement.position.z, target_pos.z),
+                        );
+                    } else {
+                        self.units[i].target_unit = None;
+                    }
+                }
+                CombatPhase::Strike => {
+                    // tick_fighting sets Strike phase; we apply damage here
                     let damage = calculate_melee_damage(&self.units[i]);
                     damage_events.push((target_idx, damage, self.units[i].tribe_index));
-                    self.units[i].state_timer = COMBAT_ATTACK_INTERVAL;
-                } else {
-                    self.units[i].state_timer -= 1;
+                    // tick_fighting will advance to LungeBack on next tick
+                }
+                CombatPhase::SwingReady | CombatPhase::LungeBack
+                | CombatPhase::LungeFwd | CombatPhase::Recovering => {
+                    // These phases are timer-driven by tick_fighting — no coordinator action
+                    // Face target while waiting
+                    self.units[i].movement.facing_angle = atan2(
+                        toroidal_delta(self.units[i].movement.position.x, target_pos.x),
+                        -toroidal_delta(self.units[i].movement.position.z, target_pos.z),
+                    );
                 }
             }
-            // If out of melee range but within detect range, unit stays in Fighting
-            // (could add chase behavior later)
         }
 
         // Apply damage
@@ -339,7 +388,6 @@ impl UnitCoordinator {
                 if let Some(target) = self.units.iter().find(|u| u.id == target_id) {
                     if !target.alive || target.state == PersonState::Dead {
                         self.units[i].target_unit = None;
-                        // tick_fighting will transition to Idle on next tick
                     }
                 }
             }
@@ -370,6 +418,14 @@ impl UnitCoordinator {
 
     pub fn region_map(&self) -> &RegionMap {
         &self.region_map
+    }
+}
+
+/// ObjectTick implementation — plugs UnitCoordinator into GameWorld's tick loop.
+/// Original: Tick_UpdateObjects (0x004a7550) calls Object_ProcessPersonState for each person.
+impl ObjectTick for UnitCoordinator {
+    fn tick_update_objects(&mut self) {
+        self.tick();
     }
 }
 
