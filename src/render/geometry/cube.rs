@@ -2,7 +2,7 @@ use num_traits::{sign::Unsigned, float::Float};
 use num_traits::identities::{zero, one};
 use cgmath::Vector3;
 
-use crate::model::TriangleModel;
+use crate::render::model::TriangleModel;
 
 pub fn cube<M, V, I>(model: &mut M)
     where M: TriangleModel<Vector3<V>, I>,

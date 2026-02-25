@@ -1,6 +1,6 @@
 use cgmath::Vector3;
 
-use crate::model::TriangleModel;
+use crate::render::model::TriangleModel;
 
 pub fn gen_icosahedron() -> [Vector3<f32>; 12] {
     let phi = -(1.0 - f32::sqrt(5.0)) / 2.0;

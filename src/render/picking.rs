@@ -3,7 +3,7 @@ use num_traits::Float;
 use num_traits::cast::NumCast;
 use num_traits::identities::{zero, one};
 
-use crate::model::{Triangle, IterTriangleModel, TriangleIteratorVector3, RefToTriangle};
+use crate::render::model::{Triangle, IterTriangleModel, TriangleIteratorVector3, RefToTriangle};
 
 pub fn intersect_triangle<V>(vs: &Vector3<V>, ve: &Vector3<V>, t1: &Triangle<V>) -> (bool, V) where V: Float {
     let t = t1;

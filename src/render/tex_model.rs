@@ -1,7 +1,7 @@
 use cgmath::{Vector2, Vector3};
 
-use crate::model::MeshModel;
-use crate::envelop::GpuModel;
+use crate::render::model::MeshModel;
+use crate::render::envelop::GpuModel;
 
 /******************************************************************************/
 

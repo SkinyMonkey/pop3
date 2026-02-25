@@ -1,6 +1,6 @@
 use cgmath::Vector3;
 
-use crate::model::VertexModel;
+use crate::render::model::VertexModel;
 
 pub fn gen_sphere<M: VertexModel<Vector3<f64>, u16>>(model: &mut M, ribs_h: u16, ribs_v: u16) {
     let k1 = f64::acos(-1.0) / (ribs_v as f64); // pi / ribs_v

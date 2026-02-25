@@ -1,7 +1,7 @@
 use num_traits::{sign::Unsigned, float::Float};
 use cgmath::Vector3;
 
-use crate::model::VertexModel;
+use crate::render::model::VertexModel;
 
 pub fn gen_circle<M: VertexModel<Vector3<f64>, u16>>(model: &mut M, ribs: isize) {
     let k: f64 = 2.0 * f64::acos(-1.0) / (ribs as f64);

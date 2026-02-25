@@ -1,6 +1,6 @@
 use winit::keyboard::KeyCode;
 
-use crate::hud::HudTab;
+use crate::render::hud::HudTab;
 
 /// Input boundary — every action the game engine can process,
 /// regardless of source (keyboard, mouse, script, network, test harness).

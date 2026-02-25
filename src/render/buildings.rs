@@ -1,13 +1,13 @@
 use cgmath::Vector3;
 
-use crate::model::{VertexModel, MeshModel};
-use crate::tex_model::{TexModel, TexVertex};
-use crate::envelop::{ModelEnvelop, RenderType};
-use crate::landscape::LandscapeMesh;
+use crate::render::model::{VertexModel, MeshModel};
+use crate::render::tex_model::{TexModel, TexVertex};
+use crate::render::envelop::{ModelEnvelop, RenderType};
+use crate::render::terrain::LandscapeMesh;
 use crate::data::objects::{Object3D, Shape, mk_pop_object};
 use crate::data::units::object_3d_index;
 
-use crate::sprites::LevelObject;
+use crate::render::sprites::LevelObject;
 
 pub fn build_building_meshes(
     device: &wgpu::Device, objects: &[LevelObject], objects_3d: &[Option<Object3D>],

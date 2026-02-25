@@ -1,11 +1,11 @@
 use cgmath::Vector4;
 
-use crate::hud::HudState;
-use crate::landscape::LandscapeMesh;
+use crate::render::hud::HudState;
+use crate::render::terrain::LandscapeMesh;
 use crate::data::objects::{Object3D, Shape};
-use crate::sprites::LevelObject;
+use crate::render::sprites::LevelObject;
 use crate::engine::units::{UnitCoordinator, DragState};
-use crate::view::{Camera, Screen};
+use crate::render::camera::{Camera, Screen};
 
 /// Output boundary — everything the renderer needs to produce one frame.
 /// Produced by GameEngine, consumed by Renderer.

@@ -14,9 +14,9 @@ use clap::{Arg, ArgAction, Command};
 
 use cgmath::{Point2, Vector3, Vector4, Matrix4};
 
-use pop3::tex_model::TexModel;
-use pop3::color_model::ColorModel;
-use pop3::view::*;
+use pop3::render::tex_model::TexModel;
+use pop3::render::color_model::ColorModel;
+use pop3::render::camera::*;
 
 use pop3::data::psfb::ContainerPSFB;
 use pop3::data::types::BinDeserializer;
@@ -26,11 +26,11 @@ use pop3::data::animation::{
     UNIT_IDLE_ANIMS,
     SHAMAN_IDLE_SPRITES, SHAMAN_FRAMES_PER_DIR,
 };
-use pop3::game_state::constants::*;
+use pop3::engine::state::constants::*;
 
-use pop3::intersect::intersect_iter;
+use pop3::render::picking::intersect_iter;
 
-use pop3::landscape::{
+use pop3::render::terrain::{
     LandscapeMesh, LandscapeModel,
     LandscapeUniformData, LandscapeVariant, LandscapeProgramContainer,
     make_landscape_model, LANDSCAPE_SCALE, LANDSCAPE_OFFSET,
@@ -41,10 +41,10 @@ use pop3::data::objects::{Object3D, Shape};
 use pop3::data::bl320::make_bl320_texture_rgba;
 use pop3::data::landscape::{make_texture_land, draw_texture_u8};
 
-use pop3::unit_control::{UnitCoordinator, DragState, Unit};
-use pop3::unit_control::coords::{cell_to_world, triangle_to_cell, project_to_screen, nearest_screen_hit};
-use pop3::buildings::build_building_meshes;
-use pop3::sprites::{
+use pop3::engine::units::{UnitCoordinator, DragState, Unit};
+use pop3::engine::units::coords::{cell_to_world, triangle_to_cell, project_to_screen, nearest_screen_hit};
+use pop3::render::buildings::build_building_meshes;
+use pop3::render::sprites::{
     LevelObject, UnitTypeRender,
     obj_colors, convert_palette,
     pack_palette_rgba, rgb_to_rgba,
@@ -52,22 +52,22 @@ use pop3::sprites::{
     build_spawn_model, build_object_markers, build_unit_markers, build_selection_rings,
 };
 
-use pop3::gpu::context::GpuContext;
-use pop3::gpu::pipeline::create_pipeline;
-use pop3::gpu::buffer::GpuBuffer;
-use pop3::gpu::texture::GpuTexture;
-use pop3::gpu::bind_groups::{
+use pop3::render::gpu::context::GpuContext;
+use pop3::render::gpu::pipeline::create_pipeline;
+use pop3::render::gpu::buffer::GpuBuffer;
+use pop3::render::gpu::texture::GpuTexture;
+use pop3::render::gpu::bind_groups::{
     create_landscape_group0_layout, create_objects_group0_layout,
     create_objects_group1_layout, make_storage_entry,
 };
-use pop3::envelop::*;
+use pop3::render::envelop::*;
 
-use pop3::game_state::tick::{GameWorld, StdTimeSource, TickSubsystems};
-use pop3::game_state::state_machine::GameState;
-use pop3::game_state::traits::NoOp;
-use pop3::game_command::{GameCommand, FrameState, translate_key};
+use pop3::engine::state::tick::{GameWorld, StdTimeSource, TickSubsystems};
+use pop3::engine::state::state_machine::GameState;
+use pop3::engine::state::traits::NoOp;
+use pop3::engine::{GameCommand, FrameState, translate_key};
 
-use pop3::hud::{
+use pop3::render::hud::{
     self, HudTab, HudState, HudRenderer,
     MinimapData, MinimapDot, PanelEntry, TribePopulation,
     HUD_TRIBE_COLORS,
@@ -448,7 +448,7 @@ impl GameEngine {
                 true
             }
             GameCommand::OrderMove { x, z } => {
-                let target = pop3::movement::WorldCoord::new(*x as i16, *z as i16);
+                let target = pop3::engine::movement::WorldCoord::new(*x as i16, *z as i16);
                 self.unit_coordinator.order_move(target);
                 true
             }

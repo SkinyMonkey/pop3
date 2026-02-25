@@ -1,7 +1,7 @@
 // HUD data types, layout computation, rendering helpers, and GPU renderer.
 
-use crate::gpu::buffer::GpuBuffer;
-use crate::gpu::texture::GpuTexture;
+use crate::render::gpu::buffer::GpuBuffer;
+use crate::render::gpu::texture::GpuTexture;
 use crate::data::psfb::ContainerPSFB;
 
 // ---------------------------------------------------------------------------

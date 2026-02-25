@@ -27,14 +27,14 @@ use winit::window::{Window, WindowAttributes};
 
 use clap::{Arg, Command};
 
-use pop3::gpu::context::GpuContext;
-use pop3::gpu::buffer::GpuBuffer;
-use pop3::gpu::texture::GpuTexture;
+use pop3::render::gpu::context::GpuContext;
+use pop3::render::gpu::buffer::GpuBuffer;
+use pop3::render::gpu::texture::GpuTexture;
 use pop3::data::level::{Landscape, LevelRes};
-use pop3::movement::{
+use pop3::engine::movement::{
     self, RegionMap, TileCoord, Waypoint, PathfindDebug, PathfindResult,
 };
-use pop3::movement::constants::{REGION_GRID_SIZE, CELL_HAS_BUILDING};
+use pop3::engine::movement::constants::{REGION_GRID_SIZE, CELL_HAS_BUILDING};
 
 const MAP_SIZE: usize = 128;
 /// World units per cell

@@ -2,8 +2,8 @@ use std::vec::Vec;
 
 use cgmath::Vector3;
 
-use crate::model::{FromUsize, MeshModel};
-use crate::envelop::GpuModel;
+use crate::render::model::{FromUsize, MeshModel};
+use crate::render::envelop::GpuModel;
 
 /******************************************************************************/
 

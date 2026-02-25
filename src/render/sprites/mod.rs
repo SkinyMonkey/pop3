@@ -1,18 +1,18 @@
 use cgmath::{Point3, Vector2, Vector3, Matrix4};
 
-use crate::model::{VertexModel, MeshModel};
-use crate::tex_model::{TexModel, TexVertex};
-use crate::color_model::{ColorModel, ColorVertex};
-use crate::envelop::{ModelEnvelop, RenderType};
-use crate::landscape::LandscapeMesh;
-use crate::gpu::texture::GpuTexture;
+use crate::render::model::{VertexModel, MeshModel};
+use crate::render::tex_model::{TexModel, TexVertex};
+use crate::render::color_model::{ColorModel, ColorVertex};
+use crate::render::envelop::{ModelEnvelop, RenderType};
+use crate::render::terrain::LandscapeMesh;
+use crate::render::gpu::texture::GpuTexture;
 
 use crate::data::level::LevelRes;
 use crate::data::units::{ModelType, object_3d_index};
 use crate::data::animation::{NUM_TRIBES, STORED_DIRECTIONS};
-use crate::game_state::constants::*;
+use crate::engine::state::constants::*;
 
-use crate::unit_control::{UnitCoordinator, Unit};
+use crate::engine::units::{UnitCoordinator, Unit};
 
 /******************************************************************************/
 

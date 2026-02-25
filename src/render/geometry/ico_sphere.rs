@@ -1,8 +1,8 @@
 use cgmath::InnerSpace;
 use cgmath::Vector3;
 
-use crate::model::TriangleModel;
-use crate::geometry::ico;
+use crate::render::model::TriangleModel;
+use crate::render::geometry::ico;
 
 fn gen_subdivision<M: TriangleModel<Vector3<f32>, u16>>(model: &mut M, a: u16, b: u16, c: u16, n: u16) {
     let a_v = *model.get_vertex(a);

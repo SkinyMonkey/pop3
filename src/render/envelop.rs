@@ -1,8 +1,8 @@
 use cgmath::{Vector3, Matrix4, Rad, Deg};
 
-use crate::model::{IterTriangleModel, TriangleIteratorVector3};
-use crate::intersect::intersect_iter;
-use crate::gpu::buffer::GpuBuffer;
+use crate::render::model::{IterTriangleModel, TriangleIteratorVector3};
+use crate::render::picking::intersect_iter;
+use crate::render::gpu::buffer::GpuBuffer;
 
 pub trait GpuModel {
     /// Vertex buffer layouts for pipeline creation

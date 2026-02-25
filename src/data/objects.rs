@@ -5,8 +5,8 @@ use core::slice::Iter;
 
 use cgmath::{Vector2, Vector3};
 
-use crate::model::{MeshModel, VertexModel};
-use crate::tex_model::{TexModel, TexVertex};
+use crate::render::model::{MeshModel, VertexModel};
+use crate::render::tex_model::{TexModel, TexVertex};
 use crate::data::types::{BinDeserializer, from_reader};
 use crate::data::level::ObjectPaths;
 

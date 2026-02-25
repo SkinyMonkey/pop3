@@ -21,10 +21,10 @@ use winit::window::{Window, WindowAttributes};
 
 use clap::{Arg, Command};
 
-use pop3::gpu::context::GpuContext;
-use pop3::gpu::pipeline::create_pipeline;
-use pop3::gpu::buffer::GpuBuffer;
-use pop3::gpu::texture::GpuTexture;
+use pop3::render::gpu::context::GpuContext;
+use pop3::render::gpu::pipeline::create_pipeline;
+use pop3::render::gpu::buffer::GpuBuffer;
+use pop3::render::gpu::texture::GpuTexture;
 
 use pop3::data::psfb::ContainerPSFB;
 use pop3::data::types::BinDeserializer;
