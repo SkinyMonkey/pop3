@@ -46,6 +46,7 @@ pub enum GameCommand {
 
     // HUD
     SetHudTab(HudTab),
+    ToggleHud,
 
     // Lifecycle
     Quit,
@@ -98,6 +99,9 @@ pub fn translate_key(key: KeyCode) -> Option<GameCommand> {
 
         // Sunlight
         KeyCode::KeyY => Some(GameCommand::AdjustSunlight { dx: -1.0, dy: -1.0 }),
+
+        // HUD
+        KeyCode::F1 => Some(GameCommand::ToggleHud),
 
         // Game simulation
         KeyCode::F5 => Some(GameCommand::ToggleSimulation),
@@ -205,8 +209,13 @@ mod tests {
     }
 
     #[test]
+    fn test_translate_toggle_hud() {
+        assert!(matches!(translate_key(KeyCode::F1), Some(GameCommand::ToggleHud)));
+    }
+
+    #[test]
     fn test_translate_unmapped_returns_none() {
-        assert!(translate_key(KeyCode::F1).is_none());
+        assert!(translate_key(KeyCode::F2).is_none());
         assert!(translate_key(KeyCode::Enter).is_none());
         assert!(translate_key(KeyCode::Tab).is_none());
     }
