@@ -8,5 +8,6 @@ pub mod picking;
 pub mod terrain;
 pub mod buildings;
 pub mod sprites;
+pub mod hud;
 pub mod gpu;
 pub mod geometry;

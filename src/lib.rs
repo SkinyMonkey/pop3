@@ -1,9 +1,8 @@
 pub mod data;
 pub mod engine;
 pub mod render;
-pub mod hud;
-
 // Backward compat re-exports — old paths still work
+pub mod hud { pub use crate::render::hud::*; }
 pub mod model { pub use crate::render::model::*; }
 pub mod default_model { pub use crate::render::default_model::*; }
 pub mod tex_model { pub use crate::render::tex_model::*; }
