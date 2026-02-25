@@ -15,4 +15,9 @@ pub mod game_state;
 pub mod hud;
 pub mod sprites;
 pub mod buildings;
-pub mod game_command;
+pub mod engine;
+/// Backward compat — use `engine::command` directly.
+pub mod game_command {
+    pub use crate::engine::command::*;
+    pub use crate::engine::frame::*;
+}
