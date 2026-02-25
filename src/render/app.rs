@@ -91,6 +91,7 @@ fn help_text() -> &'static str {
         "C:      Toggle curvature\n",
         "[/]:    Curvature +/-\n",
         "O:      Toggle objects\n",
+        "F1:     Toggle HUD\n",
         "Scroll: Zoom\n",
         "Esc:    Quit",
     )
@@ -121,6 +122,7 @@ pub struct GameEngine {
     sunlight: Vector4<f32>,
     show_objects: bool,
     hud_tab: HudTab,
+    hud_visible: bool,
     hud_panel_sprite_count: usize,
 
     // Game simulation
@@ -150,6 +152,13 @@ pub struct InputState {
 }
 
 impl GameEngine {
+    fn reset_camera(&mut self) {
+        self.camera.angle_x = -55;
+        self.camera.angle_y = 0;
+        self.camera.angle_z = 0;
+        self.zoom = 1.0;
+    }
+
     fn build_landscape_params(&self) -> LandscapeUniformData {
         let shift = self.landscape_mesh.get_shift_vector();
         LandscapeUniformData {
@@ -173,23 +182,31 @@ impl GameEngine {
         }
     }
 
+    /// World-space center of the terrain (accounting for model transform).
+    fn world_center(&self) -> f32 {
+        let center_model = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+        LANDSCAPE_SCALE * center_model + LANDSCAPE_OFFSET
+    }
+
     fn camera_focus_vertex(&self) -> f32 {
-        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
-        let model_x = (center - LANDSCAPE_OFFSET) / LANDSCAPE_SCALE;
-        model_x / self.landscape_mesh.step()
+        let center_model = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+        center_model / self.landscape_mesh.step()
     }
 
     fn camera_min_z(&self) -> f32 {
-        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+        let center = self.world_center();
         let az = (self.camera.angle_z as f32).to_radians();
         let ax = (self.camera.angle_x as f32).to_radians();
         let radius = 1.5 / self.zoom;
         let eye_x = center + radius * ax.cos() * az.sin();
         let eye_y = center + radius * ax.cos() * az.cos();
+        // Convert world-space eye position back to grid coords for height lookup
+        let model_x = (eye_x - LANDSCAPE_OFFSET) / LANDSCAPE_SCALE;
+        let model_y = (eye_y - LANDSCAPE_OFFSET) / LANDSCAPE_SCALE;
         let step = self.landscape_mesh.step();
         let n = self.landscape_mesh.width();
-        let gx = (eye_x / step).clamp(0.0, (n - 1) as f32) as usize;
-        let gy = (eye_y / step).clamp(0.0, (n - 1) as f32) as usize;
+        let gx = (model_x / step).clamp(0.0, (n - 1) as f32) as usize;
+        let gy = (model_y / step).clamp(0.0, (n - 1) as f32) as usize;
         let shift = self.landscape_mesh.get_shift_vector();
         let sx = (gx + shift.x as usize) % n;
         let sy = (gy + shift.y as usize) % n;
@@ -197,7 +214,7 @@ impl GameEngine {
     }
 
     fn screen_to_cell(&self, mouse_pos: &Point2<f32>) -> Option<(f32, f32)> {
-        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+        let center = self.world_center();
         let focus = Vector3::new(center, center, 0.0);
         let min_z = self.camera_min_z();
         let (v1, v2) = screen_to_scene_zoom(&self.screen, &self.camera, mouse_pos, self.zoom, focus, min_z);
@@ -219,7 +236,7 @@ impl GameEngine {
     }
 
     fn unit_pvm(&self) -> Matrix4<f32> {
-        let center = (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
+        let center = self.world_center();
         let focus = Vector3::new(center, center, 0.0);
         let min_z = self.camera_min_z();
         let mvp = MVP::with_zoom(&self.screen, &self.camera, self.zoom, focus, min_z);
@@ -380,10 +397,7 @@ impl GameEngine {
                 true
             }
             GameCommand::ResetCamera => {
-                self.camera.angle_x = -55;
-                self.camera.angle_y = 0;
-                self.camera.angle_z = 0;
-                self.camera.pos = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
+                self.reset_camera();
                 true
             }
             GameCommand::TopDownView => {
@@ -462,6 +476,10 @@ impl GameEngine {
             }
             GameCommand::SetHudTab(tab) => {
                 self.hud_tab = *tab;
+                true
+            }
+            GameCommand::ToggleHud => {
+                self.hud_visible = !self.hud_visible;
                 true
             }
             GameCommand::Quit => true,
@@ -561,10 +579,7 @@ pub struct App {
 
 impl App {
     pub fn new(config: AppConfig) -> Self {
-        let mut camera = Camera::new();
-        camera.angle_x = -55;
-        camera.angle_z = 65;
-        camera.pos = Vector3 { x: -0.40, y: -3.70, z: 0.0 };
+        let camera = Camera::new();
 
         let sunlight = {
             let (x, y) = config.light.unwrap_or((0x93, 0x93));
@@ -590,7 +605,7 @@ impl App {
 
         let level_num = config.level.unwrap_or(1);
 
-        App {
+        let mut app = App {
             engine: GameEngine {
                 landscape_mesh,
                 camera,
@@ -602,6 +617,7 @@ impl App {
                 sunlight,
                 show_objects: true,
                 hud_tab: HudTab::Spells,
+                hud_visible: true,
                 hud_panel_sprite_count: 0,
                 unit_coordinator: UnitCoordinator::new(),
                 game_world: {
@@ -655,7 +671,9 @@ impl App {
             start_time: Instant::now(),
             script_commands,
             script_index: 0,
-        }
+        };
+        app.engine.reset_camera();
+        app
     }
 
     fn center_on_tribe0_shaman(&mut self) {
@@ -677,6 +695,7 @@ impl App {
     }
 
     fn update_level(&mut self) {
+        self.engine.reset_camera();
         let base = self.engine.config.base.clone().unwrap_or_else(|| Path::new("/opt/sandbox/pop").to_path_buf());
         let level_type = self.engine.config.landtype.as_deref();
         let level_res = LevelRes::new(&base, self.engine.level_num, level_type);
@@ -736,7 +755,7 @@ impl App {
 
     fn log_camera_state(&mut self, event: &str) {
         let t = self.start_time.elapsed().as_secs_f64();
-        let center = (self.engine.landscape_mesh.width() - 1) as f32 * self.engine.landscape_mesh.step() / 2.0;
+        let center = self.engine.world_center();
         let az = (self.engine.camera.angle_z as f32).to_radians();
         let ax = (self.engine.camera.angle_x as f32).to_radians();
         let radius = 1.5 / self.engine.zoom;
@@ -1422,7 +1441,7 @@ impl App {
         let gpu = self.gpu.as_ref().unwrap();
 
         // Update uniforms
-        let center = (frame.landscape.width() - 1) as f32 * frame.landscape.step() / 2.0;
+        let center = self.engine.world_center();
         let focus = Vector3::new(center, center, 0.0);
         let min_z = self.engine.camera_min_z();
         let mvp = MVP::with_zoom(frame.screen, frame.camera, frame.zoom, focus, min_z);
@@ -1567,7 +1586,9 @@ impl App {
         // End borrows before calling draw_hud (needs &mut self)
         let _ = gpu;
         drop(frame);
-        self.draw_hud(&mut encoder, &view);
+        if self.engine.hud_visible {
+            self.draw_hud(&mut encoder, &view);
+        }
 
         let gpu = self.gpu.as_ref().unwrap();
         gpu.queue.submit(std::iter::once(encoder.finish()));
