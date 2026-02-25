@@ -2,7 +2,6 @@ pub mod data;
 pub mod engine;
 pub mod render;
 pub mod hud;
-pub mod sprites;
 
 // Backward compat re-exports — old paths still work
 pub mod model { pub use crate::render::model::*; }
@@ -19,6 +18,7 @@ pub mod gpu {
     pub use crate::render::gpu::*;
 }
 pub mod landscape { pub use crate::render::terrain::*; }
+pub mod sprites { pub use crate::render::sprites::*; }
 pub mod buildings { pub use crate::render::buildings::*; }
 pub mod game_command {
     pub use crate::engine::command::*;

@@ -7,5 +7,6 @@ pub mod camera;
 pub mod picking;
 pub mod terrain;
 pub mod buildings;
+pub mod sprites;
 pub mod gpu;
 pub mod geometry;
