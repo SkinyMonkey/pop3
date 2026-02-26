@@ -78,6 +78,12 @@ fn cli() -> Command {
             .value_name("OBJ")
             .value_parser(clap::value_parser!(u16).range(0..16000))
             .help("Obj file index (0-based)"),
+        Arg::new("bank")
+            .long("bank")
+            .action(ArgAction::Set)
+            .value_name("BANK")
+            .value_parser(clap::builder::StringValueParser::new())
+            .help("OBJS bank number (0-7, default 0)"),
     ];
     Command::new("pop-obj-view")
         .about("POP3 object viewer")
@@ -92,6 +98,7 @@ struct App {
     model_transform_buffer: Option<GpuBuffer>,
     mvp_bind_group: Option<wgpu::BindGroup>,
     texture_bind_group: Option<wgpu::BindGroup>,
+    shadow_bind_group: Option<wgpu::BindGroup>,
     pop_obj: Option<ModelEnvelop<TexModel>>,
     camera: Camera,
     screen: Screen,
@@ -118,6 +125,7 @@ impl App {
             model_transform_buffer: None,
             mvp_bind_group: None,
             texture_bind_group: None,
+            shadow_bind_group: None,
             pop_obj: None,
             camera,
             screen: Screen { width: 800, height: 600 },
@@ -138,6 +146,7 @@ impl App {
         let model_transform_buffer = self.model_transform_buffer.as_ref().unwrap();
         let mvp_bind_group = self.mvp_bind_group.as_ref().unwrap();
         let texture_bind_group = self.texture_bind_group.as_ref().unwrap();
+        let shadow_bind_group = self.shadow_bind_group.as_ref().unwrap();
         let pop_obj = self.pop_obj.as_ref().unwrap();
 
         // Update MVP
@@ -190,6 +199,7 @@ impl App {
             render_pass.set_pipeline(pipeline);
             render_pass.set_bind_group(0, mvp_bind_group, &[]);
             render_pass.set_bind_group(1, texture_bind_group, &[]);
+            render_pass.set_bind_group(2, shadow_bind_group, &[]);
             pop_obj.draw(&mut render_pass);
         }
 
@@ -245,9 +255,19 @@ impl ApplicationHandler for App {
         );
         let sampler = GpuTexture::create_sampler(device, false);
 
-        // MVP bind group (group 0): m_transform + m_transform1
+        // MVP bind group (group 0): m_transform + m_transform1 + lighting
         let mvp_buffer = GpuBuffer::new_uniform(device, 64, "mvp_buffer");
         let model_transform_buffer = GpuBuffer::new_uniform(device, 64, "model_transform_buffer");
+
+        // LightParams: sun_dir(3f) + ambient(1f) + camera_focus(2f) + viewport_radius(1f) + game_tick(1f)
+        let sun_len = (0.5_f32 * 0.5 + 1.0 * 1.0 + 0.7 * 0.7).sqrt();
+        let light_data: [f32; 8] = [
+            0.5 / sun_len, 1.0 / sun_len, 0.7 / sun_len, 0.4,
+            0.0, 0.0, 100.0, 0.0,
+        ];
+        let lighting_buffer = GpuBuffer::new_uniform_init(
+            device, bytemuck::bytes_of(&light_data), "lighting_buffer",
+        );
 
         let mvp_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("mvp_bind_group_layout"),
@@ -264,7 +284,17 @@ impl ApplicationHandler for App {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -286,6 +316,10 @@ impl ApplicationHandler for App {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: model_transform_buffer.buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: lighting_buffer.buffer.as_entire_binding(),
                 },
             ],
         });
@@ -328,6 +362,76 @@ impl ApplicationHandler for App {
             ],
         });
 
+        // Shadow bind group (group 2): dummy 1x1 depth texture + comparison sampler + identity MVP
+        let shadow_depth_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("dummy_shadow_depth"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let shadow_depth_view = shadow_depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let shadow_comparison_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow_comparison_sampler"),
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
+        // Identity matrix — no shadow transform
+        let identity_mat: [f32; 16] = [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ];
+        let shadow_mvp_buffer = GpuBuffer::new_uniform_init(
+            device, bytemuck::bytes_of(&identity_mat), "shadow_mvp_buffer",
+        );
+
+        let shadow_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("shadow_bind_group_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let shadow_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shadow_bind_group"),
+            layout: &shadow_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&shadow_depth_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&shadow_comparison_sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: shadow_mvp_buffer.buffer.as_entire_binding() },
+            ],
+        });
+
         // Create pipeline
         let shader_source = include_str!("../../shaders/objects_tex.wgsl");
         let vertex_layouts = TexModel::vertex_buffer_layouts();
@@ -335,7 +439,7 @@ impl ApplicationHandler for App {
             device,
             shader_source,
             &vertex_layouts,
-            &[&mvp_bind_group_layout, &texture_bind_group_layout],
+            &[&mvp_bind_group_layout, &texture_bind_group_layout, &shadow_bind_group_layout],
             gpu.surface_format(),
             true,
             wgpu::PrimitiveTopology::TriangleList,
@@ -367,6 +471,7 @@ impl ApplicationHandler for App {
         self.model_transform_buffer = Some(model_transform_buffer);
         self.mvp_bind_group = Some(mvp_bind_group);
         self.texture_bind_group = Some(texture_bind_group);
+        self.shadow_bind_group = Some(shadow_bind_group);
         self.pop_obj = Some(pop_obj);
         self.gpu = Some(gpu);
         self.do_render = true;
@@ -537,6 +642,7 @@ fn main() {
         base.unwrap_or_else(|| Path::new("/opt/sandbox/pop").to_path_buf())
     };
     let landtype = matches.get_one("landtype").cloned().unwrap_or_else(|| "1".to_string());
+    let bank = matches.get_one("bank").cloned().unwrap_or_else(|| "0".to_string());
     let debug = matches.get_flag("debug");
     let obj_num: Option<u16> = matches.get_one("obj_num").copied();
 
@@ -546,9 +652,9 @@ fn main() {
         .write_style_or("F_LOG_STYLE", "always");
     env_logger::init_from_env(env);
 
-    let objects_3d = Object3D::from_file_all(&base, "0");
-    eprintln!("Loaded {} objects from OBJS0-0.DAT ({} with faces)",
-        objects_3d.len(), objects_3d.iter().filter(|o| o.is_some()).count());
+    let objects_3d = Object3D::from_file_all(&base, &bank);
+    eprintln!("Loaded {} objects from OBJS0-{}.DAT ({} with faces)",
+        objects_3d.len(), bank, objects_3d.iter().filter(|o| o.is_some()).count());
 
     let event_loop = EventLoop::new().unwrap();
     let mut app = App::new(base, landtype, obj_num, objects_3d);

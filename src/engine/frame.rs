@@ -23,6 +23,9 @@ pub struct FrameState<'a> {
 
     // Objects
     pub show_objects: bool,
+    pub show_shadows: bool,
+    pub show_lighting: bool,
+    pub show_markers: bool,
     pub unit_coordinator: &'a UnitCoordinator,
     pub level_objects: &'a [LevelObject],
     pub objects_3d: &'a [Option<Object3D>],
