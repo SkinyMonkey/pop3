@@ -2155,9 +2155,10 @@ impl ApplicationHandler for App {
 
         // Unit sprite atlases are built after self.gpu is set (see below)
 
-        // Load 3D objects (bank "0"), shapes, and BL320 texture atlas for building meshes
-        let objects_3d = Object3D::from_file_all(&base, "0");
-        let obj_paths = ObjectPaths::from_default_dir(&base, "0");
+        // Load 3D objects from the OBJS bank specified in the level header (HDR byte 97)
+        let bank_str = level_res.obj_bank.to_string();
+        let objects_3d = Object3D::from_file_all(&base, &bank_str);
+        let obj_paths = ObjectPaths::from_default_dir(&base, &bank_str);
         let shapes: Vec<Shape> = Shape::from_file_vec(&obj_paths.shapes);
         eprintln!("[shapes] loaded {} entries", shapes.len());
         for (i, s) in shapes.iter().take(10).enumerate() {

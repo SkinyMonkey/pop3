@@ -115,12 +115,14 @@ pub struct LevelRes {
     pub tribes: Vec<TribeConfigRaw>,
     pub sunlight: Sunlight,
     pub units: Vec<UnitRaw>,
+    /// OBJS bank number (HDR byte 97). Selects which objs0-{N}.dat to load.
+    pub obj_bank: u8,
 }
 
 impl LevelRes {
     pub fn new(base: &Path, level_num: u8, level_type_opt: Option<&str>) -> LevelRes {
         let level_dir = base.join("levels");
-        let (level_path, level_type) = read_level(&level_dir, level_num);
+        let (level_path, level_type, obj_bank) = read_level(&level_dir, level_num);
 
         let paths = match level_type_opt {
             Some(v) => LevelPaths::from_default_dir(base, v),
@@ -153,6 +155,7 @@ impl LevelRes {
             tribes,
             sunlight,
             units,
+            obj_bank,
         }
     }
 }
@@ -172,18 +175,24 @@ fn read_fixed_unit_slots<R: Read>(reader: &mut R, count: usize) -> Vec<UnitRaw> 
     units
 }
 
-pub fn read_level(base: &Path, num: u8) -> (PathBuf, String) {
+pub fn read_level(base: &Path, num: u8) -> (PathBuf, String, u8) {
     let dat_path = LevelPaths::dat_path(base, num);
     let hdr_path = LevelPaths::hdr_path(base, num);
-    let s = read_landscape_type(&hdr_path);
-    (dat_path, s)
+    let hdr_data = read_bin(&hdr_path);
+    let landscape_type = read_landscape_type_from_bytes(&hdr_data);
+    let obj_bank = if hdr_data.len() > 97 { hdr_data[97] } else { 0 };
+    (dat_path, landscape_type, obj_bank)
 }
 
 /******************************************************************************/
 
 pub fn read_landscape_type(hdr_path: &Path) -> String {
     let hdr_data = read_bin(hdr_path);
-    if hdr_data.len() < 70 {
+    read_landscape_type_from_bytes(&hdr_data)
+}
+
+fn read_landscape_type_from_bytes(hdr_data: &[u8]) -> String {
+    if hdr_data.len() < 97 {
         panic!("Hdr is too small {}", hdr_data.len())
     }
     let type_int = hdr_data[96];

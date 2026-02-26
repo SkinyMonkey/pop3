@@ -102,17 +102,17 @@ impl BinDeserializer for TribeConfigRaw {
 pub fn building_obj_index(subtype: u8, tribe_index: u8) -> Option<usize> {
     let tribe = tribe_index.min(3) as usize;
     match subtype {
-        1  => Some(145 + tribe * 3),     // Small Hut (style 1)
-        2  => Some(146 + tribe * 3),     // Medium Hut (style 1)
-        3  => Some(147 + tribe * 3),     // Large Hut (style 1)
-        13 => Some(117 + tribe),         // Guard Tower
-        9  => Some(125 + tribe),         // Balloon Hut (Airship)
-        11 => Some(121 + tribe),         // Boat Hut
+        1  => Some(145 + tribe * 3),     // Small Hut
+        2  => Some(146 + tribe * 3),     // Medium Hut
+        3  => Some(147 + tribe * 3),     // Large Hut
+        4  => Some(117 + tribe),         // Guard Tower (DrumTower)
+        5  => Some(133 + tribe),         // Temple (Preacher Training)
         6  => Some(129 + tribe),         // Spy Training
-        5  => Some(133 + tribe),         // Preacher Training (Temple)
-        8  => Some(137 + tribe),         // FW Training
         7  => Some(141 + tribe),         // Warrior Training
-        19 => Some(190),                 // Vault of Knowledge
+        8  => Some(137 + tribe),         // Firewarrior Training
+        13 => Some(121 + tribe),         // Boat Hut
+        15 => Some(125 + tribe),         // Balloon Hut (Airship)
+        18 => Some(190),                 // Vault of Knowledge
         _  => None,
     }
 }
