@@ -232,6 +232,8 @@ pub struct UnitTypeRender {
     pub frames_per_dir: u32,  // total columns in atlas
     /// Maps animation_id → (column_offset, frame_count) within the atlas.
     pub anim_offsets: Vec<(u16, u32, u32)>,
+    /// Fraction of frame height below the foot anchor (0.0–1.0).
+    pub foot_below_frac: f32,
 }
 
 /******************************************************************************/
@@ -245,6 +247,7 @@ pub fn build_spawn_model(device: &wgpu::Device, cells: &[UnitRenderData],
                      angle_x: i16, angle_z: i16,
                      frame_w: u32, frame_h: u32, frames_per_dir: u32,
                      anim_offsets: &[(u16, u32, u32)],
+                     foot_below_frac: f32,
 ) -> ModelEnvelop<TexModel> {
     let mut model: TexModel = MeshModel::new();
     let step = landscape.step();
@@ -322,10 +325,12 @@ pub fn build_spawn_model(device: &wgpu::Device, cells: &[UnitRenderData],
         let v_bottom = uv_off_y + uv_scale_y;
         let v_top = uv_off_y;
 
-        // Screen-facing billboard quad using right and up vectors
+        // Screen-facing billboard quad using right and up vectors.
+        // Shift base down so the foot pixel row (not the cell bottom) aligns with ground.
+        let foot_shift = foot_below_frac * sprite_h;
         let base = Vector3::new(gx, gy, z_base);
-        let bl = base - right * half_w;
-        let br = base + right * half_w;
+        let bl = base - right * half_w - up * foot_shift;
+        let br = base + right * half_w - up * foot_shift;
         let tl = bl + up * sprite_h;
         let tr = br + up * sprite_h;
 
@@ -387,7 +392,7 @@ pub fn build_shadow_proxy_model(device: &wgpu::Device, cells: &[UnitRenderData],
         let dx = gx - center;
         let dy = gy - center;
         let curvature_offset = (dx * dx + dy * dy) * curvature_scale;
-        let z_base = gz - curvature_offset + step * 2.0; // above ground enough to exceed shadow bias
+        let z_base = gz - curvature_offset + 0.001; // at ground level; depth bias handled in shader
 
         let tid = tribe_index as i16;
 
@@ -403,10 +408,11 @@ pub fn build_shadow_proxy_model(device: &wgpu::Device, cells: &[UnitRenderData],
         let (src_dir, mirrored) = get_source_direction(display_dir);
         let tribe_row = tribe_index as usize * STORED_DIRECTIONS + src_dir;
         let uv_off_y = tribe_row as f32 / total_rows;
+        // Shadow proxy: world +X = screen-left (camera right ≈ -X), so swap U
         let (u_left, u_right) = if mirrored {
-            (uv_off_x + uv_scale_x, uv_off_x)
-        } else {
             (uv_off_x, uv_off_x + uv_scale_x)
+        } else {
+            (uv_off_x + uv_scale_x, uv_off_x)
         };
         let v_bottom = uv_off_y + uv_scale_y;
         let v_top = uv_off_y;

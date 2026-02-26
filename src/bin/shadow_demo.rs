@@ -835,7 +835,7 @@ impl ApplicationHandler for App {
 
         let (sprite_model, sprite_shadow_quad, sprite_shadow_pipeline, sprite_shadow_group0, sprite_shadow_group1,
              sprite_pipeline, sprite_group0, sprite_group1, sprite_fw, sprite_fh, sprite_fpd) =
-        if let Some((atlas_w, atlas_h, rgba, fw, fh, fpd)) = sprite_atlas {
+        if let Some((atlas_w, atlas_h, rgba, fw, fh, fpd, _max_y)) = sprite_atlas {
             let sprite_tex = GpuTexture::new_2d(device, &gpu.queue, atlas_w, atlas_h,
                 wgpu::TextureFormat::Rgba8UnormSrgb, &rgba, "sprite_atlas");
             let sprite_sampler = GpuTexture::create_sampler(device, true);

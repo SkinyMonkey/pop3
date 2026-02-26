@@ -571,7 +571,7 @@ pub fn build_tribe_atlas(
     vstart_base: usize,
     unit_combo_override: Option<Option<(u16, u16)>>,
     bbox_override: Option<(i32, i32, i32, i32)>,
-) -> Option<(u32, u32, Vec<u8>, u32, u32, u32)> {
+) -> Option<(u32, u32, Vec<u8>, u32, u32, u32, i32)> {
     let base = vstart_base;
 
     // Count max frames per direction
@@ -677,7 +677,7 @@ pub fn build_tribe_atlas(
         }
     }
 
-    Some((atlas_w, atlas_h, rgba, fw, fh, max_frames as u32))
+    Some((atlas_w, atlas_h, rgba, fw, fh, max_frames as u32, max_y))
 }
 
 /// Build a combined atlas for multiple animations of the same subtype.
@@ -690,7 +690,7 @@ pub fn build_multi_anim_atlas(
     container: &ContainerPSFB,
     palette: &[[u8; 4]],
     anim_ids: &[usize],
-) -> Option<(u32, u32, Vec<u8>, u32, u32, u32, Vec<(usize, u32, u32)>)> {
+) -> Option<(u32, u32, Vec<u8>, u32, u32, u32, Vec<(usize, u32, u32)>, i32)> {
     if anim_ids.is_empty() { return None; }
 
     // Resolve animation IDs to VSTART bases
@@ -733,7 +733,7 @@ pub fn build_multi_anim_atlas(
     let mut fh = 0u32;
 
     for &(anim_id, vstart_base) in &resolved {
-        if let Some((aw, ah, rgba, w, h, frames)) =
+        if let Some((aw, ah, rgba, w, h, frames, _my)) =
             build_tribe_atlas(sequences, container, palette, vstart_base, Some(None), Some(shared_bbox))
         {
             fw = w;
@@ -773,7 +773,7 @@ pub fn build_multi_anim_atlas(
         col_offset += frames;
     }
 
-    Some((atlas_w, atlas_h, combined, fw, fh, total_columns, offsets))
+    Some((atlas_w, atlas_h, combined, fw, fh, total_columns, offsets, bbox_max_y))
 }
 
 /******************************************************************************/
@@ -795,7 +795,7 @@ pub fn build_direct_sprite_atlas(
     palette: &[[u8; 4]],
     tribe_sprite_starts: &[u16; 4],
     frames_per_dir: usize,
-) -> Option<(u32, u32, Vec<u8>, u32, u32, u32)> {
+) -> Option<(u32, u32, Vec<u8>, u32, u32, u32, i32)> {
     if frames_per_dir == 0 { return None; }
 
     // First pass: find max sprite dimensions across all tribes/directions/frames
@@ -863,7 +863,9 @@ pub fn build_direct_sprite_atlas(
         }
     }
 
-    Some((atlas_w, atlas_h, rgba, fw, fh, frames_per_dir as u32))
+    // For centered sprites, the below-foot padding is (fh - max_h) / 2
+    let below_foot = ((fh - max_h) / 2) as i32;
+    Some((atlas_w, atlas_h, rgba, fw, fh, frames_per_dir as u32, below_foot))
 }
 
 /// Build a combined atlas for multiple direct-sprite animations.
@@ -875,7 +877,7 @@ pub fn build_direct_multi_anim_atlas(
     container: &ContainerPSFB,
     palette: &[[u8; 4]],
     anims: &[(u16, [u16; 4], usize)],
-) -> Option<(u32, u32, Vec<u8>, u32, u32, u32, Vec<(usize, u32, u32)>)> {
+) -> Option<(u32, u32, Vec<u8>, u32, u32, u32, Vec<(usize, u32, u32)>, i32)> {
     if anims.is_empty() { return None; }
 
     // Compute shared max frame size across all animations
@@ -947,7 +949,8 @@ pub fn build_direct_multi_anim_atlas(
         col_offset += fpd as u32;
     }
 
-    Some((atlas_w, atlas_h, rgba, fw, fh, total_cols, offsets))
+    // For centered sprites, below-foot padding = 0 for the tallest sprite
+    Some((atlas_w, atlas_h, rgba, fw, fh, total_cols, offsets, 0))
 }
 
 /******************************************************************************/
