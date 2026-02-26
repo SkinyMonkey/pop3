@@ -46,7 +46,7 @@ use crate::render::sprites::{
     obj_colors, convert_palette,
     pack_palette_rgba, rgb_to_rgba,
     extract_level_objects,
-    build_spawn_model, build_shadow_proxy_model,
+    build_spawn_model,
     build_object_markers, build_unit_markers, build_selection_rings,
 };
 
@@ -592,7 +592,7 @@ pub struct App {
     // Shadow mapping
     shadow_depth_view: Option<wgpu::TextureView>,
     shadow_depth_building_pipeline: Option<wgpu::RenderPipeline>,
-    shadow_depth_sprite_pipeline: Option<wgpu::RenderPipeline>,
+
     shadow_pass_group0: Option<wgpu::BindGroup>,
     light_mvp_buffer: Option<GpuBuffer>,
     shadow_recv_group2_layout: Option<wgpu::BindGroupLayout>,
@@ -718,7 +718,7 @@ impl App {
             unit_renders: Vec::new(),
             shadow_depth_view: None,
             shadow_depth_building_pipeline: None,
-            shadow_depth_sprite_pipeline: None,
+
             shadow_pass_group0: None,
             light_mvp_buffer: None,
             shadow_recv_group2_layout: None,
@@ -1054,14 +1054,8 @@ impl App {
                         ur.frame_width, ur.frame_height, ur.frames_per_dir,
                         &ur.anim_offsets, ur.foot_below_frac,
                     ));
-                    ur.shadow_model = Some(build_shadow_proxy_model(
-                        &gpu.device, &ur.cells, &self.engine.landscape_mesh, cs,
-                        ur.frame_width, ur.frame_height, ur.frames_per_dir,
-                        &ur.anim_offsets,
-                    ));
                 } else {
                     ur.model = None;
-                    ur.shadow_model = None;
                 }
             }
         }
@@ -1138,7 +1132,7 @@ impl App {
                     texture: tex,
                     bind_group,
                     model: None,
-                    shadow_model: None,
+
                     frame_width: fw,
                     frame_height: fh,
                     frames_per_dir: total_cols,
@@ -1177,7 +1171,7 @@ impl App {
                     texture: tex,
                     bind_group,
                     model: None,
-                    shadow_model: None,
+
                     frame_width: fw,
                     frame_height: fh,
                     frames_per_dir: total_cols,
@@ -1641,17 +1635,6 @@ impl App {
                     }
                 }
 
-                // Shadow cast: sprites (flat proxy quads, not camera-facing billboards)
-                if let Some(ref pipeline) = self.shadow_depth_sprite_pipeline {
-                    shadow_pass.set_pipeline(pipeline);
-                    shadow_pass.set_bind_group(0, shadow_g0, &[]);
-                    for ur in &self.unit_renders {
-                        if let Some(ref shadow_model) = ur.shadow_model {
-                            shadow_pass.set_bind_group(1, &ur.bind_group, &[]);
-                            shadow_model.draw(&mut shadow_pass);
-                        }
-                    }
-                }
             }
         }
 
@@ -2093,48 +2076,6 @@ impl ApplicationHandler for App {
             cache: None,
         });
 
-        // Shadow depth sprite pipeline (depth-only, no color target)
-        let shadow_depth_sprite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("shadow_depth_sprite_shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/shadow_depth_sprite.wgsl").into()),
-        });
-        let shadow_depth_sprite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("shadow_depth_sprite_layout"),
-            bind_group_layouts: &[&shadow_pass_group0_layout, &sprite_group1_layout],
-            immediate_size: 0,
-        });
-        let shadow_depth_sprite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("shadow_depth_sprite_pipeline"),
-            layout: Some(&shadow_depth_sprite_layout),
-            vertex: wgpu::VertexState {
-                module: &shadow_depth_sprite_shader,
-                entry_point: Some("vs_main"),
-                buffers: &TexModel::vertex_buffer_layouts(),
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shadow_depth_sprite_shader,
-                entry_point: Some("fs_main"),
-                targets: &[],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
         // Shaman sprite pipeline (with lighting + shadow receiving)
         let spawn_shader_source = include_str!("../../shaders/shaman_sprite.wgsl");
         let spawn_vertex_layouts = TexModel::vertex_buffer_layouts();
@@ -2406,7 +2347,7 @@ impl ApplicationHandler for App {
         self.sprite_group1_layout = Some(sprite_group1_layout);
         self.shadow_depth_view = Some(shadow_depth_view);
         self.shadow_depth_building_pipeline = Some(shadow_depth_building_pipeline);
-        self.shadow_depth_sprite_pipeline = Some(shadow_depth_sprite_pipeline);
+
         self.shadow_pass_group0 = Some(shadow_pass_group0);
         self.light_mvp_buffer = Some(light_mvp_buffer);
         self.shadow_recv_group2_layout = Some(shadow_recv_group2_layout);
