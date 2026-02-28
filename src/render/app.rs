@@ -158,6 +158,8 @@ pub struct GameEngine {
     show_shadows: bool,
     show_lighting: bool,
     show_markers: bool,
+    sprite_z_offset: f32,
+    sprite_scale: f32,
     hud_tab: HudTab,
     hud_visible: bool,
     hud_panel_sprite_count: usize,
@@ -460,6 +462,16 @@ impl GameEngine {
                 log::info!("curvature_scale = {:.6}", self.curvature_scale);
                 true
             }
+            GameCommand::AdjustSpriteOffset { delta } => {
+                self.sprite_z_offset += delta;
+                eprintln!("[SPRITE] z_offset={:.4} scale={:.2}", self.sprite_z_offset, self.sprite_scale);
+                true
+            }
+            GameCommand::AdjustSpriteScale { delta } => {
+                self.sprite_scale = (self.sprite_scale + delta).max(0.05);
+                eprintln!("[SPRITE] z_offset={:.4} scale={:.2}", self.sprite_z_offset, self.sprite_scale);
+                true
+            }
             GameCommand::NextLevel => {
                 self.level_num = (self.level_num + 1) % 26;
                 if self.level_num == 0 { self.level_num = 1; }
@@ -683,6 +695,8 @@ impl App {
                 show_shadows: true,
                 show_lighting: true,
                 show_markers: true,
+                sprite_z_offset: 0.0,
+                sprite_scale: 1.0,
                 hud_tab: HudTab::Spells,
                 hud_visible: false,
                 hud_panel_sprite_count: 0,
@@ -1001,7 +1015,8 @@ impl App {
                 GameCommand::TopDownView => {
                     self.log_camera_state("KeyT");
                 }
-                GameCommand::ToggleCurvature | GameCommand::AdjustCurvature { .. } => {
+                GameCommand::ToggleCurvature | GameCommand::AdjustCurvature { .. }
+                | GameCommand::AdjustSpriteOffset { .. } | GameCommand::AdjustSpriteScale { .. } => {
                     self.rebuild_spawn_model();
                 }
                 GameCommand::PanScreen { .. } | GameCommand::PanTerrain { .. } => {
@@ -1052,7 +1067,8 @@ impl App {
                         &gpu.device, &ur.cells, &self.engine.landscape_mesh, cs,
                         self.engine.camera.angle_x, self.engine.camera.angle_z,
                         ur.frame_width, ur.frame_height, ur.frames_per_dir,
-                        &ur.anim_offsets, ur.foot_below_frac,
+                        &ur.anim_offsets,
+                        self.engine.sprite_z_offset, self.engine.sprite_scale,
                     ));
                 } else {
                     ur.model = None;
@@ -1106,7 +1122,7 @@ impl App {
 
         // Non-shaman subtypes: build combined idle+walk atlas
         for &(subtype, anim_indices) in &UNIT_MULTI_ANIMS {
-            if let Some((atlas_w, atlas_h, rgba, fw, fh, total_cols, offsets, max_y)) =
+            if let Some((atlas_w, atlas_h, rgba, fw, fh, total_cols, offsets, _max_y)) =
                 build_multi_anim_atlas(&sequences, &container, &palette, anim_indices)
             {
                 let tex = GpuTexture::new_2d(
@@ -1125,7 +1141,6 @@ impl App {
                 let anim_offsets: Vec<(u16, u32, u32)> = offsets.iter()
                     .map(|(idx, off, fc)| (*idx as u16, *off, *fc))
                     .collect();
-                let foot_below_frac = max_y.max(0) as f32 / fh.max(1) as f32;
                 self.unit_renders.push(UnitTypeRender {
                     subtype,
                     cells: Vec::new(),
@@ -1137,7 +1152,6 @@ impl App {
                     frame_height: fh,
                     frames_per_dir: total_cols,
                     anim_offsets,
-                    foot_below_frac,
                 });
             }
         }
@@ -1145,7 +1159,7 @@ impl App {
         // Shaman: pre-rendered per-tribe sprites (not VELE composited)
         {
             let subtype = PERSON_SUBTYPE_SHAMAN;
-            if let Some((atlas_w, atlas_h, rgba, fw, fh, total_cols, offsets, max_y)) =
+            if let Some((atlas_w, atlas_h, rgba, fw, fh, total_cols, offsets, _max_y)) =
                 build_direct_multi_anim_atlas(&container, &palette, &SHAMAN_ANIMS)
             {
                 let tex = GpuTexture::new_2d(
@@ -1164,7 +1178,6 @@ impl App {
                 let anim_offsets: Vec<(u16, u32, u32)> = offsets.iter()
                     .map(|(idx, off, fc)| (*idx as u16, *off, *fc))
                     .collect();
-                let foot_below_frac = max_y.max(0) as f32 / fh.max(1) as f32;
                 self.unit_renders.push(UnitTypeRender {
                     subtype,
                     cells: Vec::new(),
@@ -1176,7 +1189,6 @@ impl App {
                     frame_height: fh,
                     frames_per_dir: total_cols,
                     anim_offsets,
-                    foot_below_frac,
                 });
             }
         }
@@ -2542,7 +2554,8 @@ impl ApplicationHandler for App {
                                     self.rebuild_spawn_model();
                                     self.log_camera_state("reset");
                                 }
-                                GameCommand::ToggleCurvature | GameCommand::AdjustCurvature { .. } => {
+                                GameCommand::ToggleCurvature | GameCommand::AdjustCurvature { .. }
+                | GameCommand::AdjustSpriteOffset { .. } | GameCommand::AdjustSpriteScale { .. } => {
                                     self.rebuild_spawn_model();
                                 }
                                 GameCommand::PanScreen { .. } | GameCommand::PanTerrain { .. } => {
