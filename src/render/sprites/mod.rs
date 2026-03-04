@@ -226,14 +226,12 @@ pub struct UnitTypeRender {
     pub texture: GpuTexture,  // kept alive for GPU bind group
     pub bind_group: wgpu::BindGroup,
     pub model: Option<ModelEnvelop<TexModel>>,
-    pub shadow_model: Option<ModelEnvelop<TexModel>>,  // flat proxy for shadow depth pass
+
     pub frame_width: u32,
     pub frame_height: u32,
     pub frames_per_dir: u32,  // total columns in atlas
     /// Maps animation_id → (column_offset, frame_count) within the atlas.
     pub anim_offsets: Vec<(u16, u32, u32)>,
-    /// Fraction of frame height below the foot anchor (0.0–1.0).
-    pub foot_below_frac: f32,
 }
 
 /******************************************************************************/
@@ -247,16 +245,16 @@ pub fn build_spawn_model(device: &wgpu::Device, cells: &[UnitRenderData],
                      angle_x: i16, angle_z: i16,
                      frame_w: u32, frame_h: u32, frames_per_dir: u32,
                      anim_offsets: &[(u16, u32, u32)],
-                     foot_below_frac: f32,
+                     sprite_z_offset: f32, sprite_scale: f32,
 ) -> ModelEnvelop<TexModel> {
     let mut model: TexModel = MeshModel::new();
     let step = landscape.step();
-    let height_scale = landscape.height_scale();
+
     let w = landscape.width() as f32;
     let shift = landscape.get_shift_vector();
 
     // Sprite sizing: use atlas aspect ratio
-    let sprite_h = step * 0.6;
+    let sprite_h = step * 0.6 * sprite_scale;
     let aspect = if frame_h > 0 { frame_w as f32 / frame_h as f32 } else { 1.0 };
     let half_w = sprite_h * aspect / 2.0;
 
@@ -292,14 +290,12 @@ pub fn build_spawn_model(device: &wgpu::Device, cells: &[UnitRenderData],
         let gx = vis_x * step;
         let gy = vis_y * step;
 
-        let ix = (cell_x as usize).min(127);
-        let iy = (cell_y as usize).min(127);
-        let gz = landscape.height_at(ix, iy) as f32 * height_scale;
+        let gz = landscape.interpolate_height_at(cell_x, cell_y);
 
         let dx = gx - center;
         let dy = gy - center;
         let curvature_offset = (dx * dx + dy * dy) * curvature_scale;
-        let z_base = gz - curvature_offset + 0.01;
+        let z_base = gz - curvature_offset - 0.0045 + sprite_z_offset;
 
         let tid = tribe_index as i16;
 
@@ -327,10 +323,9 @@ pub fn build_spawn_model(device: &wgpu::Device, cells: &[UnitRenderData],
 
         // Screen-facing billboard quad using right and up vectors.
         // Shift base down so the foot pixel row (not the cell bottom) aligns with ground.
-        let foot_shift = foot_below_frac * sprite_h;
         let base = Vector3::new(gx, gy, z_base);
-        let bl = base - right * half_w - up * foot_shift;
-        let br = base + right * half_w - up * foot_shift;
+        let bl = base - right * half_w;
+        let br = base + right * half_w;
         let tl = bl + up * sprite_h;
         let tr = br + up * sprite_h;
 
@@ -350,94 +345,6 @@ pub fn build_spawn_model(device: &wgpu::Device, cells: &[UnitRenderData],
     ModelEnvelop::<TexModel>::new(device, m)
 }
 
-/// Build flat horizontal quads at each sprite position for shadow depth casting.
-/// Camera-facing billboards are edge-on from the light's POV, so we use flat
-/// ground-level proxies instead.
-pub fn build_shadow_proxy_model(device: &wgpu::Device, cells: &[UnitRenderData],
-                     landscape: &LandscapeMesh<128>, curvature_scale: f32,
-                     frame_w: u32, frame_h: u32, frames_per_dir: u32,
-                     anim_offsets: &[(u16, u32, u32)],
-) -> ModelEnvelop<TexModel> {
-    let mut model: TexModel = MeshModel::new();
-    let step = landscape.step();
-    let height_scale = landscape.height_scale();
-    let w = landscape.width() as f32;
-    let shift = landscape.get_shift_vector();
-
-    let sprite_h = step * 0.6;
-    let aspect = if frame_h > 0 { frame_w as f32 / frame_h as f32 } else { 1.0 };
-    let half_w = sprite_h * aspect / 2.0;
-
-    let center = (w - 1.0) * step / 2.0;
-
-    let fpd = frames_per_dir as f32;
-    let total_rows = (NUM_TRIBES * STORED_DIRECTIONS) as f32;
-    let uv_scale_x = 1.0 / fpd;
-    let uv_scale_y = 1.0 / total_rows;
-
-    for unit_data in cells {
-        let cell_x = unit_data.cell_x;
-        let cell_y = unit_data.cell_y;
-        let tribe_index = unit_data.tribe_index;
-
-        let vis_x = ((cell_x - shift.x as f32) % w + w) % w;
-        let vis_y = ((cell_y - shift.y as f32) % w + w) % w;
-        let gx = vis_x * step;
-        let gy = vis_y * step;
-
-        let ix = (cell_x as usize).min(127);
-        let iy = (cell_y as usize).min(127);
-        let gz = landscape.height_at(ix, iy) as f32 * height_scale;
-
-        let dx = gx - center;
-        let dy = gy - center;
-        let curvature_offset = (dx * dx + dy * dy) * curvature_scale;
-        let z_base = gz - curvature_offset + 0.001; // at ground level; depth bias handled in shader
-
-        let tid = tribe_index as i16;
-
-        // Per-unit UV offset (same as billboard)
-        let (col_offset, anim_frames) = anim_offsets.iter()
-            .find(|(id, _, _)| *id == unit_data.animation_id)
-            .map(|(_, off, fc)| (*off, *fc))
-            .unwrap_or((0, frames_per_dir));
-        let frame_idx = (unit_data.frame_index as u32).min(anim_frames.saturating_sub(1));
-        let uv_off_x = (col_offset + frame_idx) as f32 / fpd;
-
-        let display_dir = sprite_direction_from_angle(0, unit_data.facing_angle);
-        let (src_dir, mirrored) = get_source_direction(display_dir);
-        let tribe_row = tribe_index as usize * STORED_DIRECTIONS + src_dir;
-        let uv_off_y = tribe_row as f32 / total_rows;
-        // Shadow proxy: world +X = screen-left (camera right ≈ -X), so swap U
-        let (u_left, u_right) = if mirrored {
-            (uv_off_x, uv_off_x + uv_scale_x)
-        } else {
-            (uv_off_x + uv_scale_x, uv_off_x)
-        };
-        let v_bottom = uv_off_y + uv_scale_y;
-        let v_top = uv_off_y;
-
-        // Flat quad on the ground plane (x/y spread, constant z)
-        let bl = Vector3::new(gx - half_w, gy - sprite_h * 0.5, z_base);
-        let br = Vector3::new(gx + half_w, gy - sprite_h * 0.5, z_base);
-        let tl = Vector3::new(gx - half_w, gy + sprite_h * 0.5, z_base);
-        let tr = Vector3::new(gx + half_w, gy + sprite_h * 0.5, z_base);
-
-        let v = |p: Vector3<f32>, u: f32, v: f32| -> TexVertex {
-            TexVertex { coord: p, uv: Vector2::new(u, v), tex_id: tid }
-        };
-
-        model.push_vertex(v(bl, u_left,  v_bottom));
-        model.push_vertex(v(br, u_right, v_bottom));
-        model.push_vertex(v(tr, u_right, v_top));
-        model.push_vertex(v(bl, u_left,  v_bottom));
-        model.push_vertex(v(tr, u_right, v_top));
-        model.push_vertex(v(tl, u_left,  v_top));
-    }
-    let m = vec![(RenderType::Triangles, model)];
-    ModelEnvelop::<TexModel>::new(device, m)
-}
-
 pub fn build_object_markers(
     device: &wgpu::Device, objects: &[LevelObject],
     landscape: &LandscapeMesh<128>, curvature_scale: f32,
@@ -445,7 +352,7 @@ pub fn build_object_markers(
 ) -> ModelEnvelop<ColorModel> {
     let mut model: ColorModel = MeshModel::new();
     let step = landscape.step();
-    let height_scale = landscape.height_scale();
+
     let w = landscape.width() as f32;
     let shift = landscape.get_shift_vector();
     let center = (w - 1.0) * step / 2.0;
@@ -476,19 +383,17 @@ pub fn build_object_markers(
         // Skip objects outside the visible globe disc
         let dx_cull = gx - center;
         let dy_cull = gy - center;
-        let viewport_radius = center * 0.9;
+        let viewport_radius = center * 1.1;
         if dx_cull * dx_cull + dy_cull * dy_cull > viewport_radius * viewport_radius {
             continue;
         }
 
-        let ix = (obj.cell_x as usize).min(127);
-        let iy = (obj.cell_y as usize).min(127);
-        let gz = landscape.height_at(ix, iy) as f32 * height_scale;
+        let gz = landscape.interpolate_height_at(obj.cell_x as f32, obj.cell_y as f32);
 
         let dx = gx - center;
         let dy = gy - center;
         let curvature_offset = (dx * dx + dy * dy) * curvature_scale;
-        let z_base = gz - curvature_offset + 0.005;
+        let z_base = gz - curvature_offset + 0.0005;
 
         let (half_w, sprite_h) = match obj.model_type {
             ModelType::Person   => (step * 0.15, step * 0.4),
@@ -537,7 +442,7 @@ pub fn build_unit_markers(
     if units.is_empty() { return None; }
     let mut model: ColorModel = MeshModel::new();
     let step = landscape.step();
-    let height_scale = landscape.height_scale();
+
     let w = landscape.width() as f32;
     let shift = landscape.get_shift_vector();
     let center = (w - 1.0) * step / 2.0;
@@ -560,14 +465,12 @@ pub fn build_unit_markers(
         let gx = vis_x * step;
         let gy = vis_y * step;
 
-        let ix = (unit.cell_x as usize).min(127);
-        let iy = (unit.cell_y as usize).min(127);
-        let gz = landscape.height_at(ix, iy) as f32 * height_scale;
+        let gz = landscape.interpolate_height_at(unit.cell_x, unit.cell_y);
 
         let dx = gx - center;
         let dy = gy - center;
         let curvature_offset = (dx * dx + dy * dy) * curvature_scale;
-        let z_base = gz - curvature_offset + 0.005;
+        let z_base = gz - curvature_offset + 0.0005;
 
         let half_w = step * 0.15;
         let sprite_h = step * 0.4;
@@ -600,7 +503,7 @@ pub fn build_selection_rings(
     if coordinator.selection.selected.is_empty() { return None; }
     let mut model: ColorModel = MeshModel::new();
     let step = landscape.step();
-    let height_scale = landscape.height_scale();
+
     let w = landscape.width() as f32;
     let shift = landscape.get_shift_vector();
     let center = (w - 1.0) * step / 2.0;
@@ -619,13 +522,11 @@ pub fn build_selection_rings(
         let vis_y = ((unit.cell_y - shift.y as f32) % w + w) % w;
         let gx = vis_x * step;
         let gy = vis_y * step;
-        let ix = (unit.cell_x as usize).min(127);
-        let iy = (unit.cell_y as usize).min(127);
-        let gz = landscape.height_at(ix, iy) as f32 * height_scale;
+        let gz = landscape.interpolate_height_at(unit.cell_x, unit.cell_y);
         let dx = gx - center;
         let dy = gy - center;
         let curvature_offset = (dx * dx + dy * dy) * curvature_scale;
-        let z_base = gz - curvature_offset + 0.003;
+        let z_base = gz - curvature_offset + 0.0005;
 
         for i in 0..segments {
             let a0 = (i as f32 / segments as f32) * std::f32::consts::TAU;

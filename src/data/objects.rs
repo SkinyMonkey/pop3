@@ -224,8 +224,28 @@ impl Object3D {
         Self::create_objects_all(&objects, &faces, &points)
     }
 
+    /// Load both OBJS banks needed for a level.
+    /// Bank 0 contains building models (indices 117-193 via building_obj_index).
+    /// Level banks (2-8) contain scenery models at different indices.
+    /// Shape_LoadBank @ 0x49b990 remaps bank 0 → 2.
+    /// Returns (building_bank, scenery_bank).
+    pub fn load_dual_banks(base: &Path, level_bank: u8) -> (Vec<Option<Self>>, Vec<Option<Self>>) {
+        let building_bank = Self::from_file_all(base, "0");
+        let scenery_bank_num = if level_bank == 0 { 2 } else { level_bank };
+        let scenery_bank = Self::from_file_all(base, &scenery_bank_num.to_string());
+        (building_bank, scenery_bank)
+    }
+
     pub fn iter_face(&self) -> FaceIter<Iter<FaceRaw>> {
         FaceIter{iter: self.faces.iter(), points: &self.points}
+    }
+
+    pub fn face_count(&self) -> usize {
+        self.faces.len()
+    }
+
+    pub fn point_count(&self) -> usize {
+        self.points.len()
     }
 
     pub fn coord_scale(&self) -> f32 {

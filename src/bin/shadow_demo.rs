@@ -104,44 +104,6 @@ fn build_sprite_billboard(
     ModelEnvelop::<TexModel>::new(device, m)
 }
 
-/// Build a flat (horizontal) quad at ground level for shadow casting.
-/// The shadow pass renders this from the light's POV so the shadow appears
-/// directly under the sprite's base rather than offset by the billboard angle.
-fn build_sprite_shadow_quad(
-    device: &wgpu::Device,
-    pos: Vector3<f32>,
-    half_w: f32,
-    sprite_h: f32,
-    frames_per_dir: u32,
-) -> ModelEnvelop<TexModel> {
-    let u_left  = 0.0_f32;
-    let u_right = 1.0 / frames_per_dir as f32;
-    let v_top   = 0.0_f32;
-    let v_bottom = 1.0 / 20.0;
-
-    // Flat quad lying on the ground at z = -0.5, centered on sprite base
-    let z = -0.499; // just above ground to avoid z-fighting
-    let bl = Vector3::new(pos.x - half_w, pos.y - sprite_h * 0.5, z);
-    let br = Vector3::new(pos.x + half_w, pos.y - sprite_h * 0.5, z);
-    let tl = Vector3::new(pos.x - half_w, pos.y + sprite_h * 0.5, z);
-    let tr = Vector3::new(pos.x + half_w, pos.y + sprite_h * 0.5, z);
-
-    let v = |p: Vector3<f32>, u: f32, v: f32| -> TexVertex {
-        TexVertex { coord: p, uv: Vector2::new(u, v), tex_id: 0 }
-    };
-
-    let mut model: TexModel = MeshModel::new();
-    model.push_vertex(v(bl, u_left,  v_bottom));
-    model.push_vertex(v(br, u_right, v_bottom));
-    model.push_vertex(v(tr, u_right, v_top));
-    model.push_vertex(v(bl, u_left,  v_bottom));
-    model.push_vertex(v(tr, u_right, v_top));
-    model.push_vertex(v(tl, u_left,  v_top));
-
-    let m = vec![(RenderType::Triangles, model)];
-    ModelEnvelop::<TexModel>::new(device, m)
-}
-
 /// Correction matrix: cgmath uses OpenGL z range [-1, 1], wgpu expects [0, 1].
 /// Maps z_out = z_in * 0.5 + 0.5.
 #[rustfmt::skip]
@@ -250,11 +212,7 @@ struct App {
     object_group1: Option<wgpu::BindGroup>,
     // Sprite
     sprite_model: Option<ModelEnvelop<TexModel>>,       // vertical billboard for main pass
-    sprite_shadow_model: Option<ModelEnvelop<TexModel>>, // flat quad for shadow pass
     sprite_transform_buffer: Option<GpuBuffer>,
-    sprite_shadow_pipeline: Option<wgpu::RenderPipeline>,
-    sprite_shadow_group0: Option<wgpu::BindGroup>,
-    sprite_shadow_group1: Option<wgpu::BindGroup>,
     sprite_pipeline: Option<wgpu::RenderPipeline>,
     sprite_group0: Option<wgpu::BindGroup>,
     sprite_group1: Option<wgpu::BindGroup>,
@@ -300,11 +258,7 @@ impl App {
             object_group0: None,
             object_group1: None,
             sprite_model: None,
-            sprite_shadow_model: None,
             sprite_transform_buffer: None,
-            sprite_shadow_pipeline: None,
-            sprite_shadow_group0: None,
-            sprite_shadow_group1: None,
             sprite_pipeline: None,
             sprite_group0: None,
             sprite_group1: None,
@@ -377,16 +331,6 @@ impl App {
             pass.set_bind_group(1, self.shadow_pass_group1.as_ref().unwrap(), &[]);
             pop_obj.draw(&mut pass);
 
-            // Sprite shadow (vertical billboard — shadow offset is inherent to billboard lighting)
-            if let (Some(ref spl), Some(ref sg0), Some(ref sg1), Some(ref sm)) = (
-                &self.sprite_shadow_pipeline, &self.sprite_shadow_group0,
-                &self.sprite_shadow_group1, &self.sprite_model,
-            ) {
-                pass.set_pipeline(spl);
-                pass.set_bind_group(0, sg0, &[]);
-                pass.set_bind_group(1, sg1, &[]);
-                sm.draw(&mut pass);
-            }
         }
 
         // Pass 2: Main (ground + building)
@@ -833,8 +777,7 @@ impl ApplicationHandler for App {
             build_tribe_atlas(&sequences, c, &palette, anim_idx, Some(None), None)
         });
 
-        let (sprite_model, sprite_shadow_quad, sprite_shadow_pipeline, sprite_shadow_group0, sprite_shadow_group1,
-             sprite_pipeline, sprite_group0, sprite_group1, sprite_fw, sprite_fh, sprite_fpd) =
+        let (sprite_model, sprite_pipeline, sprite_group0, sprite_group1, sprite_fw, sprite_fh, sprite_fpd) =
         if let Some((atlas_w, atlas_h, rgba, fw, fh, fpd, _max_y)) = sprite_atlas {
             let sprite_tex = GpuTexture::new_2d(device, &gpu.queue, atlas_w, atlas_h,
                 wgpu::TextureFormat::Rgba8UnormSrgb, &rgba, "sprite_atlas");
@@ -845,64 +788,6 @@ impl ApplicationHandler for App {
             let sprite_pos = Vector3::new(0.6, 0.3, -0.55); // next to building, sunk slightly into ground
             let sm = build_sprite_billboard(device, &self.camera, sprite_pos,
                 sprite_h, aspect, fw, fh, fpd);
-            let half_w = sprite_h * aspect / 2.0;
-            let shadow_quad = build_sprite_shadow_quad(device, sprite_pos, half_w, sprite_h, fpd);
-
-            // Shadow pass group0 for sprite: same layout (light_mvp + model_transform)
-            let spr_shadow_group0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("sprite_shadow_group0"),
-                layout: &shadow_group0_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: light_mvp_buffer.buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: sprite_transform_buffer.buffer.as_entire_binding() },
-                ],
-            });
-            let spr_shadow_group1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("sprite_shadow_group1"),
-                layout: &tex_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&sprite_tex.view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sprite_sampler) },
-                ],
-            });
-
-            // Sprite shadow depth pipeline (standard alpha test, different shader)
-            let sprite_depth_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("sprite_depth_shader"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/shadow_demo_depth_sprite.wgsl").into()),
-            });
-            let sprite_shadow_pl = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("sprite_shadow_depth_pipeline"),
-                layout: Some(&shadow_depth_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &sprite_depth_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &TexModel::vertex_buffer_layouts(),
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &sprite_depth_shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: true,
-                    depth_compare: wgpu::CompareFunction::Less,
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            });
-
             // Sprite main pass
             let spr_group0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("sprite_group0"),
@@ -931,11 +816,10 @@ impl ApplicationHandler for App {
                 "sprite_pipeline",
             );
 
-            (Some(sm), Some(shadow_quad), Some(sprite_shadow_pl), Some(spr_shadow_group0), Some(spr_shadow_group1),
-             Some(sprite_pl), Some(spr_group0), Some(spr_group1), fw, fh, fpd)
+            (Some(sm), Some(sprite_pl), Some(spr_group0), Some(spr_group1), fw, fh, fpd)
         } else {
             eprintln!("Warning: could not load sprite atlas");
-            (None, None, None, None, None, None, None, None, 0, 0, 0)
+            (None, None, None, None, 0, 0, 0)
         };
 
         // --- Store everything ---
@@ -957,11 +841,7 @@ impl ApplicationHandler for App {
         self.object_group1 = Some(object_group1);
         self.pop_obj = Some(pop_obj);
         self.sprite_model = sprite_model;
-        self.sprite_shadow_model = sprite_shadow_quad;
         self.sprite_transform_buffer = Some(sprite_transform_buffer);
-        self.sprite_shadow_pipeline = sprite_shadow_pipeline;
-        self.sprite_shadow_group0 = sprite_shadow_group0;
-        self.sprite_shadow_group1 = sprite_shadow_group1;
         self.sprite_pipeline = sprite_pipeline;
         self.sprite_group0 = sprite_group0;
         self.sprite_group1 = sprite_group1;

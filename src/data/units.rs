@@ -118,17 +118,28 @@ pub fn building_obj_index(subtype: u8, tribe_index: u8) -> Option<usize> {
 }
 
 /// Returns the OBJS object index for a scenery object.
-/// Trees are at OBJS indices 13-18 (single models) and 60-71 (variant pairs).
-/// Subtypes 1-6 are tree types; each has a base index with position-based variants.
+/// Derived from the scenery data table at 0x5a0790 (field +0x0a per 0x18-byte entry)
+/// and Object_InitShapeData @ 0x4bd5b0 which applies subtype-specific overrides.
 pub fn scenery_obj_index(subtype: u8) -> Option<usize> {
     match subtype {
-        1 => Some(13),  // Mass Tree
-        2 => Some(14),  // Special Tree 1
-        3 => Some(15),  // Special Tree 2
-        4 => Some(16),  // Mass Fruit Tree
-        5 => Some(17),  // Special Fruit Tree 1
-        6 => Some(18),  // Special Fruit Tree 2
-        _ => None,
+        1  => Some(13),  // Mass Tree
+        2  => Some(14),  // Special Tree 1
+        3  => Some(15),  // Special Tree 2
+        4  => Some(16),  // Mass Fruit Tree
+        5  => Some(17),  // Special Fruit Tree 1
+        6  => Some(18),  // Special Fruit Tree 2
+        7  => Some(2),   // Tree variant 7
+        8  => Some(3),   // Tree variant 8
+        9  => Some(45),  // Stone Head (worship site)
+        10 => Some(5),   // Obelisk
+        11 => Some(23),  // Totem Pole
+        12 => Some(30),  // Discovery Pillar (Reincarnation Site)
+        14 => Some(26),  // Additional Tree (Object_InitShapeData forces 0x1a)
+        15 => Some(12),  // Bridge/Island
+        16 => Some(18),  // Portal/Trigger scenery
+        18 => Some(44),  // Vegetation
+        19 => Some(39),  // Sub-level Scenery
+        _  => None,      // 0, 13 (position-variant), 17 (no model)
     }
 }
 

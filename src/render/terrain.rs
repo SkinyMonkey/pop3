@@ -153,6 +153,57 @@ impl<const N: usize> LandscapeMesh<N> {
         h * self.height_scale
     }
 
+    /// Compute the curved terrain surface height at a visual grid position,
+    /// matching the GPU shader: curvature is applied per-vertex BEFORE interpolation.
+    ///
+    /// `vis_x, vis_y`: visual grid position (0..N), same as the shader's `in.coord_in`.
+    /// The shader uses the raw vertex index for position/curvature and the shifted
+    /// index for height lookup.
+    pub fn curved_height_at(&self, vis_x: f32, vis_y: f32, curvature_scale: f32) -> f32 {
+        let step = self.step;
+        let w = N as f32;
+        let center = (w - 1.0) * step / 2.0;
+        let sx = self.shift_x;
+        let sy = self.shift_y;
+
+        let ix = vis_x.floor() as i32;
+        let iy = vis_y.floor() as i32;
+        let fx = vis_x - ix as f32;
+        let fy = vis_y - iy as f32;
+
+        // Visual vertex indices (grid positions for curvature)
+        let vx0 = ((ix % N as i32 + N as i32) as usize) % N;
+        let vy0 = ((iy % N as i32 + N as i32) as usize) % N;
+        let vx1 = (vx0 + 1) % N;
+        let vy1 = (vy0 + 1) % N;
+
+        // Apply curvature per-vertex matching the shader:
+        //   coord3d.x = vertex_index * step  (visual position, for curvature)
+        //   height = heights[(vertex_index + shift) % w]  (shifted, for height)
+        let curv = |vx: usize, vy: usize| -> f32 {
+            let hx = (vx + sx) % N;
+            let hy = (vy + sy) % N;
+            let h = self.heights[hy][hx] as f32 * self.height_scale;
+            let gx = vx as f32 * step;
+            let gy = vy as f32 * step;
+            let dx = gx - center;
+            let dy = gy - center;
+            h - (dx * dx + dy * dy) * curvature_scale
+        };
+
+        let c00 = curv(vx0, vy0);
+        let c10 = curv(vx1, vy0);
+        let c01 = curv(vx0, vy1);
+        let c11 = curv(vx1, vy1);
+
+        // "/" diagonal split — same as gen_mesh() and interpolate_height_at
+        if fx + fy <= 1.0 {
+            c00 + (c10 - c00) * fx + (c01 - c00) * fy
+        } else {
+            c11 + (c01 - c11) * (1.0 - fx) + (c10 - c11) * (1.0 - fy)
+        }
+    }
+
     /// Flatten terrain under a building footprint.
     ///
     /// Matches Building_FlattenTerrain (0x0042F2A0):
@@ -445,4 +496,94 @@ pub fn make_landscape_model<const N: usize>(device: &wgpu::Device, landscape_mes
     }
     eprintln!("[landscape] model transform: location=({0},{0},0) scale={1}", LANDSCAPE_OFFSET, LANDSCAPE_SCALE);
     model_main
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Compare sprite z_base computation against the terrain shader's curved surface.
+    ///
+    /// Sprite method: interpolate raw height at cell coords, then subtract curvature
+    ///   using visual position: vis = (cell - shift) % w.
+    /// Shader method: apply curvature per-vertex at visual position, height from
+    ///   shifted index, then GPU interpolates curved vertices.
+    ///
+    /// Tests both shift=0 and shift≠0 to catch coordinate mapping bugs.
+    #[test]
+    fn sprite_vs_terrain_curvature_drift() {
+        let mut mesh = LandscapeMesh::<128>::new(0.0625, 0.0004);
+
+        // Create a sloped terrain (height increases with x and y)
+        let mut heights = [[0u16; 128]; 128];
+        for y in 0..128 {
+            for x in 0..128 {
+                heights[y][x] = (x as u16) * 4 + (y as u16) * 2;
+            }
+        }
+        mesh.set_heights(&heights);
+
+        let step = mesh.step();
+        let w = 128.0_f32;
+        let center = (w - 1.0) * step / 2.0;
+        let curvature_scale: f32 = 0.0512;
+
+        // Test cells (absolute cell positions)
+        let test_cells: Vec<(f32, f32)> = vec![
+            (64.0, 64.0),    // near center (when shift=0)
+            (80.5, 64.5),    // moderate distance
+            (100.5, 100.5),  // far
+            (120.5, 120.5),  // very far (edge)
+            (10.5, 10.5),    // other edge
+            (64.5, 120.5),   // far in one axis
+        ];
+
+        // Test with multiple shift values
+        let shifts: Vec<(usize, usize)> = vec![
+            (0, 0),     // no shift
+            (77, 33),   // typical game shift
+            (120, 120), // large shift near wrap
+        ];
+
+        let mut overall_max_delta: f32 = 0.0;
+
+        for (sx, sy) in &shifts {
+            mesh.set_shift(*sx, *sy);
+            eprintln!("\n--- shift=({},{}) ---", sx, sy);
+            eprintln!("{:<20} {:>8} {:>10} {:>10} {:>10} {:>10}",
+                "cell(vis)", "dist", "sprite_z", "shader_z", "delta", "delta_px");
+
+            for (cx, cy) in &test_cells {
+                // Sprite code: vis = (cell - shift) % w
+                let vis_x = ((*cx - *sx as f32) % w + w) % w;
+                let vis_y = ((*cy - *sy as f32) % w + w) % w;
+                let gx = vis_x * step;
+                let gy = vis_y * step;
+
+                // Sprite method: interpolate height at cell coords, curvature at visual pos
+                let gz = mesh.interpolate_height_at(*cx, *cy);
+                let dx = gx - center;
+                let dy = gy - center;
+                let curv_off = (dx * dx + dy * dy) * curvature_scale;
+                let sprite_z = gz - curv_off;
+
+                // Shader method: curvature per-vertex at visual pos, then interpolate
+                let shader_z = mesh.curved_height_at(vis_x, vis_y, curvature_scale);
+
+                let delta = sprite_z - shader_z;
+                let delta_px = delta * LANDSCAPE_SCALE * 600.0;
+                overall_max_delta = overall_max_delta.max(delta.abs());
+
+                let dist = (dx * dx + dy * dy).sqrt();
+                eprintln!("({:>5.1},{:>5.1})({:>5.1},{:>5.1}) {:>6.2} {:>10.6} {:>10.6} {:>10.6} {:>8.1}px",
+                    cx, cy, vis_x, vis_y, dist, sprite_z, shader_z, delta, delta_px);
+            }
+        }
+
+        eprintln!("\noverall max delta = {:.6} ({:.1}px)",
+            overall_max_delta, overall_max_delta * LANDSCAPE_SCALE * 600.0);
+
+        // If delta > ~0.001 (≈1.5px), sprites visibly float.
+        assert!(overall_max_delta < 0.1, "curvature drift sanity check");
+    }
 }

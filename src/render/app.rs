@@ -46,7 +46,7 @@ use crate::render::sprites::{
     obj_colors, convert_palette,
     pack_palette_rgba, rgb_to_rgba,
     extract_level_objects,
-    build_spawn_model, build_shadow_proxy_model,
+    build_spawn_model,
     build_object_markers, build_unit_markers, build_selection_rings,
 };
 
@@ -158,6 +158,8 @@ pub struct GameEngine {
     show_shadows: bool,
     show_lighting: bool,
     show_markers: bool,
+    sprite_z_offset: f32,
+    sprite_scale: f32,
     hud_tab: HudTab,
     hud_visible: bool,
     hud_panel_sprite_count: usize,
@@ -169,7 +171,8 @@ pub struct GameEngine {
 
     // Level data
     level_objects: Vec<LevelObject>,
-    objects_3d: Vec<Option<Object3D>>,
+    building_objects: Vec<Option<Object3D>>,  // from OBJS bank 0 (building models)
+    scenery_objects: Vec<Option<Object3D>>,   // from level-specific OBJS bank (scenery models)
     shapes: Vec<Shape>,
 
     // Water animation
@@ -460,6 +463,16 @@ impl GameEngine {
                 log::info!("curvature_scale = {:.6}", self.curvature_scale);
                 true
             }
+            GameCommand::AdjustSpriteOffset { delta } => {
+                self.sprite_z_offset += delta;
+                eprintln!("[SPRITE] z_offset={:.4} scale={:.2}", self.sprite_z_offset, self.sprite_scale);
+                true
+            }
+            GameCommand::AdjustSpriteScale { delta } => {
+                self.sprite_scale = (self.sprite_scale + delta).max(0.05);
+                eprintln!("[SPRITE] z_offset={:.4} scale={:.2}", self.sprite_z_offset, self.sprite_scale);
+                true
+            }
             GameCommand::NextLevel => {
                 self.level_num = (self.level_num + 1) % 26;
                 if self.level_num == 0 { self.level_num = 1; }
@@ -551,7 +564,8 @@ impl GameEngine {
             show_markers: self.show_markers,
             unit_coordinator: &self.unit_coordinator,
             level_objects: &self.level_objects,
-            objects_3d: &self.objects_3d,
+            building_objects: &self.building_objects,
+            scenery_objects: &self.scenery_objects,
             shapes: &self.shapes,
             hud_state: self.build_hud_state(),
             drag_state,
@@ -592,7 +606,7 @@ pub struct App {
     // Shadow mapping
     shadow_depth_view: Option<wgpu::TextureView>,
     shadow_depth_building_pipeline: Option<wgpu::RenderPipeline>,
-    shadow_depth_sprite_pipeline: Option<wgpu::RenderPipeline>,
+
     shadow_pass_group0: Option<wgpu::BindGroup>,
     light_mvp_buffer: Option<GpuBuffer>,
     shadow_recv_group2_layout: Option<wgpu::BindGroupLayout>,
@@ -683,6 +697,8 @@ impl App {
                 show_shadows: true,
                 show_lighting: true,
                 show_markers: true,
+                sprite_z_offset: 0.005,
+                sprite_scale: 0.65,
                 hud_tab: HudTab::Spells,
                 hud_visible: false,
                 hud_panel_sprite_count: 0,
@@ -694,7 +710,8 @@ impl App {
                 },
                 game_time: StdTimeSource::new(),
                 level_objects: Vec::new(),
-                objects_3d: Vec::new(),
+                building_objects: Vec::new(),
+                scenery_objects: Vec::new(),
                 shapes: Vec::new(),
                 wat_offset: -1,
                 wat_interval: 5000,
@@ -718,7 +735,7 @@ impl App {
             unit_renders: Vec::new(),
             shadow_depth_view: None,
             shadow_depth_building_pipeline: None,
-            shadow_depth_sprite_pipeline: None,
+
             shadow_pass_group0: None,
             light_mvp_buffer: None,
             shadow_recv_group2_layout: None,
@@ -1001,7 +1018,8 @@ impl App {
                 GameCommand::TopDownView => {
                     self.log_camera_state("KeyT");
                 }
-                GameCommand::ToggleCurvature | GameCommand::AdjustCurvature { .. } => {
+                GameCommand::ToggleCurvature | GameCommand::AdjustCurvature { .. }
+                | GameCommand::AdjustSpriteOffset { .. } | GameCommand::AdjustSpriteScale { .. } => {
                     self.rebuild_spawn_model();
                 }
                 GameCommand::PanScreen { .. } | GameCommand::PanTerrain { .. } => {
@@ -1052,16 +1070,11 @@ impl App {
                         &gpu.device, &ur.cells, &self.engine.landscape_mesh, cs,
                         self.engine.camera.angle_x, self.engine.camera.angle_z,
                         ur.frame_width, ur.frame_height, ur.frames_per_dir,
-                        &ur.anim_offsets, ur.foot_below_frac,
-                    ));
-                    ur.shadow_model = Some(build_shadow_proxy_model(
-                        &gpu.device, &ur.cells, &self.engine.landscape_mesh, cs,
-                        ur.frame_width, ur.frame_height, ur.frames_per_dir,
                         &ur.anim_offsets,
+                        self.engine.sprite_z_offset, self.engine.sprite_scale,
                     ));
                 } else {
                     ur.model = None;
-                    ur.shadow_model = None;
                 }
             }
         }
@@ -1112,7 +1125,7 @@ impl App {
 
         // Non-shaman subtypes: build combined idle+walk atlas
         for &(subtype, anim_indices) in &UNIT_MULTI_ANIMS {
-            if let Some((atlas_w, atlas_h, rgba, fw, fh, total_cols, offsets, max_y)) =
+            if let Some((atlas_w, atlas_h, rgba, fw, fh, total_cols, offsets, _max_y)) =
                 build_multi_anim_atlas(&sequences, &container, &palette, anim_indices)
             {
                 let tex = GpuTexture::new_2d(
@@ -1131,19 +1144,17 @@ impl App {
                 let anim_offsets: Vec<(u16, u32, u32)> = offsets.iter()
                     .map(|(idx, off, fc)| (*idx as u16, *off, *fc))
                     .collect();
-                let foot_below_frac = max_y.max(0) as f32 / fh.max(1) as f32;
                 self.unit_renders.push(UnitTypeRender {
                     subtype,
                     cells: Vec::new(),
                     texture: tex,
                     bind_group,
                     model: None,
-                    shadow_model: None,
+
                     frame_width: fw,
                     frame_height: fh,
                     frames_per_dir: total_cols,
                     anim_offsets,
-                    foot_below_frac,
                 });
             }
         }
@@ -1151,7 +1162,7 @@ impl App {
         // Shaman: pre-rendered per-tribe sprites (not VELE composited)
         {
             let subtype = PERSON_SUBTYPE_SHAMAN;
-            if let Some((atlas_w, atlas_h, rgba, fw, fh, total_cols, offsets, max_y)) =
+            if let Some((atlas_w, atlas_h, rgba, fw, fh, total_cols, offsets, _max_y)) =
                 build_direct_multi_anim_atlas(&container, &palette, &SHAMAN_ANIMS)
             {
                 let tex = GpuTexture::new_2d(
@@ -1170,19 +1181,17 @@ impl App {
                 let anim_offsets: Vec<(u16, u32, u32)> = offsets.iter()
                     .map(|(idx, off, fc)| (*idx as u16, *off, *fc))
                     .collect();
-                let foot_below_frac = max_y.max(0) as f32 / fh.max(1) as f32;
                 self.unit_renders.push(UnitTypeRender {
                     subtype,
                     cells: Vec::new(),
                     texture: tex,
                     bind_group,
                     model: None,
-                    shadow_model: None,
+
                     frame_width: fw,
                     frame_height: fh,
                     frames_per_dir: total_cols,
                     anim_offsets,
-                    foot_below_frac,
                 });
             }
         }
@@ -1212,8 +1221,9 @@ impl App {
                 Some(i) => i,
                 None => continue,
             };
-            let obj3d = match idx < self.engine.objects_3d.len() {
-                true => match &self.engine.objects_3d[idx] {
+            let bank = &self.engine.building_objects;
+            let obj3d = match idx < bank.len() {
+                true => match &bank[idx] {
                     Some(o) => o,
                     None => continue,
                 },
@@ -1250,7 +1260,8 @@ impl App {
                 self.engine.camera.angle_x, self.engine.camera.angle_z,
             ));
             self.model_buildings = Some(build_building_meshes(
-                &gpu.device, &self.engine.level_objects, &self.engine.objects_3d,
+                &gpu.device, &self.engine.level_objects,
+                &self.engine.building_objects, &self.engine.scenery_objects,
                 &self.engine.shapes, &self.engine.landscape_mesh, cs,
             ));
         }
@@ -1641,17 +1652,6 @@ impl App {
                     }
                 }
 
-                // Shadow cast: sprites (flat proxy quads, not camera-facing billboards)
-                if let Some(ref pipeline) = self.shadow_depth_sprite_pipeline {
-                    shadow_pass.set_pipeline(pipeline);
-                    shadow_pass.set_bind_group(0, shadow_g0, &[]);
-                    for ur in &self.unit_renders {
-                        if let Some(ref shadow_model) = ur.shadow_model {
-                            shadow_pass.set_bind_group(1, &ur.bind_group, &[]);
-                            shadow_model.draw(&mut shadow_pass);
-                        }
-                    }
-                }
             }
         }
 
@@ -2093,48 +2093,6 @@ impl ApplicationHandler for App {
             cache: None,
         });
 
-        // Shadow depth sprite pipeline (depth-only, no color target)
-        let shadow_depth_sprite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("shadow_depth_sprite_shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/shadow_depth_sprite.wgsl").into()),
-        });
-        let shadow_depth_sprite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("shadow_depth_sprite_layout"),
-            bind_group_layouts: &[&shadow_pass_group0_layout, &sprite_group1_layout],
-            immediate_size: 0,
-        });
-        let shadow_depth_sprite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("shadow_depth_sprite_pipeline"),
-            layout: Some(&shadow_depth_sprite_layout),
-            vertex: wgpu::VertexState {
-                module: &shadow_depth_sprite_shader,
-                entry_point: Some("vs_main"),
-                buffers: &TexModel::vertex_buffer_layouts(),
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shadow_depth_sprite_shader,
-                entry_point: Some("fs_main"),
-                targets: &[],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
         // Shaman sprite pipeline (with lighting + shadow receiving)
         let spawn_shader_source = include_str!("../../shaders/shaman_sprite.wgsl");
         let spawn_vertex_layouts = TexModel::vertex_buffer_layouts();
@@ -2159,9 +2117,19 @@ impl ApplicationHandler for App {
 
         // Unit sprite atlases are built after self.gpu is set (see below)
 
-        // Load 3D objects from the OBJS bank specified in the level header (HDR byte 97)
-        let bank_str = level_res.obj_bank.to_string();
-        let objects_3d = Object3D::from_file_all(&base, &bank_str);
+        // Load dual OBJS banks: bank 0 for buildings, level bank for scenery.
+        // Bank 0 has building models at indices 117-193 (building_obj_index).
+        // Level banks have scenery at different indices (scenery_obj_index).
+        // Shape_LoadBank @ 0x49b990 remaps bank 0 → 2.
+        let (building_objects, scenery_objects) = Object3D::load_dual_banks(&base, level_res.obj_bank);
+        let level_bank = if level_res.obj_bank == 0 { 2 } else { level_res.obj_bank };
+        let bld_count = building_objects.iter().filter(|o| o.is_some()).count();
+        let scn_count = scenery_objects.iter().filter(|o| o.is_some()).count();
+        eprintln!("[OBJS] buildings: bank=0 entries={} non-empty={}",
+            building_objects.len(), bld_count);
+        eprintln!("[OBJS] scenery:   bank={} entries={} non-empty={}",
+            level_bank, scenery_objects.len(), scn_count);
+        let bank_str = level_bank.to_string();
         let obj_paths = ObjectPaths::from_default_dir(&base, &bank_str);
         let shapes: Vec<Shape> = Shape::from_file_vec(&obj_paths.shapes);
         eprintln!("[shapes] loaded {} entries", shapes.len());
@@ -2406,7 +2374,7 @@ impl ApplicationHandler for App {
         self.sprite_group1_layout = Some(sprite_group1_layout);
         self.shadow_depth_view = Some(shadow_depth_view);
         self.shadow_depth_building_pipeline = Some(shadow_depth_building_pipeline);
-        self.shadow_depth_sprite_pipeline = Some(shadow_depth_sprite_pipeline);
+
         self.shadow_pass_group0 = Some(shadow_pass_group0);
         self.light_mvp_buffer = Some(light_mvp_buffer);
         self.shadow_recv_group2_layout = Some(shadow_recv_group2_layout);
@@ -2414,7 +2382,8 @@ impl ApplicationHandler for App {
         self.building_bind_group_0 = Some(lit_group0_bind_group);
         self.lighting_buffer = Some(lighting_buffer);
         self.objects_marker_pipeline = Some(objects_marker_pipeline);
-        self.engine.objects_3d = objects_3d;
+        self.engine.building_objects = building_objects;
+        self.engine.scenery_objects = scenery_objects;
         self.engine.shapes = shapes;
         self.building_pipeline = Some(building_pipeline);
         self.building_bind_group_1 = Some(building_bind_group_1);
@@ -2601,7 +2570,8 @@ impl ApplicationHandler for App {
                                     self.rebuild_spawn_model();
                                     self.log_camera_state("reset");
                                 }
-                                GameCommand::ToggleCurvature | GameCommand::AdjustCurvature { .. } => {
+                                GameCommand::ToggleCurvature | GameCommand::AdjustCurvature { .. }
+                | GameCommand::AdjustSpriteOffset { .. } | GameCommand::AdjustSpriteScale { .. } => {
                                     self.rebuild_spawn_model();
                                 }
                                 GameCommand::PanScreen { .. } | GameCommand::PanTerrain { .. } => {

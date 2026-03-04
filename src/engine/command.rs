@@ -37,6 +37,10 @@ pub enum GameCommand {
     // Sunlight
     AdjustSunlight { dx: f32, dy: f32 },
 
+    // Debug: sprite tuning
+    AdjustSpriteOffset { delta: f32 },
+    AdjustSpriteScale { delta: f32 },
+
     // Unit interaction (resolved game-level concepts, not raw screen coords)
     SelectUnit(usize),
     SelectMultiple(Vec<usize>),
@@ -106,6 +110,13 @@ pub fn translate_key(key: KeyCode) -> Option<GameCommand> {
 
         // HUD
         KeyCode::F1 => Some(GameCommand::ToggleHud),
+
+        // Debug: sprite z-offset (F3 up / F4 down)
+        KeyCode::F3 => Some(GameCommand::AdjustSpriteOffset { delta: 0.005 }),
+        KeyCode::F4 => Some(GameCommand::AdjustSpriteOffset { delta: -0.005 }),
+        // Debug: sprite scale (F6 bigger / F7 smaller)
+        KeyCode::F6 => Some(GameCommand::AdjustSpriteScale { delta: 0.05 }),
+        KeyCode::F7 => Some(GameCommand::AdjustSpriteScale { delta: -0.05 }),
 
         // Game simulation
         KeyCode::F5 => Some(GameCommand::ToggleSimulation),
