@@ -37,7 +37,7 @@ pub fn build_building_meshes(
             },
         };
         building_count += 1;
-        eprintln!("[3d-obj] type={:?} subtype={} tribe={} -> idx={}", obj.model_type, obj.subtype, obj.tribe_index, idx);
+        eprintln!("[3d-obj] type={:?} subtype={} tribe={} angle={} -> idx={}", obj.model_type, obj.subtype, obj.tribe_index, obj.angle, idx);
         let obj3d = match idx < bank.len() {
             true => match &bank[idx] {
                 Some(o) => o,
@@ -63,7 +63,8 @@ pub fn build_building_meshes(
         }
 
         // Rotate model vertices in the horizontal plane (model X/Z -> world X/Y)
-        let angle_rad = -(obj.angle as f32) * std::f32::consts::TAU / 2048.0;
+        let angle_rad = -(obj.angle as f32) * std::f32::consts::TAU / 2048.0
+            - std::f32::consts::FRAC_PI_2;
         let cos_a = angle_rad.cos();
         let sin_a = angle_rad.sin();
 
