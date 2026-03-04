@@ -1420,7 +1420,7 @@ impl App {
             let rgba_data = rgb_to_rgba(&full_tex_data);
             let full_tex = GpuTexture::new_2d(
                 device, &gpu.queue, size, size,
-                wgpu::TextureFormat::Rgba8Unorm, &rgba_data, "cpu_full_land_texture",
+                wgpu::TextureFormat::Rgba8UnormSrgb, &rgba_data, "cpu_full_land_texture",
             );
             let sampler = GpuTexture::create_sampler(device, false);
 
@@ -2156,7 +2156,7 @@ impl ApplicationHandler for App {
         let bl320_gpu_tex = GpuTexture::new_2d(
             device, &gpu.queue,
             bl320_w as u32, bl320_h as u32,
-            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
             &bl320_data,
             "bl320_texture",
         );
@@ -2252,7 +2252,7 @@ impl ApplicationHandler for App {
             let sky_tex = GpuTexture::new_2d(
                 device, &gpu.queue,
                 sky_size as u32, sky_size as u32,
-                wgpu::TextureFormat::Rgba8Unorm,
+                wgpu::TextureFormat::Rgba8UnormSrgb,
                 &sky_rgba, "sky_texture",
             );
             let sky_sampler = GpuTexture::create_sampler(device, false);

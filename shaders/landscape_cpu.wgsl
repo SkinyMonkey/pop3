@@ -129,12 +129,16 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 // ---------- Fragment ----------
 
+fn srgb_to_linear(c: f32) -> f32 {
+    return pow(c, 2.2);
+}
+
 fn mk_tex(val: u32) -> vec3<f32> {
     let packed = palette[val % 128u];
     let r = f32((packed >> 0u) & 0xffu) / 255.0;
     let g = f32((packed >> 8u) & 0xffu) / 255.0;
     let b = f32((packed >> 16u) & 0xffu) / 255.0;
-    return vec3<f32>(r, g, b);
+    return vec3<f32>(srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b));
 }
 
 fn calc_tex_coord(v: f32, shift: i32) -> i32 {
