@@ -5,12 +5,13 @@ use crate::render::tex_model::{TexModel, TexVertex};
 use crate::render::envelop::{ModelEnvelop, RenderType};
 use crate::render::terrain::LandscapeMesh;
 use crate::data::objects::{Object3D, Shape, mk_pop_object};
-use crate::data::units::object_3d_index;
+use crate::data::units::{ModelType, building_obj_index, scenery_obj_index};
 
 use crate::render::sprites::LevelObject;
 
 pub fn build_building_meshes(
-    device: &wgpu::Device, objects: &[LevelObject], objects_3d: &[Option<Object3D>],
+    device: &wgpu::Device, objects: &[LevelObject],
+    building_bank: &[Option<Object3D>], scenery_bank: &[Option<Object3D>],
     _shapes: &[Shape], landscape: &LandscapeMesh<128>, curvature_scale: f32,
 ) -> ModelEnvelop<TexModel> {
     let mut combined: TexModel = MeshModel::new();
@@ -21,18 +22,28 @@ pub fn build_building_meshes(
 
     let mut building_count = 0;
     for obj in objects {
-        let idx = match object_3d_index(&obj.model_type, obj.subtype, obj.tribe_index) {
-            Some(i) => Some(i),
-            None => continue,
+        // Look up model index and select the right bank based on model type
+        let (idx, bank): (Option<usize>, &[Option<Object3D>]) = match obj.model_type {
+            ModelType::Building => (building_obj_index(obj.subtype, obj.tribe_index), building_bank),
+            ModelType::Scenery => (scenery_obj_index(obj.subtype), scenery_bank),
+            _ => (None, building_bank),
+        };
+        let idx = match idx {
+            Some(i) => i,
+            None => {
+                eprintln!("[3d-obj] UNMAPPED type={:?} subtype={} tribe={} cell=({:.1},{:.1}) angle={}",
+                    obj.model_type, obj.subtype, obj.tribe_index, obj.cell_x, obj.cell_y, obj.angle);
+                continue;
+            },
         };
         building_count += 1;
-        eprintln!("[3d-obj] type={:?} subtype={} tribe={} -> idx={:?}", obj.model_type, obj.subtype, obj.tribe_index, idx);
-        let obj3d = match idx {
-            Some(i) if i < objects_3d.len() => match &objects_3d[i] {
+        eprintln!("[3d-obj] type={:?} subtype={} tribe={} -> idx={}", obj.model_type, obj.subtype, obj.tribe_index, idx);
+        let obj3d = match idx < bank.len() {
+            true => match &bank[idx] {
                 Some(o) => o,
-                None => { eprintln!("  -> object at {} is None", i); continue; },
+                None => { eprintln!("  -> object at {} is None", idx); continue; },
             },
-            _ => continue,
+            false => continue,
         };
 
         let local_model = mk_pop_object(obj3d);
@@ -46,13 +57,13 @@ pub fn build_building_meshes(
         // Skip buildings outside the visible globe disc (matching landscape viewport fade)
         let dx_cull = gx - center;
         let dy_cull = gy - center;
-        let viewport_radius = center * 0.9;
+        let viewport_radius = center * 1.1;
         if dx_cull * dx_cull + dy_cull * dy_cull > viewport_radius * viewport_radius {
             continue;
         }
 
         // Rotate model vertices in the horizontal plane (model X/Z -> world X/Y)
-        let angle_rad = (obj.angle as f32) * std::f32::consts::TAU / 2048.0;
+        let angle_rad = -(obj.angle as f32) * std::f32::consts::TAU / 2048.0;
         let cos_a = angle_rad.cos();
         let sin_a = angle_rad.sin();
 
@@ -89,7 +100,6 @@ pub fn build_building_meshes(
     }
     eprintln!("[buildings] total={} vertices={} indices={} step={:.4} center={:.4}",
         building_count, combined.vertices.len(), combined.indices.len(), step, center);
-    // Print vertex bounding box for debugging
     if !combined.vertices.is_empty() {
         let (mut min_x, mut min_y, mut min_z) = (f32::MAX, f32::MAX, f32::MAX);
         let (mut max_x, mut max_y, mut max_z) = (f32::MIN, f32::MIN, f32::MIN);

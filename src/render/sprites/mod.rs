@@ -383,7 +383,7 @@ pub fn build_object_markers(
         // Skip objects outside the visible globe disc
         let dx_cull = gx - center;
         let dy_cull = gy - center;
-        let viewport_radius = center * 0.9;
+        let viewport_radius = center * 1.1;
         if dx_cull * dx_cull + dy_cull * dy_cull > viewport_radius * viewport_radius {
             continue;
         }

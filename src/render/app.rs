@@ -171,7 +171,8 @@ pub struct GameEngine {
 
     // Level data
     level_objects: Vec<LevelObject>,
-    objects_3d: Vec<Option<Object3D>>,
+    building_objects: Vec<Option<Object3D>>,  // from OBJS bank 0 (building models)
+    scenery_objects: Vec<Option<Object3D>>,   // from level-specific OBJS bank (scenery models)
     shapes: Vec<Shape>,
 
     // Water animation
@@ -563,7 +564,8 @@ impl GameEngine {
             show_markers: self.show_markers,
             unit_coordinator: &self.unit_coordinator,
             level_objects: &self.level_objects,
-            objects_3d: &self.objects_3d,
+            building_objects: &self.building_objects,
+            scenery_objects: &self.scenery_objects,
             shapes: &self.shapes,
             hud_state: self.build_hud_state(),
             drag_state,
@@ -695,8 +697,8 @@ impl App {
                 show_shadows: true,
                 show_lighting: true,
                 show_markers: true,
-                sprite_z_offset: 0.0,
-                sprite_scale: 1.0,
+                sprite_z_offset: 0.005,
+                sprite_scale: 0.80,
                 hud_tab: HudTab::Spells,
                 hud_visible: false,
                 hud_panel_sprite_count: 0,
@@ -708,7 +710,8 @@ impl App {
                 },
                 game_time: StdTimeSource::new(),
                 level_objects: Vec::new(),
-                objects_3d: Vec::new(),
+                building_objects: Vec::new(),
+                scenery_objects: Vec::new(),
                 shapes: Vec::new(),
                 wat_offset: -1,
                 wat_interval: 5000,
@@ -1218,8 +1221,9 @@ impl App {
                 Some(i) => i,
                 None => continue,
             };
-            let obj3d = match idx < self.engine.objects_3d.len() {
-                true => match &self.engine.objects_3d[idx] {
+            let bank = &self.engine.building_objects;
+            let obj3d = match idx < bank.len() {
+                true => match &bank[idx] {
                     Some(o) => o,
                     None => continue,
                 },
@@ -1256,7 +1260,8 @@ impl App {
                 self.engine.camera.angle_x, self.engine.camera.angle_z,
             ));
             self.model_buildings = Some(build_building_meshes(
-                &gpu.device, &self.engine.level_objects, &self.engine.objects_3d,
+                &gpu.device, &self.engine.level_objects,
+                &self.engine.building_objects, &self.engine.scenery_objects,
                 &self.engine.shapes, &self.engine.landscape_mesh, cs,
             ));
         }
@@ -2112,9 +2117,19 @@ impl ApplicationHandler for App {
 
         // Unit sprite atlases are built after self.gpu is set (see below)
 
-        // Load 3D objects from the OBJS bank specified in the level header (HDR byte 97)
-        let bank_str = level_res.obj_bank.to_string();
-        let objects_3d = Object3D::from_file_all(&base, &bank_str);
+        // Load dual OBJS banks: bank 0 for buildings, level bank for scenery.
+        // Bank 0 has building models at indices 117-193 (building_obj_index).
+        // Level banks have scenery at different indices (scenery_obj_index).
+        // Shape_LoadBank @ 0x49b990 remaps bank 0 → 2.
+        let (building_objects, scenery_objects) = Object3D::load_dual_banks(&base, level_res.obj_bank);
+        let level_bank = if level_res.obj_bank == 0 { 2 } else { level_res.obj_bank };
+        let bld_count = building_objects.iter().filter(|o| o.is_some()).count();
+        let scn_count = scenery_objects.iter().filter(|o| o.is_some()).count();
+        eprintln!("[OBJS] buildings: bank=0 entries={} non-empty={}",
+            building_objects.len(), bld_count);
+        eprintln!("[OBJS] scenery:   bank={} entries={} non-empty={}",
+            level_bank, scenery_objects.len(), scn_count);
+        let bank_str = level_bank.to_string();
         let obj_paths = ObjectPaths::from_default_dir(&base, &bank_str);
         let shapes: Vec<Shape> = Shape::from_file_vec(&obj_paths.shapes);
         eprintln!("[shapes] loaded {} entries", shapes.len());
@@ -2367,7 +2382,8 @@ impl ApplicationHandler for App {
         self.building_bind_group_0 = Some(lit_group0_bind_group);
         self.lighting_buffer = Some(lighting_buffer);
         self.objects_marker_pipeline = Some(objects_marker_pipeline);
-        self.engine.objects_3d = objects_3d;
+        self.engine.building_objects = building_objects;
+        self.engine.scenery_objects = scenery_objects;
         self.engine.shapes = shapes;
         self.building_pipeline = Some(building_pipeline);
         self.building_bind_group_1 = Some(building_bind_group_1);

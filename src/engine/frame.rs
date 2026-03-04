@@ -28,7 +28,8 @@ pub struct FrameState<'a> {
     pub show_markers: bool,
     pub unit_coordinator: &'a UnitCoordinator,
     pub level_objects: &'a [LevelObject],
-    pub objects_3d: &'a [Option<Object3D>],
+    pub building_objects: &'a [Option<Object3D>],
+    pub scenery_objects: &'a [Option<Object3D>],
     pub shapes: &'a [Shape],
 
     // HUD
