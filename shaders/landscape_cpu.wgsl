@@ -138,7 +138,7 @@ fn mk_tex(val: u32) -> vec3<f32> {
     let r = f32((packed >> 0u) & 0xffu) / 255.0;
     let g = f32((packed >> 8u) & 0xffu) / 255.0;
     let b = f32((packed >> 16u) & 0xffu) / 255.0;
-    return vec3<f32>(srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b));
+    return vec3<f32>(r, g, b);
 }
 
 fn calc_tex_coord(v: f32, shift: i32) -> i32 {
@@ -172,5 +172,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let shadow = textureSampleCompare(shadow_map, shadow_samp, shadow_uv, light_pos.z - 0.005);
     let shadow_factor = 0.3 + 0.7 * shadow;
 
-    return vec4<f32>(c * shadow_factor * in.viewport_fade, 0.0);
+    return vec4<f32>(pow(c, vec3<f32>(2.2)) * shadow_factor * in.viewport_fade, 0.0);
 }
