@@ -698,7 +698,7 @@ impl App {
                 show_lighting: true,
                 show_markers: true,
                 sprite_z_offset: 0.005,
-                sprite_scale: 0.80,
+                sprite_scale: 0.65,
                 hud_tab: HudTab::Spells,
                 hud_visible: false,
                 hud_panel_sprite_count: 0,
