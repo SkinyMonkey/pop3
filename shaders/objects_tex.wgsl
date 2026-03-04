@@ -58,8 +58,8 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let dx = in.coord3d.x - light.camera_focus.x;
     let dy = in.coord3d.y - light.camera_focus.y;
     let dist = sqrt(dx * dx + dy * dy);
-    let fade_start = light.viewport_radius * 0.85;
-    let fade_end = light.viewport_radius;
+    let fade_start = light.viewport_radius * 1.3;
+    let fade_end = light.viewport_radius * 1.5;
     out.viewport_fade = clamp(1.0 - (dist - fade_start) / (fade_end - fade_start), 0.0, 1.0);
 
     return out;

@@ -57,7 +57,7 @@ pub fn build_building_meshes(
         // Skip buildings outside the visible globe disc (matching landscape viewport fade)
         let dx_cull = gx - center;
         let dy_cull = gy - center;
-        let viewport_radius = center * 1.1;
+        let viewport_radius = center * 1.4;
         if dx_cull * dx_cull + dy_cull * dy_cull > viewport_radius * viewport_radius {
             continue;
         }
