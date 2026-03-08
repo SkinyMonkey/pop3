@@ -162,6 +162,7 @@ pub struct GameEngine {
     sprite_scale: f32,
     hud_tab: HudTab,
     hud_visible: bool,
+    compass_visible: bool,
     hud_panel_sprite_count: usize,
 
     // Game simulation
@@ -617,6 +618,10 @@ impl GameEngine {
                 self.hud_visible = !self.hud_visible;
                 true
             }
+            GameCommand::ToggleCompass => {
+                self.compass_visible = !self.compass_visible;
+                true
+            }
             GameCommand::Quit => true,
         }
     }
@@ -775,6 +780,7 @@ impl App {
                 sprite_scale: 0.65,
                 hud_tab: HudTab::Spells,
                 hud_visible: false,
+                compass_visible: false,
                 hud_panel_sprite_count: 0,
                 unit_coordinator: UnitCoordinator::new(),
                 game_world: {
@@ -1423,6 +1429,71 @@ impl App {
         hud.render_full(encoder, view, &gpu.queue, layout.screen_w, layout.screen_h, minimap_rect);
     }
 
+    fn draw_compass(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
+        let gpu = match self.gpu.as_ref() {
+            Some(g) => g,
+            None => return,
+        };
+        let hud = match self.hud.as_mut() {
+            Some(h) => h,
+            None => return,
+        };
+
+        let sw = self.engine.screen.width as f32;
+        let sh = self.engine.screen.height as f32;
+        let scale = sw / 640.0;
+
+        let radius = 32.0 * scale;
+        let cx = sw - radius - 16.0 * scale;
+        let cy = sh - radius - 16.0 * scale;
+        let bg_size = radius * 2.0 + 8.0 * scale;
+
+        let yaw_rad = (self.engine.camera.angle_z as f32).to_radians();
+
+        hud.begin_frame();
+
+        // Background
+        hud.draw_rect(
+            cx - radius - 4.0 * scale,
+            cy - radius - 4.0 * scale,
+            bg_size,
+            bg_size,
+            [0.0, 0.0, 0.0, 0.55],
+        );
+
+        // Cardinal directions: (label, angle_offset, color)
+        // angle_offset is the world bearing: N=0, E=90, S=180, W=270
+        let font = 8.0 * scale;
+        let cardinals: [(&str, f32, [f32; 4]); 4] = [
+            ("N", 0.0,   [1.0, 0.3, 0.3, 1.0]),
+            ("E", 90.0,  [1.0, 1.0, 1.0, 0.8]),
+            ("S", 180.0, [1.0, 1.0, 1.0, 0.8]),
+            ("W", 270.0, [1.0, 1.0, 1.0, 0.8]),
+        ];
+
+        for (label, bearing, color) in &cardinals {
+            let angle = (bearing - self.engine.camera.angle_z as f32).to_radians();
+            // Screen: sin for x, -cos for y (up is negative y)
+            let lx = cx + radius * 0.75 * angle.sin() - font * 0.3;
+            let ly = cy - radius * 0.75 * angle.cos() - font * 0.4;
+            hud.draw_text(label, lx, ly, font, *color);
+        }
+
+        // Center dot
+        let dot = 3.0 * scale;
+        hud.draw_rect(cx - dot, cy - dot, dot * 2.0, dot * 2.0, [1.0, 1.0, 1.0, 0.6]);
+
+        // North indicator line from center toward N
+        let n_angle = -yaw_rad;
+        let line_len = radius * 0.45;
+        let nx = cx + line_len * n_angle.sin();
+        let ny = cy - line_len * n_angle.cos();
+        let tick = 2.0 * scale;
+        hud.draw_rect(nx - tick, ny - tick, tick * 2.0, tick * 2.0, [1.0, 0.3, 0.3, 0.9]);
+
+        hud.render_full(encoder, view, &gpu.queue, sw, sh, None);
+    }
+
     fn rebuild_landscape_variants(&mut self, level_res: &LevelRes) {
         let gpu = self.gpu.as_ref().unwrap();
         let device = &gpu.device;
@@ -1836,6 +1907,9 @@ impl App {
         drop(frame);
         if self.engine.hud_visible {
             self.draw_hud(&mut encoder, &view);
+        }
+        if self.engine.compass_visible {
+            self.draw_compass(&mut encoder, &view);
         }
 
         let gpu = self.gpu.as_ref().unwrap();
