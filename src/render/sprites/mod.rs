@@ -73,9 +73,16 @@ pub fn tribe_facing_direction(tribe_index: u8) -> u16 {
 /// Compute display sprite direction (0-7) from camera angle and unit facing.
 /// Implements the exact game formula from RE_NOTES (FUN_0046af00):
 ///   direction = ((g_CameraTarget->rotation - object->facing) - 0x380) & 0x700) >> 8
+///
+/// The original formula expects the camera's looking direction in game angle units.
+/// Our `camera_angle_z` is the orbit position in render-space degrees, and the
+/// render coordinate system is rotated 90° from game coordinates (game Z → render X,
+/// game X → inverted render Y), so we add 90° to convert to the camera's looking
+/// direction in game angle space.
 pub fn sprite_direction_from_angle(camera_angle_z: i16, unit_facing_game: u16) -> usize {
-    // Convert angle_z (degrees) to game angle units (0-2047, where 2048 = 360°)
-    let camera_rot = ((camera_angle_z as i32) * 2048 / 360 % 2048 + 2048) % 2048;
+    // Convert angle_z (render degrees) to camera looking direction in game angle units.
+    // +90° accounts for the render-to-game coordinate rotation.
+    let camera_rot = (((camera_angle_z as i32 + 90) * 2048 / 360) % 2048 + 2048) % 2048;
     let raw = (camera_rot - unit_facing_game as i32 - 0x380) & 0x700;
     (raw >> 8) as usize
 }
@@ -579,4 +586,37 @@ pub fn build_selection_outlines(
     }
     let m = vec![(RenderType::Triangles, model)];
     Some(ModelEnvelop::<ColorModel>::new(device, m))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sprite_dir_camera_south_unit_faces_north_is_front() {
+        // Camera at North looking South (angle_z=180), unit faces North (0x200)
+        // Unit faces toward camera → front (direction 0)
+        assert_eq!(sprite_direction_from_angle(180, 0x200), 0);
+    }
+
+    #[test]
+    fn sprite_dir_camera_south_unit_faces_south_is_back() {
+        // Camera at North looking South (angle_z=180), unit faces South (0x600)
+        // Unit faces away from camera → back (direction 4)
+        assert_eq!(sprite_direction_from_angle(180, 0x600), 4);
+    }
+
+    #[test]
+    fn sprite_dir_camera_north_unit_faces_north_is_back() {
+        // Camera at South looking North (angle_z=0), unit faces North (0x200)
+        // Unit faces away from camera → back (direction 4)
+        assert_eq!(sprite_direction_from_angle(0, 0x200), 4);
+    }
+
+    #[test]
+    fn sprite_dir_camera_west_unit_faces_west_is_back() {
+        // Camera at East looking West (angle_z=90), unit faces West (0x400)
+        // Unit faces away from camera → back (direction 4)
+        assert_eq!(sprite_direction_from_angle(90, 0x400), 4);
+    }
 }
