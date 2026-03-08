@@ -134,6 +134,7 @@ impl<M: GpuModel> ModelEnvelop<M> {
     /// Draw all models. Caller is responsible for setting bind groups before this call.
     pub fn draw<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
         for (i, e) in self.models.iter().enumerate() {
+            if e.model.vertex_count() == 0 && e.model.index_count() == 0 { continue; }
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(self.vertex_offsets[i]..));
 
             if e.model.is_indexed() {

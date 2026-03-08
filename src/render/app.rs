@@ -732,6 +732,22 @@ pub struct App {
     // Script replay
     script_commands: Vec<String>,
     script_index: usize,
+
+    // Smooth camera pan to shaman
+    shaman_pan: Option<ShamanPanAnimation>,
+}
+
+struct ShamanPanAnimation {
+    start_shift: (usize, usize),
+    target_shift: (usize, usize),
+    start_time: Instant,
+    duration: f32,
+}
+
+/// Shortest signed delta from `from` to `to` on a toroidal axis of size `n`.
+fn toroidal_delta(from: usize, to: usize, n: usize) -> i32 {
+    let d = (to as i32 - from as i32).rem_euclid(n as i32);
+    if d <= (n as i32) / 2 { d } else { d - n as i32 }
 }
 
 impl App {
@@ -844,6 +860,7 @@ impl App {
             start_time: Instant::now(),
             script_commands,
             script_index: 0,
+            shaman_pan: None,
         };
         app.engine.reset_camera();
         app
@@ -857,17 +874,59 @@ impl App {
         if let Some((cx, cy)) = shaman_pos {
             let n = self.engine.landscape_mesh.width() as i32;
             let v = self.engine.camera_focus_vertex() as i32;
-            let sx = ((cx as i32 - v) % n + n) % n;
-            let sy = ((cy as i32 - v) % n + n) % n;
-            log::info!("[center] shaman at cell ({}, {}), camera_vertex={}, shift -> ({}, {})", cx, cy, v, sx, sy);
-            self.engine.landscape_mesh.set_shift(sx as usize, sy as usize);
-            self.rebuild_spawn_model();
+            let target_sx = ((cx as i32 - v) % n + n) % n;
+            let target_sy = ((cy as i32 - v) % n + n) % n;
+
+            let cur = self.engine.landscape_mesh.get_shift_vector();
+            let cur_sx = cur.x as usize;
+            let cur_sy = cur.y as usize;
+
+            log::info!("[center] shaman at cell ({}, {}), pan ({},{}) -> ({},{})",
+                cx, cy, cur_sx, cur_sy, target_sx, target_sy);
+
+            self.shaman_pan = Some(ShamanPanAnimation {
+                start_shift: (cur_sx, cur_sy),
+                target_shift: (target_sx as usize, target_sy as usize),
+                start_time: Instant::now(),
+                duration: 0.5,
+            });
         } else {
             log::warn!("[center] no tribe 0 shaman in unit_renders");
         }
     }
 
+    fn tick_shaman_pan(&mut self) {
+        let Some(anim) = &self.shaman_pan else { return };
+
+        let n = self.engine.landscape_mesh.width();
+        let elapsed = anim.start_time.elapsed().as_secs_f32();
+        let t = (elapsed / anim.duration).clamp(0.0, 1.0);
+        let s = t * t * (3.0 - 2.0 * t); // smoothstep
+
+        let (sx0, sy0) = anim.start_shift;
+        let (sxt, syt) = anim.target_shift;
+        let dx = toroidal_delta(sx0, sxt, n);
+        let dy = toroidal_delta(sy0, syt, n);
+
+        let new_sx = ((sx0 as i32 + (dx as f32 * s).round() as i32).rem_euclid(n as i32)) as usize;
+        let new_sy = ((sy0 as i32 + (dy as f32 * s).round() as i32).rem_euclid(n as i32)) as usize;
+
+        let old = self.engine.landscape_mesh.get_shift_vector();
+        self.engine.landscape_mesh.set_shift(new_sx, new_sy);
+        let new = self.engine.landscape_mesh.get_shift_vector();
+
+        if old != new {
+            self.rebuild_spawn_model();
+            self.do_render = true;
+        }
+
+        if t >= 1.0 {
+            self.shaman_pan = None;
+        }
+    }
+
     fn update_level(&mut self) {
+        self.shaman_pan = None;
         self.engine.reset_camera();
         let base = self.engine.config.base.clone().unwrap_or_else(|| Path::new("/opt/sandbox/pop").to_path_buf());
         let level_type = self.engine.config.landtype.as_deref();
@@ -1103,6 +1162,7 @@ impl App {
                     self.rebuild_spawn_model();
                 }
                 GameCommand::PanScreen { .. } | GameCommand::PanTerrain { .. } => {
+                    self.shaman_pan = None;
                     let new_shift = self.engine.landscape_mesh.get_shift_vector();
                     if new_shift != prev_shift {
                         self.rebuild_spawn_model();
@@ -2726,6 +2786,7 @@ impl ApplicationHandler for App {
                                     self.rebuild_spawn_model();
                                 }
                                 GameCommand::PanScreen { .. } | GameCommand::PanTerrain { .. } => {
+                                    self.shaman_pan = None;
                                     let new_shift = self.engine.landscape_mesh.get_shift_vector();
                                     if new_shift != prev_shift {
                                         self.rebuild_spawn_model();
@@ -2767,6 +2828,9 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                // Smooth camera pan to shaman
+                self.tick_shaman_pan();
+
                 // Auto-animate water
                 self.engine.frame_count = self.engine.frame_count.wrapping_add(1);
                 if self.engine.frame_count % self.engine.wat_interval == 0 {
@@ -2798,5 +2862,37 @@ impl App {
         let event_loop = EventLoop::new().unwrap();
         let mut app = App::new(config);
         event_loop.run_app(&mut app).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toroidal_delta_wrap_forward() {
+        assert_eq!(toroidal_delta(120, 5, 128), 13);
+    }
+
+    #[test]
+    fn toroidal_delta_wrap_backward() {
+        assert_eq!(toroidal_delta(5, 120, 128), -13);
+    }
+
+    #[test]
+    fn toroidal_delta_direct() {
+        assert_eq!(toroidal_delta(10, 50, 128), 40);
+        assert_eq!(toroidal_delta(50, 10, 128), -40);
+    }
+
+    #[test]
+    fn toroidal_delta_zero() {
+        assert_eq!(toroidal_delta(42, 42, 128), 0);
+    }
+
+    #[test]
+    fn toroidal_delta_half() {
+        // Exactly half — prefer forward
+        assert_eq!(toroidal_delta(0, 64, 128), 64);
     }
 }
