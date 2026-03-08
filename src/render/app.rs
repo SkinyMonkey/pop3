@@ -39,7 +39,7 @@ use crate::data::bl320::make_bl320_texture_rgba;
 use crate::data::landscape::{make_texture_land, draw_texture_u8};
 
 use crate::engine::units::{UnitCoordinator, DragState, Unit};
-use crate::engine::units::coords::{cell_to_world, triangle_to_cell, project_to_screen, nearest_screen_hit};
+use crate::engine::units::coords::{cell_to_world, triangle_to_cell, project_to_screen, ScreenRect};
 use crate::render::buildings::build_building_meshes;
 use crate::render::sprites::{
     LevelObject, UnitTypeRender,
@@ -47,7 +47,7 @@ use crate::render::sprites::{
     pack_palette_rgba, rgb_to_rgba,
     extract_level_objects,
     build_spawn_model,
-    build_object_markers, build_unit_markers, build_selection_rings,
+    build_object_markers, build_unit_markers, build_selection_outlines,
 };
 
 use crate::render::gpu::context::GpuContext;
@@ -306,24 +306,98 @@ impl GameEngine {
         project_to_screen([gx, gy, z_base], pvm, self.screen.width as f32, self.screen.height as f32)
     }
 
+    /// Compute the billboard's screen-space AABB for a unit.
+    /// Uses the same billboard geometry as `build_unit_markers`.
+    fn unit_screen_rect(&self, unit: &Unit, pvm: &Matrix4<f32>, right: &Vector3<f32>, up: &Vector3<f32>) -> Option<ScreenRect> {
+        let step = self.landscape_mesh.step();
+        let w = self.landscape_mesh.width() as f32;
+        let shift = self.landscape_mesh.get_shift_vector();
+        let height_scale = self.landscape_mesh.height_scale();
+        let center = (w - 1.0) * step / 2.0;
+        let cs = if self.curvature_enabled { self.curvature_scale } else { 0.0 };
+        let vis_x = ((unit.cell_x - shift.x as f32) % w + w) % w;
+        let vis_y = ((unit.cell_y - shift.y as f32) % w + w) % w;
+        let gx = vis_x * step;
+        let gy = vis_y * step;
+        let ix = (unit.cell_x as usize).min(127);
+        let iy = (unit.cell_y as usize).min(127);
+        let gz = self.landscape_mesh.height_at(ix, iy) as f32 * height_scale;
+        let dx = gx - center;
+        let dy = gy - center;
+        let curvature_offset = (dx * dx + dy * dy) * cs;
+        let z_base = gz - curvature_offset;
+
+        let half_w = step * 0.15;
+        let sprite_h = step * 0.4;
+        let base = Vector3::new(gx, gy, z_base);
+        let bl = base - right * half_w;
+        let br = base + right * half_w;
+        let tl = bl + up * sprite_h;
+        let tr = br + up * sprite_h;
+
+        let sw = self.screen.width as f32;
+        let sh = self.screen.height as f32;
+        let s_bl = project_to_screen([bl.x, bl.y, bl.z], pvm, sw, sh)?;
+        let s_br = project_to_screen([br.x, br.y, br.z], pvm, sw, sh)?;
+        let s_tl = project_to_screen([tl.x, tl.y, tl.z], pvm, sw, sh)?;
+        let s_tr = project_to_screen([tr.x, tr.y, tr.z], pvm, sw, sh)?;
+
+        let min_x = s_bl.0.min(s_br.0).min(s_tl.0).min(s_tr.0);
+        let max_x = s_bl.0.max(s_br.0).max(s_tl.0).max(s_tr.0);
+        let min_y = s_bl.1.min(s_br.1).min(s_tl.1).min(s_tr.1);
+        let max_y = s_bl.1.max(s_br.1).max(s_tl.1).max(s_tr.1);
+
+        Some(ScreenRect { min_x, min_y, max_x, max_y })
+    }
+
+    /// Compute the view matrix right/up vectors for billboard orientation.
+    fn billboard_axes(&self) -> (Vector3<f32>, Vector3<f32>) {
+        let center = self.world_center();
+        let az = (self.camera.angle_z as f32).to_radians();
+        let ax = (self.camera.angle_x as f32).to_radians();
+        let eye = Point3::new(
+            center + ax.cos() * az.sin(),
+            center + ax.cos() * az.cos(),
+            -ax.sin(),
+        );
+        let target = Point3::new(center, center, 0.0);
+        let view = Matrix4::look_at_rh(eye, target, Vector3::new(0.0, 0.0, 1.0));
+        let right = Vector3::new(view.x.x, view.y.x, view.z.x);
+        let up = Vector3::new(view.x.y, view.y.y, view.z.y);
+        (right, up)
+    }
+
     fn find_unit_at_screen_pos(&self, mouse: &Point2<f32>) -> Option<usize> {
         let pvm = self.unit_pvm();
-        let candidates = self.unit_coordinator.units.iter().filter_map(|unit| {
-            self.unit_screen_pos(unit, &pvm).map(|(sx, sy)| (unit.id, sx, sy))
-        });
-        nearest_screen_hit(candidates, mouse.x, mouse.y, 20.0)
+        let (right, up) = self.billboard_axes();
+        let mut best: Option<(usize, f32)> = None;
+        for unit in &self.unit_coordinator.units {
+            if let Some(rect) = self.unit_screen_rect(unit, &pvm, &right, &up) {
+                if rect.contains(mouse.x, mouse.y) {
+                    let (cx, cy) = rect.center();
+                    let dist_sq = (cx - mouse.x).powi(2) + (cy - mouse.y).powi(2);
+                    if best.is_none() || dist_sq < best.unwrap().1 {
+                        best = Some((unit.id, dist_sq));
+                    }
+                }
+            }
+        }
+        best.map(|(id, _)| id)
     }
 
     fn units_in_screen_rect(&self, corner_a: Point2<f32>, corner_b: Point2<f32>) -> Vec<usize> {
-        let min_x = corner_a.x.min(corner_b.x);
-        let max_x = corner_a.x.max(corner_b.x);
-        let min_y = corner_a.y.min(corner_b.y);
-        let max_y = corner_a.y.max(corner_b.y);
+        let drag_rect = ScreenRect {
+            min_x: corner_a.x.min(corner_b.x),
+            max_x: corner_a.x.max(corner_b.x),
+            min_y: corner_a.y.min(corner_b.y),
+            max_y: corner_a.y.max(corner_b.y),
+        };
         let pvm = self.unit_pvm();
+        let (right, up) = self.billboard_axes();
         let mut ids = Vec::new();
         for unit in &self.unit_coordinator.units {
-            if let Some((sx, sy)) = self.unit_screen_pos(unit, &pvm) {
-                if sx >= min_x && sx <= max_x && sy >= min_y && sy <= max_y {
+            if let Some(rect) = self.unit_screen_rect(unit, &pvm, &right, &up) {
+                if rect.overlaps(&drag_rect) {
                     ids.push(unit.id);
                 }
             }
@@ -641,7 +715,7 @@ pub struct App {
 
     // Unit rendering
     model_unit_markers: Option<ModelEnvelop<ColorModel>>,
-    model_selection_rings: Option<ModelEnvelop<ColorModel>>,
+    model_selection_outlines: Option<ModelEnvelop<ColorModel>>,
 
     // Render flag
     do_render: bool,
@@ -696,7 +770,7 @@ impl App {
                 show_objects: true,
                 show_shadows: true,
                 show_lighting: true,
-                show_markers: true,
+                show_markers: false,
                 sprite_z_offset: 0.005,
                 sprite_scale: 0.65,
                 hud_tab: HudTab::Spells,
@@ -758,7 +832,7 @@ impl App {
             heights_buffer: None,
             watdisp_buffer: None,
             model_unit_markers: None,
-            model_selection_rings: None,
+            model_selection_outlines: None,
             do_render: true,
             debug_log,
             start_time: Instant::now(),
@@ -1204,9 +1278,10 @@ impl App {
                 &gpu.device, &self.engine.unit_coordinator.units, &self.engine.landscape_mesh, cs,
                 self.engine.camera.angle_x, self.engine.camera.angle_z,
             );
-            self.model_selection_rings = build_selection_rings(
+            self.model_selection_outlines = build_selection_outlines(
                 &gpu.device, &self.engine.unit_coordinator,
                 &self.engine.landscape_mesh, cs,
+                self.engine.camera.angle_x, self.engine.camera.angle_z,
             );
         }
     }
@@ -1739,17 +1814,19 @@ impl App {
                 }
             }
 
-            // Draw live unit markers and selection rings
-            if frame.show_markers { if let Some(ref marker_pipeline) = self.objects_marker_pipeline {
+            // Draw selection outlines (always) and unit marker billboards (toggled)
+            if let Some(ref marker_pipeline) = self.objects_marker_pipeline {
                 render_pass.set_pipeline(marker_pipeline);
                 render_pass.set_bind_group(0, self.objects_group0_bind_group.as_ref().unwrap(), &[]);
-                if let Some(ref model) = self.model_unit_markers {
+                if frame.show_markers {
+                    if let Some(ref model) = self.model_unit_markers {
+                        model.draw(&mut render_pass);
+                    }
+                }
+                if let Some(ref model) = self.model_selection_outlines {
                     model.draw(&mut render_pass);
                 }
-                if let Some(ref model) = self.model_selection_rings {
-                    model.draw(&mut render_pass);
-                }
-            }}
+            }
 
         }
 

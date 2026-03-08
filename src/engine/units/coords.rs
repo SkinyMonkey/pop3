@@ -99,6 +99,35 @@ pub fn project_to_screen(
     Some((sx, sy))
 }
 
+/// Axis-aligned bounding box in screen space (pixels).
+#[derive(Debug, Clone, Copy)]
+pub struct ScreenRect {
+    pub min_x: f32,
+    pub min_y: f32,
+    pub max_x: f32,
+    pub max_y: f32,
+}
+
+impl ScreenRect {
+    /// Returns true if the point (px, py) is inside (inclusive).
+    pub fn contains(&self, px: f32, py: f32) -> bool {
+        px >= self.min_x && px <= self.max_x && py >= self.min_y && py <= self.max_y
+    }
+
+    /// Returns true if this rect overlaps another (inclusive edges).
+    pub fn overlaps(&self, other: &ScreenRect) -> bool {
+        self.min_x <= other.max_x
+            && self.max_x >= other.min_x
+            && self.min_y <= other.max_y
+            && self.max_y >= other.min_y
+    }
+
+    /// Center point of the rect.
+    pub fn center(&self) -> (f32, f32) {
+        ((self.min_x + self.max_x) * 0.5, (self.min_y + self.max_y) * 0.5)
+    }
+}
+
 /// Find the nearest candidate to a screen point within a pixel threshold.
 /// `candidates` yields `(id, screen_x, screen_y)` tuples.
 /// Returns the `id` of the closest candidate, or `None` if none are within range.
@@ -438,5 +467,66 @@ mod tests {
         let candidates = vec![(0, 120.0, 100.0)];
         let result = nearest_screen_hit(candidates.into_iter(), 100.0, 100.0, 20.0);
         assert!(result.is_none());
+    }
+
+    // --- ScreenRect tests ---
+
+    #[test]
+    fn screen_rect_contains_point_inside() {
+        let rect = ScreenRect { min_x: 10.0, min_y: 20.0, max_x: 50.0, max_y: 60.0 };
+        assert!(rect.contains(30.0, 40.0));
+    }
+
+    #[test]
+    fn screen_rect_contains_point_outside() {
+        let rect = ScreenRect { min_x: 10.0, min_y: 20.0, max_x: 50.0, max_y: 60.0 };
+        assert!(!rect.contains(5.0, 40.0));
+        assert!(!rect.contains(30.0, 70.0));
+    }
+
+    #[test]
+    fn screen_rect_contains_point_on_edge() {
+        let rect = ScreenRect { min_x: 10.0, min_y: 20.0, max_x: 50.0, max_y: 60.0 };
+        assert!(rect.contains(10.0, 20.0)); // min corner
+        assert!(rect.contains(50.0, 60.0)); // max corner
+    }
+
+    #[test]
+    fn screen_rect_overlaps_intersecting() {
+        let a = ScreenRect { min_x: 0.0, min_y: 0.0, max_x: 20.0, max_y: 20.0 };
+        let b = ScreenRect { min_x: 10.0, min_y: 10.0, max_x: 30.0, max_y: 30.0 };
+        assert!(a.overlaps(&b));
+        assert!(b.overlaps(&a));
+    }
+
+    #[test]
+    fn screen_rect_overlaps_disjoint() {
+        let a = ScreenRect { min_x: 0.0, min_y: 0.0, max_x: 10.0, max_y: 10.0 };
+        let b = ScreenRect { min_x: 20.0, min_y: 20.0, max_x: 30.0, max_y: 30.0 };
+        assert!(!a.overlaps(&b));
+        assert!(!b.overlaps(&a));
+    }
+
+    #[test]
+    fn screen_rect_overlaps_touching_edge() {
+        let a = ScreenRect { min_x: 0.0, min_y: 0.0, max_x: 10.0, max_y: 10.0 };
+        let b = ScreenRect { min_x: 10.0, min_y: 0.0, max_x: 20.0, max_y: 10.0 };
+        assert!(a.overlaps(&b)); // touching = overlapping
+    }
+
+    #[test]
+    fn screen_rect_overlaps_contained() {
+        let outer = ScreenRect { min_x: 0.0, min_y: 0.0, max_x: 100.0, max_y: 100.0 };
+        let inner = ScreenRect { min_x: 20.0, min_y: 20.0, max_x: 40.0, max_y: 40.0 };
+        assert!(outer.overlaps(&inner));
+        assert!(inner.overlaps(&outer));
+    }
+
+    #[test]
+    fn screen_rect_center() {
+        let rect = ScreenRect { min_x: 10.0, min_y: 20.0, max_x: 50.0, max_y: 60.0 };
+        let (cx, cy) = rect.center();
+        assert!((cx - 30.0).abs() < 0.01);
+        assert!((cy - 40.0).abs() < 0.01);
     }
 }

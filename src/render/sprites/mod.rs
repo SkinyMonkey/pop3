@@ -1,4 +1,4 @@
-use cgmath::{Point3, Vector2, Vector3, Matrix4};
+use cgmath::{Point3, Vector2, Vector3, Matrix4, InnerSpace};
 
 use crate::render::model::{VertexModel, MeshModel};
 use crate::render::tex_model::{TexModel, TexVertex};
@@ -496,9 +496,13 @@ pub fn build_unit_markers(
     Some(ModelEnvelop::<ColorModel>::new(device, m))
 }
 
-pub fn build_selection_rings(
+/// Build a billboard-shaped outline (wireframe quad) around each selected unit.
+/// Uses the same billboard geometry as `build_unit_markers` so the outline
+/// matches exactly what gets picked.
+pub fn build_selection_outlines(
     device: &wgpu::Device, coordinator: &UnitCoordinator,
     landscape: &LandscapeMesh<128>, curvature_scale: f32,
+    angle_x: i16, angle_z: i16,
 ) -> Option<ModelEnvelop<ColorModel>> {
     if coordinator.selection.selected.is_empty() { return None; }
     let mut model: ColorModel = MeshModel::new();
@@ -507,10 +511,23 @@ pub fn build_selection_rings(
     let w = landscape.width() as f32;
     let shift = landscape.get_shift_vector();
     let center = (w - 1.0) * step / 2.0;
-    let segments = 16;
-    let radius = step * 0.3;
-    let ring_width = step * 0.04;
-    let color = Vector3::new(0.0, 1.0, 0.0); // Green
+
+    let az = (angle_z as f32).to_radians();
+    let ax = (angle_x as f32).to_radians();
+    let eye = Point3::new(
+        center + ax.cos() * az.sin(),
+        center + ax.cos() * az.cos(),
+        -ax.sin(),
+    );
+    let target = Point3::new(center, center, 0.0);
+    let view = Matrix4::look_at_rh(eye, target, Vector3::new(0.0, 0.0, 1.0));
+    let right = Vector3::new(view.x.x, view.y.x, view.z.x);
+    let up = Vector3::new(view.x.y, view.y.y, view.z.y);
+
+    let half_w = step * 0.15;
+    let sprite_h = step * 0.4;
+    let thickness = step * 0.02;
+    let color = Vector3::new(0.0, 1.0, 0.0);
 
     for &unit_id in &coordinator.selection.selected {
         let unit = match coordinator.units.get(unit_id) {
@@ -528,25 +545,36 @@ pub fn build_selection_rings(
         let curvature_offset = (dx * dx + dy * dy) * curvature_scale;
         let z_base = gz - curvature_offset + 0.0005;
 
-        for i in 0..segments {
-            let a0 = (i as f32 / segments as f32) * std::f32::consts::TAU;
-            let a1 = ((i + 1) as f32 / segments as f32) * std::f32::consts::TAU;
-            let (c0, s0) = (a0.cos(), a0.sin());
-            let (c1, s1) = (a1.cos(), a1.sin());
+        let base = Vector3::new(gx, gy, z_base);
+        // Billboard corners (same as build_unit_markers)
+        let bl = base - right * half_w;
+        let br = base + right * half_w;
+        let tl = bl + up * sprite_h;
+        let tr = br + up * sprite_h;
 
-            // Inner and outer ring vertices (flat on ground plane)
-            let inner0 = Vector3::new(gx + (radius - ring_width) * c0, gy + (radius - ring_width) * s0, z_base);
-            let outer0 = Vector3::new(gx + radius * c0, gy + radius * s0, z_base);
-            let inner1 = Vector3::new(gx + (radius - ring_width) * c1, gy + (radius - ring_width) * s1, z_base);
-            let outer1 = Vector3::new(gx + radius * c1, gy + radius * s1, z_base);
-
-            let v = |p: Vector3<f32>| ColorVertex { coord: p, color };
-            model.push_vertex(v(inner0));
-            model.push_vertex(v(outer0));
-            model.push_vertex(v(outer1));
-            model.push_vertex(v(inner0));
-            model.push_vertex(v(outer1));
-            model.push_vertex(v(inner1));
+        // Draw 4 edges as thin quads
+        let v = |p: Vector3<f32>| ColorVertex { coord: p, color };
+        let edges: [(Vector3<f32>, Vector3<f32>); 4] = [
+            (bl, br), // bottom
+            (br, tr), // right
+            (tr, tl), // top
+            (tl, bl), // left
+        ];
+        for (a, b) in &edges {
+            let dir = (b - a).normalize();
+            // Perpendicular in billboard plane: cross with the billboard normal
+            let normal = right.cross(up).normalize();
+            let perp = dir.cross(normal) * thickness;
+            let a0 = a - perp;
+            let a1 = a + perp;
+            let b0 = b - perp;
+            let b1 = b + perp;
+            model.push_vertex(v(a0));
+            model.push_vertex(v(a1));
+            model.push_vertex(v(b1));
+            model.push_vertex(v(a0));
+            model.push_vertex(v(b1));
+            model.push_vertex(v(b0));
         }
     }
     let m = vec![(RenderType::Triangles, model)];
