@@ -49,6 +49,8 @@ pub enum GameCommand {
 
     // Game state
     ToggleSimulation,
+    IncreaseGameSpeed,
+    DecreaseGameSpeed,
 
     // HUD
     SetHudTab(HudTab),
@@ -124,6 +126,8 @@ pub fn translate_key(key: KeyCode) -> Option<GameCommand> {
 
         // Game simulation
         KeyCode::F5 => Some(GameCommand::ToggleSimulation),
+        KeyCode::Equal => Some(GameCommand::IncreaseGameSpeed),
+        KeyCode::Minus => Some(GameCommand::DecreaseGameSpeed),
 
         // Quit
         KeyCode::Escape => Some(GameCommand::Quit),
@@ -242,6 +246,12 @@ mod tests {
     #[test]
     fn test_translate_toggle_walkability() {
         assert!(matches!(translate_key(KeyCode::F8), Some(GameCommand::ToggleWalkability)));
+    }
+
+    #[test]
+    fn test_translate_game_speed() {
+        assert!(matches!(translate_key(KeyCode::Equal), Some(GameCommand::IncreaseGameSpeed)));
+        assert!(matches!(translate_key(KeyCode::Minus), Some(GameCommand::DecreaseGameSpeed)));
     }
 
     #[test]

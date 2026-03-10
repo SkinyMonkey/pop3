@@ -84,7 +84,7 @@ pub fn person_type_defaults(subtype: u8) -> PersonTypeDefaults {
         4 => PersonTypeDefaults { max_health: 1400, speed: 0x28, fight_damage: 150 }, // Religious
         5 => PersonTypeDefaults { max_health: 1400, speed: 0x30, fight_damage: 200 }, // Spy
         6 => PersonTypeDefaults { max_health: 1200, speed: 0x28, fight_damage: 500 }, // SuperWarrior
-        7 => PersonTypeDefaults { max_health: 900,  speed: 0x30, fight_damage: 300 }, // Shaman
+        7 => PersonTypeDefaults { max_health: 900,  speed: 0x28, fight_damage: 300 }, // Shaman
         8 => PersonTypeDefaults { max_health: 2000, speed: 0x30, fight_damage: 600 }, // Angel of Death
         _ => PersonTypeDefaults { max_health: 200,  speed: 0x30, fight_damage: 100 }, // Fallback
     }

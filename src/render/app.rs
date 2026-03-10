@@ -614,6 +614,18 @@ impl GameEngine {
                 }
                 true
             }
+            GameCommand::IncreaseGameSpeed => {
+                let new_speed = (self.game_world.game_speed + 2).min(30);
+                self.game_world.set_game_speed(new_speed);
+                println!("game speed: {} ticks/sec", self.game_world.game_speed);
+                false
+            }
+            GameCommand::DecreaseGameSpeed => {
+                let new_speed = self.game_world.game_speed.saturating_sub(2).max(4);
+                self.game_world.set_game_speed(new_speed);
+                println!("game speed: {} ticks/sec", self.game_world.game_speed);
+                false
+            }
             GameCommand::SetHudTab(tab) => {
                 self.hud_tab = *tab;
                 true
@@ -817,7 +829,7 @@ impl App {
                 hud_panel_sprite_count: 0,
                 unit_coordinator: UnitCoordinator::new(),
                 game_world: {
-                    let mut w = GameWorld::new(12);
+                    let mut w = GameWorld::new(20);
                     w.state = GameState::InGame;
                     w
                 },

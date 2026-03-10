@@ -49,7 +49,7 @@ pub const ANIM_SPEED_MULTIPLIER: [u8; 9] = [
     4, // subtype 4 (preacher)   → 5 ticks/frame
     0, // subtype 5 (spy)        → 1 tick/frame
     0, // subtype 6 (firewarrior)→ 1 tick/frame
-    0, // subtype 7 (shaman)     → 1 tick/frame
+    2, // subtype 7 (shaman)     → 3 ticks/frame
     0, // subtype 8 (aod)        → 1 tick/frame
 ];
 
@@ -434,6 +434,6 @@ mod tests {
     fn speed_multiplier_values() {
         assert_eq!(ANIM_SPEED_MULTIPLIER[PERSON_SUBTYPE_BRAVE as usize], 2);
         assert_eq!(ANIM_SPEED_MULTIPLIER[PERSON_SUBTYPE_WARRIOR as usize], 2);
-        assert_eq!(ANIM_SPEED_MULTIPLIER[PERSON_SUBTYPE_SHAMAN as usize], 0);
+        assert_eq!(ANIM_SPEED_MULTIPLIER[PERSON_SUBTYPE_SHAMAN as usize], 2);
     }
 }
