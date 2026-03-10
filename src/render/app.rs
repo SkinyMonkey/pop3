@@ -1586,6 +1586,7 @@ impl App {
         let walkable_color = Vector3::new(0.0, 0.8, 0.2);   // green = walkable land
         let building_color = Vector3::new(0.8, 0.3, 0.1);   // red-brown = building
         let water_color = Vector3::new(0.0, 0.3, 0.8);      // blue = water
+        let shore_color = Vector3::new(0.6, 0.6, 0.1);      // yellow-brown = shore buffer (unwalkable)
         let height_offset = 0.02;
 
         let mut model: ColorModel = MeshModel::new();
@@ -1615,10 +1616,14 @@ impl App {
                 let tri_a_water = h00 == 0 && h01 == 0 && h10 == 0;
                 let tri_b_water = h11 == 0 && h01 == 0 && h10 == 0;
 
+                let is_walkable = region_map.is_walkable(tile);
+
                 let color_a = if is_building {
                     building_color
                 } else if tri_a_water {
                     water_color
+                } else if !is_walkable {
+                    shore_color
                 } else {
                     walkable_color
                 };
@@ -1626,12 +1631,15 @@ impl App {
                     building_color
                 } else if tri_b_water {
                     water_color
+                } else if !is_walkable {
+                    shore_color
                 } else {
                     walkable_color
                 };
 
                 if is_building { count_building += 1; }
                 else if tri_a_water && tri_b_water { count_water += 1; }
+                else if !is_walkable { /* shore buffer, counted implicitly */ }
                 else { count_walkable += 1; }
 
                 // Corner positions: 0=TL, 1=TR, 2=BR, 3=BL

@@ -403,18 +403,21 @@ impl UnitCoordinator {
         }
     }
 
-    /// Mark height-0 cells as water (unwalkable) in the region map.
+    /// Mark height-0 cells as water (unwalkable) in the region map,
+    /// then erode one cell inward so shore-adjacent land is also unwalkable.
     /// Water cells get region_id=1 so `same_region` returns false when
     /// routing between land (region 0) and water, forcing the pathfinder
     /// to engage and reject the unwalkable target.
     fn populate_water(region_map: &mut RegionMap, landscape_height: &[[u16; 128]; 128], size: usize) {
         region_map.set_terrain_flags(1, 0x00); // terrain class 1 = water = unwalkable
+        region_map.set_terrain_flags(3, 0x00); // terrain class 3 = shore buffer = unwalkable
         let ni = size as i32;
         let n = size;
+
+        // Pass 1: mark fully-submerged cells as water
+        let mut is_water = vec![false; n * n];
         for cell_y in 0..size {
             for cell_x in 0..size {
-                // A cell is water only if ALL 4 corner vertices are height 0.
-                // If any corner is land, the cell is at least partially walkable.
                 let cy1 = (cell_y + 1) % n;
                 let cx1 = (cell_x + 1) % n;
                 let all_water = landscape_height[cell_y][cell_x] == 0
@@ -422,10 +425,32 @@ impl UnitCoordinator {
                     && landscape_height[cy1][cell_x] == 0
                     && landscape_height[cy1][cx1] == 0;
                 if all_water {
+                    is_water[cell_y * n + cell_x] = true;
                     let tile = cell_to_tile(cell_x as i32, cell_y as i32, ni);
                     let cell = region_map.get_cell_mut(tile);
                     cell.terrain_type = 1;
                     region_map.set_cell_region(tile, 1); // water region
+                }
+            }
+        }
+
+        // Pass 2: erode — mark non-water cells adjacent to water as shore buffer
+        for cell_y in 0..size {
+            for cell_x in 0..size {
+                if is_water[cell_y * n + cell_x] {
+                    continue; // already water
+                }
+                let neighbors = [
+                    (cell_x, (cell_y + n - 1) % n), // north
+                    (cell_x, (cell_y + 1) % n),     // south
+                    ((cell_x + n - 1) % n, cell_y), // west
+                    ((cell_x + 1) % n, cell_y),     // east
+                ];
+                let adjacent_to_water = neighbors.iter().any(|&(nx, ny)| is_water[ny * n + nx]);
+                if adjacent_to_water {
+                    let tile = cell_to_tile(cell_x as i32, cell_y as i32, ni);
+                    let cell = region_map.get_cell_mut(tile);
+                    cell.terrain_type = 3; // shore buffer
                 }
             }
         }
@@ -463,29 +488,26 @@ mod tests {
 
     #[test]
     fn populate_water_marks_unwalkable() {
+        // Create a water block: cells (10,10)..(13,13) all have height 0
+        // so cells (10,10), (10,11), (10,12), (11,10), (11,11), (11,12),
+        // (12,10), (12,11), (12,12) have all 4 corners at 0 → water.
         let mut height = [[100u16; 128]; 128];
-        // Set a few cells to water (height 0)
-        // height[cell_y][cell_x], so these are at landscape cells:
-        height[0][0] = 0;     // cell (0, 0)
-        height[10][20] = 0;   // cell (20, 10)
-        height[63][64] = 0;   // cell (64, 63)
+        for y in 10..=13 {
+            for x in 10..=13 {
+                height[y][x] = 0;
+            }
+        }
 
         let mut map = RegionMap::new();
         UnitCoordinator::populate_water(&mut map, &height, 128);
 
-        // Water cells should be unwalkable — use same cell_to_tile mapping
-        let tile_0_0 = cell_to_tile(0, 0, 128);
-        assert!(!map.is_walkable(tile_0_0));
-        let tile_20_10 = cell_to_tile(20, 10, 128);
-        assert!(!map.is_walkable(tile_20_10));
-        let tile_64_63 = cell_to_tile(64, 63, 128);
-        assert!(!map.is_walkable(tile_64_63));
+        // Interior water cell should be unwalkable
+        let water_tile = cell_to_tile(11, 11, 128);
+        assert!(!map.is_walkable(water_tile));
 
-        // Land cells should remain walkable
-        let land1 = cell_to_tile(1, 1, 128);
-        assert!(map.is_walkable(land1));
-        let land2 = cell_to_tile(50, 50, 128);
-        assert!(map.is_walkable(land2));
+        // Far-away land cell should remain walkable
+        let land = cell_to_tile(50, 50, 128);
+        assert!(map.is_walkable(land));
     }
 
     #[test]
@@ -494,10 +516,37 @@ mod tests {
         let height = [[50u16; 128]; 128];
         let mut map = RegionMap::new();
         UnitCoordinator::populate_water(&mut map, &height, 128);
-        // Check various tiles via the same coordinate path
         let t1 = cell_to_tile(0, 0, 128);
         assert!(map.is_walkable(t1));
         let t2 = cell_to_tile(127, 127, 128);
         assert!(map.is_walkable(t2));
+    }
+
+    #[test]
+    fn populate_water_shore_erosion() {
+        // Create a water block at cells (10,10)..(13,13)
+        // Water cells: (10..12, 10..12) — all 4 corners at height 0
+        // Shore buffer: cells adjacent to water but not water themselves
+        let mut height = [[100u16; 128]; 128];
+        for y in 10..=13 {
+            for x in 10..=13 {
+                height[y][x] = 0;
+            }
+        }
+
+        let mut map = RegionMap::new();
+        UnitCoordinator::populate_water(&mut map, &height, 128);
+
+        // Cell (9, 11) is land but adjacent to water cell (10, 11) → shore buffer
+        let shore_tile = cell_to_tile(9, 11, 128);
+        assert!(!map.is_walkable(shore_tile), "shore-adjacent cell should be unwalkable");
+
+        // Cell (13, 11) is land but adjacent to water cell (12, 11) → shore buffer
+        let shore_tile2 = cell_to_tile(13, 11, 128);
+        assert!(!map.is_walkable(shore_tile2), "shore-adjacent cell should be unwalkable");
+
+        // Cell (8, 11) is 2 cells away from water → should remain walkable
+        let far_land = cell_to_tile(8, 11, 128);
+        assert!(map.is_walkable(far_land), "cell 2 away from water should be walkable");
     }
 }
