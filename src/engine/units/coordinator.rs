@@ -409,13 +409,19 @@ impl UnitCoordinator {
     /// to engage and reject the unwalkable target.
     fn populate_water(region_map: &mut RegionMap, landscape_height: &[[u16; 128]; 128], size: usize) {
         region_map.set_terrain_flags(1, 0x00); // terrain class 1 = water = unwalkable
-        // landscape_height[cell_y][cell_x] — cell_y is the row (world x, flipped),
-        // cell_x is the column (world z). Use cell_to_tile() for direct integer
-        // wrapping that handles map boundaries correctly (no float saturation).
         let ni = size as i32;
+        let n = size;
         for cell_y in 0..size {
             for cell_x in 0..size {
-                if landscape_height[cell_y][cell_x] == 0 {
+                // A cell is water only if ALL 4 corner vertices are height 0.
+                // If any corner is land, the cell is at least partially walkable.
+                let cy1 = (cell_y + 1) % n;
+                let cx1 = (cell_x + 1) % n;
+                let all_water = landscape_height[cell_y][cell_x] == 0
+                    && landscape_height[cell_y][cx1] == 0
+                    && landscape_height[cy1][cell_x] == 0
+                    && landscape_height[cy1][cx1] == 0;
+                if all_water {
                     let tile = cell_to_tile(cell_x as i32, cell_y as i32, ni);
                     let cell = region_map.get_cell_mut(tile);
                     cell.terrain_type = 1;

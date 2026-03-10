@@ -984,7 +984,7 @@ impl App {
         self.engine.level_objects = extract_level_objects(&level_res);
 
         // Extract person units into the coordinator (they become live entities)
-        self.engine.unit_coordinator.load_level(&level_res.units, &level_res.landscape.height, level_res.landscape.land_size());
+        self.engine.unit_coordinator.load_level(&level_res.units, &shores.height, level_res.landscape.land_size());
         // Remove persons from static markers — they're now rendered by the coordinator
         self.engine.level_objects.retain(|obj| obj.model_type != ModelType::Person);
 
@@ -1593,57 +1593,81 @@ impl App {
         let mut count_building = 0u32;
         let mut count_walkable = 0u32;
 
+        let heights = landscape.heights();
+
         for cell_y in 0..w {
             for cell_x in 0..w {
                 // Check walkability via region map
                 let tile = cell_to_tile(cell_x as i32, cell_y as i32, w as i32);
-                let walkable = region_map.is_walkable(tile);
                 let is_building = region_map.has_building(tile);
 
-                // Categorize: walkable land, building, or water
-                let color = if is_building {
-                    count_building += 1;
+                // Look up 4 corner heights to determine per-triangle water status
+                let cx1 = (cell_x + 1) % w;
+                let cy1 = (cell_y + 1) % w;
+                let h00 = heights[cell_y][cell_x];   // (x, y)     = TL
+                let h10 = heights[cell_y][cx1];       // (x+1, y)   = TR
+                let h01 = heights[cy1][cell_x];       // (x, y+1)   = BL
+                let h11 = heights[cy1][cx1];           // (x+1, y+1) = BR
+
+                // "/" diagonal split matching terrain mesh:
+                //   Triangle A (lower-left):  TL(0,0) - BL(0,1) - TR(1,0)
+                //   Triangle B (upper-right): BR(1,1) - BL(0,1) - TR(1,0)
+                let tri_a_water = h00 == 0 && h01 == 0 && h10 == 0;
+                let tri_b_water = h11 == 0 && h01 == 0 && h10 == 0;
+
+                let color_a = if is_building {
                     building_color
-                } else if walkable {
-                    count_walkable += 1;
-                    walkable_color
-                } else {
-                    count_water += 1;
+                } else if tri_a_water {
                     water_color
+                } else {
+                    walkable_color
+                };
+                let color_b = if is_building {
+                    building_color
+                } else if tri_b_water {
+                    water_color
+                } else {
+                    walkable_color
                 };
 
-                // Compute 4 corner positions in GPU space
+                if is_building { count_building += 1; }
+                else if tri_a_water && tri_b_water { count_water += 1; }
+                else { count_walkable += 1; }
+
+                // Corner positions: 0=TL, 1=TR, 2=BR, 3=BL
                 let corners: [(f32, f32); 4] = [
                     (cell_x as f32, cell_y as f32),
                     (cell_x as f32 + 1.0, cell_y as f32),
                     (cell_x as f32 + 1.0, cell_y as f32 + 1.0),
                     (cell_x as f32, cell_y as f32 + 1.0),
                 ];
-                let base_idx = model.vertices.len() as u16;
-                for (cx, cy) in &corners {
-                    let vis_x = ((*cx - shift.x as f32) % wf + wf) % wf;
-                    let vis_y = ((*cy - shift.y as f32) % wf + wf) % wf;
-                    let gx = vis_x * step;
-                    let gy = vis_y * step;
 
-                    let h = landscape.interpolate_height_at(*cx, *cy);
-                    let vdx = gx - center;
-                    let vdy = gy - center;
-                    let curvature = (vdx * vdx + vdy * vdy) * cs;
-                    let gz = h - curvature + height_offset;
+                // Emit 6 vertices (2 triangles with independent colors)
+                // Triangle A: TL(0), BL(3), TR(1)
+                let tri_a_corners = [0usize, 3, 1];
+                // Triangle B: BR(2), BL(3), TR(1)
+                let tri_b_corners = [2usize, 3, 1];
 
-                    model.push_vertex(ColorVertex {
-                        coord: Vector3::new(gx, gy, gz),
-                        color,
-                    });
+                for (tri_corners, color) in [(&tri_a_corners, color_a), (&tri_b_corners, color_b)] {
+                    for &ci in tri_corners {
+                        let (cx, cy) = corners[ci];
+                        let vis_x = ((cx - shift.x as f32) % wf + wf) % wf;
+                        let vis_y = ((cy - shift.y as f32) % wf + wf) % wf;
+                        let gx = vis_x * step;
+                        let gy = vis_y * step;
+
+                        let h = landscape.interpolate_height_at(cx, cy);
+                        let vdx = gx - center;
+                        let vdy = gy - center;
+                        let curvature = (vdx * vdx + vdy * vdy) * cs;
+                        let gz = h - curvature + height_offset;
+
+                        model.push_vertex(ColorVertex {
+                            coord: Vector3::new(gx, gy, gz),
+                            color,
+                        });
+                    }
                 }
-                // Two triangles: 0-1-2, 0-2-3
-                model.indices.push(base_idx);
-                model.indices.push(base_idx + 1);
-                model.indices.push(base_idx + 2);
-                model.indices.push(base_idx);
-                model.indices.push(base_idx + 2);
-                model.indices.push(base_idx + 3);
             }
         }
 
@@ -2968,7 +2992,8 @@ impl ApplicationHandler for App {
         self.engine.level_objects = extract_level_objects(&level_res2);
 
         // Extract person units into the coordinator (they become live entities)
-        self.engine.unit_coordinator.load_level(&level_res2.units, &level_res2.landscape.height, level_res2.landscape.land_size());
+        let shores2 = level_res2.landscape.make_shores();
+        self.engine.unit_coordinator.load_level(&level_res2.units, &shores2.height, level_res2.landscape.land_size());
         self.engine.level_objects.retain(|obj| obj.model_type != ModelType::Person);
 
         // Populate unit_renders cells from live coordinator units
