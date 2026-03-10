@@ -2,7 +2,9 @@
 
 Pop3 is an open-source project that aims to remake [Populous: The Beginning](https://en.wikipedia.org/wiki/Populous:_The_Beginning) using modern technologies, staying as close to the original as practically possible.
 
-<img width="1800" height="1169" alt="Screenshot 2026-02-07 at 12 49 00 AM" src="https://github.com/user-attachments/assets/7b14b86a-d9e9-48e1-98ae-92e914776e34" />
+Video demo [here](https://www.youtube.com/watch?v=cE2oCt4YUz0)
+
+<img width="1920" height="1080" alt="Screenshot 2026-03-09 at 11 32 22 PM (2)" src="https://github.com/user-attachments/assets/97226697-69b2-4492-8e6a-7813456d6e63" />
 
 Built with [Rust](https://www.rust-lang.org/), using [wgpu](https://wgpu.rs/) for cross-platform GPU rendering (Metal/Vulkan/DX12), Pop3 is a standalone application but requires original game files as proof of ownership.
 
