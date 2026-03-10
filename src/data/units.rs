@@ -94,6 +94,7 @@ impl BinDeserializer for TribeConfigRaw {
 
 /******************************************************************************/
 
+
 /// Returns the OBJS object index for a completed building.
 /// tribe_index: 0-3 (Blue, Red, Yellow, Green)
 ///

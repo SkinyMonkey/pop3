@@ -6,7 +6,7 @@ use cgmath::{Vector4, Vector3, Vector2};
 
 use crate::render::model::{Triangle, VertexModel, MeshModel};
 use crate::render::envelop::{GpuModel, ModelEnvelop, RenderType};
-use crate::data::objects::Shape;
+use crate::data::objects::{Shape, ShapeFootprints};
 
 pub type LandscapeModel = MeshModel<Vector2<u8>, u16>;
 
@@ -213,17 +213,21 @@ impl<const N: usize> LandscapeMesh<N> {
     /// 4. Smooths surrounding terrain
     pub fn flatten_building_footprint(
         &mut self,
-        cell_x: usize, cell_y: usize, // building center cell
+        cell_x: i32, cell_y: i32, // building center cell
         shape: &Shape,
+        shape_idx: usize,
+        footprints: &ShapeFootprints,
         use_average: bool,
     ) {
-        let w = shape.width as usize;
-        let h = shape.height as usize;
+        let w = shape.width as i32;
+        let h = shape.height as i32;
         if w == 0 || h == 0 { return; }
+        let ni = N as i32;
 
-        // Corner = center - origin (with toroidal wrap)
-        let corner_x = (cell_x + N - shape.origin_x as usize) % N;
-        let corner_y = (cell_y + N - shape.origin_z as usize) % N;
+        // Corner = center - origin (signed, clipped to map bounds)
+        // Origin is in tile units (2 per cell), convert to cell units
+        let base_cx = cell_x - shape.origin_x as i32 / 2;
+        let base_cy = cell_y - shape.origin_z as i32 / 2;
 
         // Pass 1: Sample heights and compute target
         let mut sum: u64 = 0;
@@ -231,11 +235,11 @@ impl<const N: usize> LandscapeMesh<N> {
         let mut count: u32 = 0;
         for dy in 0..h {
             for dx in 0..w {
-                let mask_idx = dy * w + dx;
-                if mask_idx < 40 && (shape.cell_mask[mask_idx] & 0x01) != 0 {
-                    let cx = (corner_x + dx) % N;
-                    let cy = (corner_y + dy) % N;
-                    // Sample all 4 corners of this cell
+                if footprints.is_cell_occupied(shape_idx, dx as usize, dy as usize) {
+                    let cx = ((base_cx + dx) % ni + ni) % ni;
+                    let cy = ((base_cy + dy) % ni + ni) % ni;
+                    let cx = cx as usize;
+                    let cy = cy as usize;
                     let cx1 = (cx + 1) % N;
                     let cy1 = (cy + 1) % N;
                     let h00 = self.heights[cy][cx];
@@ -261,10 +265,11 @@ impl<const N: usize> LandscapeMesh<N> {
         // Pass 2: Write target height to all footprint cells
         for dy in 0..h {
             for dx in 0..w {
-                let mask_idx = dy * w + dx;
-                if mask_idx < 40 && (shape.cell_mask[mask_idx] & 0x01) != 0 {
-                    let cx = (corner_x + dx) % N;
-                    let cy = (corner_y + dy) % N;
+                if footprints.is_cell_occupied(shape_idx, dx as usize, dy as usize) {
+                    let cx = ((base_cx + dx) % ni + ni) % ni;
+                    let cy = ((base_cy + dy) % ni + ni) % ni;
+                    let cx = cx as usize;
+                    let cy = cy as usize;
                     let cx1 = (cx + 1) % N;
                     let cy1 = (cy + 1) % N;
                     self.heights[cy][cx] = target;
@@ -276,42 +281,40 @@ impl<const N: usize> LandscapeMesh<N> {
         }
 
         // Pass 3: Smooth surrounding terrain
-        let radius = (w.max(h) / 2) + 1;
-        self.smooth_terrain_area(cell_x, cell_y, radius, corner_x, corner_y, w, h, shape);
+        let radius = (w.max(h) / 2 + 1) as usize;
+        self.smooth_terrain_area(cell_x, cell_y, radius, base_cx, base_cy, w, h, shape_idx, footprints);
     }
 
     /// Smooth terrain transitions around a flattened area.
     /// Averages heights at border cells to create gradual transitions.
     fn smooth_terrain_area(
         &mut self,
-        center_x: usize, center_y: usize,
+        center_x: i32, center_y: i32,
         radius: usize,
-        corner_x: usize, corner_y: usize,
-        fp_w: usize, fp_h: usize,
-        shape: &Shape,
+        base_cx: i32, base_cy: i32,
+        fp_w: i32, fp_h: i32,
+        shape_idx: usize,
+        footprints: &ShapeFootprints,
     ) {
-        let r = radius + 1;
-        // Iterate over a ring around the footprint
-        let start_x = (center_x + N - r) % N;
-        let start_y = (center_y + N - r) % N;
-        let diameter = r * 2 + 1;
+        let r = radius as i32 + 1;
+        let ni = N as i32;
 
-        for dy in 0..diameter {
-            for dx in 0..diameter {
-                let cx = (start_x + dx) % N;
-                let cy = (start_y + dy) % N;
+        for dy in -r..=r {
+            for dx in -r..=r {
+                let cx = ((center_x + dx) % ni + ni) % ni;
+                let cy = ((center_y + dy) % ni + ni) % ni;
 
                 // Skip cells inside the footprint
-                let rel_x = (cx + N - corner_x) % N;
-                let rel_y = (cy + N - corner_y) % N;
-                if rel_x < fp_w && rel_y < fp_h {
-                    let mask_idx = rel_y * fp_w + rel_x;
-                    if mask_idx < 40 && (shape.cell_mask[mask_idx] & 0x01) != 0 {
+                let rel_x = cx - ((base_cx % ni + ni) % ni);
+                let rel_y = cy - ((base_cy % ni + ni) % ni);
+                if rel_x >= 0 && rel_y >= 0 && rel_x < fp_w && rel_y < fp_h {
+                    if footprints.is_cell_occupied(shape_idx, rel_x as usize, rel_y as usize) {
                         continue;
                     }
                 }
 
-                // Average with neighbors
+                let cx = cx as usize;
+                let cy = cy as usize;
                 let cx1 = (cx + 1) % N;
                 let cy1 = (cy + 1) % N;
                 let cxm = (cx + N - 1) % N;

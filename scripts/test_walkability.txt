@@ -1,0 +1,20 @@
+# Walkability overlay debug: close-up building comparison
+dump_buildings
+Space
+wait 1
+zoom 0.5
+wait 0.5
+
+# Zoomed-out overlay view
+F8
+wait 0.5
+screenshot walkability_overview.png
+wait 0.5
+
+# Zoom in slightly on the buildings
+zoom 0.3
+wait 0.5
+screenshot walkability_closeup.png
+wait 0.5
+
+Escape

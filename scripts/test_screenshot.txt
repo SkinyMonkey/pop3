@@ -1,0 +1,5 @@
+# Minimal screenshot test - just wait for render then capture
+wait 0.5
+screenshot test_default.png
+wait 0.5
+Escape

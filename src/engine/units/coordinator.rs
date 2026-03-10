@@ -21,7 +21,7 @@ use super::person_state::{
 };
 use super::animation::{AnimationState, select_animation, tick_animation};
 use super::selection::{SelectionState, DragState};
-use super::coords::{world_to_render_pos, toroidal_delta, cell_to_world};
+use super::coords::{world_to_render_pos, toroidal_delta, cell_to_world, cell_to_tile};
 
 pub struct UnitCoordinator {
     pub units: Vec<Unit>,
@@ -73,6 +73,7 @@ impl UnitCoordinator {
         self.region_map = RegionMap::new();
 
         Self::populate_water(&mut self.region_map, landscape_height, landscape_size);
+        self.region_map.set_terrain_flags(2, 0x00); // terrain class 2 = building = unwalkable
 
         log::info!("[unit-ctrl] load_level: {} raw units, landscape_size={}", units_raw.len(), landscape_size);
 
@@ -409,13 +410,13 @@ impl UnitCoordinator {
     fn populate_water(region_map: &mut RegionMap, landscape_height: &[[u16; 128]; 128], size: usize) {
         region_map.set_terrain_flags(1, 0x00); // terrain class 1 = water = unwalkable
         // landscape_height[cell_y][cell_x] — cell_y is the row (world x, flipped),
-        // cell_x is the column (world z). Use cell_to_world → to_tile() to get the
-        // correct tile coordinates matching the routing system's to_tile().
+        // cell_x is the column (world z). Use cell_to_tile() for direct integer
+        // wrapping that handles map boundaries correctly (no float saturation).
+        let ni = size as i32;
         for cell_y in 0..size {
             for cell_x in 0..size {
                 if landscape_height[cell_y][cell_x] == 0 {
-                    let world = cell_to_world(cell_x as f32 + 0.5, cell_y as f32 + 0.5, size as f32);
-                    let tile = world.to_tile();
+                    let tile = cell_to_tile(cell_x as i32, cell_y as i32, ni);
                     let cell = region_map.get_cell_mut(tile);
                     cell.terrain_type = 1;
                     region_map.set_cell_region(tile, 1); // water region
@@ -426,6 +427,10 @@ impl UnitCoordinator {
 
     pub fn region_map(&self) -> &RegionMap {
         &self.region_map
+    }
+
+    pub fn region_map_mut(&mut self) -> &mut RegionMap {
+        &mut self.region_map
     }
 }
 
@@ -462,18 +467,18 @@ mod tests {
         let mut map = RegionMap::new();
         UnitCoordinator::populate_water(&mut map, &height, 128);
 
-        // Water cells should be unwalkable — use same cell_to_world → to_tile mapping
-        let tile_0_0 = cell_to_world(0.5, 0.5, 128.0).to_tile();
+        // Water cells should be unwalkable — use same cell_to_tile mapping
+        let tile_0_0 = cell_to_tile(0, 0, 128);
         assert!(!map.is_walkable(tile_0_0));
-        let tile_20_10 = cell_to_world(20.5, 10.5, 128.0).to_tile();
+        let tile_20_10 = cell_to_tile(20, 10, 128);
         assert!(!map.is_walkable(tile_20_10));
-        let tile_64_63 = cell_to_world(64.5, 63.5, 128.0).to_tile();
+        let tile_64_63 = cell_to_tile(64, 63, 128);
         assert!(!map.is_walkable(tile_64_63));
 
         // Land cells should remain walkable
-        let land1 = cell_to_world(1.5, 1.5, 128.0).to_tile();
+        let land1 = cell_to_tile(1, 1, 128);
         assert!(map.is_walkable(land1));
-        let land2 = cell_to_world(50.5, 50.5, 128.0).to_tile();
+        let land2 = cell_to_tile(50, 50, 128);
         assert!(map.is_walkable(land2));
     }
 
@@ -484,9 +489,9 @@ mod tests {
         let mut map = RegionMap::new();
         UnitCoordinator::populate_water(&mut map, &height, 128);
         // Check various tiles via the same coordinate path
-        let t1 = cell_to_world(0.5, 0.5, 128.0).to_tile();
+        let t1 = cell_to_tile(0, 0, 128);
         assert!(map.is_walkable(t1));
-        let t2 = cell_to_world(127.5, 127.5, 128.0).to_tile();
+        let t2 = cell_to_tile(127, 127, 128);
         assert!(map.is_walkable(t2));
     }
 }

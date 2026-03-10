@@ -13,7 +13,7 @@
 // So: world.x → cell_y (flipped), world.z → cell_x
 
 use cgmath::{Matrix4, Vector4};
-use crate::engine::movement::WorldCoord;
+use crate::engine::movement::{WorldCoord, TileCoord};
 
 /// Convert world coordinates to cell coordinates for rendering.
 /// `n` is landscape size (typically 128.0).
@@ -47,6 +47,22 @@ pub fn cell_to_world(cell_x: f32, cell_y: f32, n: f32) -> WorldCoord {
     let loc_x = ((bevy_x - 0.5) * 2.0) as u16;
     let loc_y = ((bevy_z - 0.5) * 2.0) as u16;
     WorldCoord::new((loc_x << 8) as i16, (loc_y << 8) as i16)
+}
+
+/// Convert integer cell coordinates directly to tile coordinates.
+/// Unlike `cell_to_world()` → `to_tile()`, this uses integer arithmetic
+/// with natural u8 wrapping, avoiding float→u16 saturation at map edges.
+///
+/// The mapping (from world_to_cell / cell_to_world):
+///   cell_x → loc_y_byte = cell_x * 2     → tile_z = loc_y_byte as u8
+///   cell_y → loc_x_byte = (n-2-cell_y)*2  → tile_x = loc_x_byte as u8
+///
+/// At map boundary (cell_y=127, n=128): loc_x_byte = -2, wraps to 254 as u8.
+/// This matches the original binary's byte arithmetic in Building_MarkFootprintCells.
+pub fn cell_to_tile(cell_x: i32, cell_y: i32, n: i32) -> TileCoord {
+    let tile_z = (cell_x * 2) as u8;
+    let tile_x = ((n - 2 - cell_y) * 2) as u8;
+    TileCoord { x: tile_x, z: tile_z }
 }
 
 /// Convert GPU-space hit point to cell coordinates.
@@ -153,6 +169,49 @@ pub fn nearest_screen_hit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cell_to_tile_interior() {
+        // Interior cell (60, 50), n=128
+        // tile_z = 60 * 2 = 120, tile_x = (128-2-50)*2 = 152
+        let t = cell_to_tile(60, 50, 128);
+        assert_eq!(t.z, 120);
+        assert_eq!(t.x, 152);
+        // Should match cell_to_world → to_tile for interior cells
+        let w = cell_to_world(60.5, 50.5, 128.0);
+        let t2 = w.to_tile();
+        assert_eq!(t.x, t2.x);
+        assert_eq!(t.z, t2.z);
+    }
+
+    #[test]
+    fn cell_to_tile_boundary_wraps() {
+        // cell_y=127, n=128: tile_x = (128-2-127)*2 = -2 → 254 as u8
+        let t = cell_to_tile(0, 127, 128);
+        assert_eq!(t.x, 254);
+        assert_eq!(t.z, 0);
+        // cell_y=126: tile_x = (128-2-126)*2 = 0
+        let t2 = cell_to_tile(0, 126, 128);
+        assert_eq!(t2.x, 0);
+        // These MUST be different tiles (the float path gives identical tiles)
+        assert_ne!(t.x, t2.x);
+    }
+
+    #[test]
+    fn cell_to_tile_all_unique() {
+        // All 128×128 cells should map to unique tile indices
+        let n = 128i32;
+        let mut seen = std::collections::HashSet::new();
+        for cy in 0..n {
+            for cx in 0..n {
+                let t = cell_to_tile(cx, cy, n);
+                let idx = t.cell_index();
+                assert!(seen.insert(idx),
+                    "duplicate tile index {} for cell ({}, {})", idx, cx, cy);
+            }
+        }
+        assert_eq!(seen.len(), (n * n) as usize);
+    }
 
     #[test]
     fn world_to_cell_roundtrip() {

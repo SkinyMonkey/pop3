@@ -32,9 +32,7 @@ pub struct ObjectRaw {
     f7: u16,
     f8: u16,
     f9: u16,
-    shapes_index: u8,
-    u1: u8,
-    f10: u16,
+    fp_idx: [i8; 4],  // SHAPES.DAT footprint index per rotation (0-3), at OBJS offset 0x2c
     f11: u16,
     f12: u16,
     f13: u16,
@@ -62,6 +60,55 @@ pub struct Shape {
 impl BinDeserializer for Shape {
     fn from_reader<R: Read>(reader: &mut R) -> Option<Self> {
         from_reader::<Self, {size_of::<Self>()}, R>(reader)
+    }
+}
+
+/******************************************************************************/
+
+/// Parsed building footprint data from SHAPES.DAT.
+/// File layout: [64 entries × 48 bytes] [1532 bytes bitmap data].
+/// Each bitmap byte's bit 0 indicates whether the cell is occupied.
+pub struct ShapeFootprints {
+    shapes: Vec<Shape>,
+    bitmap_data: Vec<u8>,
+}
+
+/// Number of valid shape entries in SHAPES.DAT (entries 64+ have garbage shape_ref).
+const SHAPE_ENTRY_COUNT: usize = 64;
+
+impl ShapeFootprints {
+    pub fn empty() -> Self {
+        ShapeFootprints { shapes: Vec::new(), bitmap_data: Vec::new() }
+    }
+
+    pub fn from_file(path: &Path) -> Self {
+        let data = std::fs::read(path).unwrap();
+        let entry_bytes = SHAPE_ENTRY_COUNT * size_of::<Shape>();
+        let mut shapes = Vec::with_capacity(SHAPE_ENTRY_COUNT);
+        let mut cursor = std::io::Cursor::new(&data[..entry_bytes]);
+        for _ in 0..SHAPE_ENTRY_COUNT {
+            if let Some(s) = Shape::from_reader(&mut cursor) {
+                shapes.push(s);
+            }
+        }
+        let bitmap_data = data[entry_bytes..].to_vec();
+        ShapeFootprints { shapes, bitmap_data }
+    }
+
+    pub fn shapes(&self) -> &[Shape] {
+        &self.shapes
+    }
+
+    /// Check if cell (dx, dy) within a shape's bounding box is actually occupied.
+    /// Returns false for out-of-bounds or empty bitmap cells.
+    pub fn is_cell_occupied(&self, shape_idx: usize, dx: usize, dy: usize) -> bool {
+        if let Some(s) = self.shapes.get(shape_idx) {
+            let w = s.width as usize;
+            let offset = s.shape_ref as usize + dy * w + dx;
+            offset < self.bitmap_data.len() && (self.bitmap_data[offset] & 1) != 0
+        } else {
+            false
+        }
     }
 }
 
@@ -252,22 +299,13 @@ impl Object3D {
         self.object.coord_scale as f32
     }
 
-    pub fn shapes_index(&self) -> u8 {
-        self.object.shapes_index
-    }
-
     /// Returns the SHAPES.DAT footprint index for the given rotation (0-3).
-    /// Rotation is computed from angle: `((angle as u32 + 0x1FF) >> 9) & 3`
+    /// Read from the OBJS entry at offset 0x2c (4 signed bytes, one per rotation).
     /// Returns i8 since negative values mean no footprint.
     pub fn footprint_index(&self, rotation: usize) -> i8 {
-        match rotation & 3 {
-            0 => self.object.shapes_index as i8,
-            1 => self.object.u1 as i8,
-            2 => (self.object.f10 & 0xFF) as u8 as i8,
-            3 => (self.object.f10 >> 8) as u8 as i8,
-            _ => unreachable!(),
-        }
+        self.object.fp_idx[rotation & 3]
     }
+
 }
 
 /******************************************************************************/

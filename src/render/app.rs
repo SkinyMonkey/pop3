@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -13,7 +13,8 @@ use winit::window::{Window, WindowAttributes};
 use cgmath::{Point2, Point3, Vector3, Vector4, Matrix4, SquareMatrix};
 
 use crate::render::tex_model::TexModel;
-use crate::render::color_model::ColorModel;
+use crate::render::model::{MeshModel, VertexModel};
+use crate::render::color_model::{ColorModel, ColorVertex};
 use crate::render::camera::*;
 
 use crate::data::psfb::ContainerPSFB;
@@ -24,6 +25,7 @@ use crate::data::animation::{
     UNIT_MULTI_ANIMS, SHAMAN_ANIMS,
 };
 use crate::engine::state::constants::*;
+use crate::engine::movement::constants::CELL_HAS_BUILDING;
 
 use crate::render::picking::intersect_iter;
 
@@ -34,12 +36,12 @@ use crate::render::terrain::{
 };
 use crate::data::level::{LevelRes, ObjectPaths};
 use crate::data::units::{ModelType, object_3d_index};
-use crate::data::objects::{Object3D, Shape};
+use crate::data::objects::{Object3D, Shape, ShapeFootprints};
 use crate::data::bl320::make_bl320_texture_rgba;
 use crate::data::landscape::{make_texture_land, draw_texture_u8};
 
 use crate::engine::units::{UnitCoordinator, DragState, Unit};
-use crate::engine::units::coords::{cell_to_world, triangle_to_cell, project_to_screen, ScreenRect};
+use crate::engine::units::coords::{cell_to_world, cell_to_tile, triangle_to_cell, project_to_screen, ScreenRect};
 use crate::render::buildings::build_building_meshes;
 use crate::render::sprites::{
     LevelObject, UnitTypeRender,
@@ -51,7 +53,7 @@ use crate::render::sprites::{
 };
 
 use crate::render::gpu::context::GpuContext;
-use crate::render::gpu::pipeline::create_pipeline;
+use crate::render::gpu::pipeline::{create_pipeline, create_pipeline_blended};
 use crate::render::gpu::buffer::GpuBuffer;
 use crate::render::gpu::texture::GpuTexture;
 use crate::render::gpu::bind_groups::{
@@ -163,6 +165,7 @@ pub struct GameEngine {
     hud_tab: HudTab,
     hud_visible: bool,
     compass_visible: bool,
+    walkability_visible: bool,
     hud_panel_sprite_count: usize,
 
     // Game simulation
@@ -175,6 +178,7 @@ pub struct GameEngine {
     building_objects: Vec<Option<Object3D>>,  // from OBJS bank 0 (building models)
     scenery_objects: Vec<Option<Object3D>>,   // from level-specific OBJS bank (scenery models)
     shapes: Vec<Shape>,
+    shape_footprints: ShapeFootprints,
 
     // Water animation
     wat_offset: i32,
@@ -622,6 +626,10 @@ impl GameEngine {
                 self.compass_visible = !self.compass_visible;
                 true
             }
+            GameCommand::ToggleWalkability => {
+                self.walkability_visible = !self.walkability_visible;
+                true
+            }
             GameCommand::Quit => true,
         }
     }
@@ -721,6 +729,8 @@ pub struct App {
     // Unit rendering
     model_unit_markers: Option<ModelEnvelop<ColorModel>>,
     model_selection_outlines: Option<ModelEnvelop<ColorModel>>,
+    model_walkability: Option<ModelEnvelop<ColorModel>>,
+    walkability_pipeline: Option<wgpu::RenderPipeline>,
 
     // Render flag
     do_render: bool,
@@ -735,6 +745,12 @@ pub struct App {
 
     // Smooth camera pan to shaman
     shaman_pan: Option<ShamanPanAnimation>,
+
+    // Screenshot capture
+    screenshot_path: Option<String>,
+    screenshot_counter: u32,
+    // Script wait (wall-clock based)
+    script_wait_until: Option<Instant>,
 }
 
 struct ShamanPanAnimation {
@@ -797,6 +813,7 @@ impl App {
                 hud_tab: HudTab::Spells,
                 hud_visible: false,
                 compass_visible: false,
+                walkability_visible: false,
                 hud_panel_sprite_count: 0,
                 unit_coordinator: UnitCoordinator::new(),
                 game_world: {
@@ -809,6 +826,7 @@ impl App {
                 building_objects: Vec::new(),
                 scenery_objects: Vec::new(),
                 shapes: Vec::new(),
+                shape_footprints: ShapeFootprints::empty(),
                 wat_offset: -1,
                 wat_interval: 5000,
                 frame_count: 0,
@@ -855,12 +873,17 @@ impl App {
             watdisp_buffer: None,
             model_unit_markers: None,
             model_selection_outlines: None,
+            model_walkability: None,
+            walkability_pipeline: None,
             do_render: true,
             debug_log,
             start_time: Instant::now(),
             script_commands,
             script_index: 0,
             shaman_pan: None,
+            screenshot_path: None,
+            screenshot_counter: 0,
+            script_wait_until: None,
         };
         app.engine.reset_camera();
         app
@@ -971,6 +994,9 @@ impl App {
         // Flatten terrain under buildings (modifies heightmap + re-uploads GPU buffer)
         self.flatten_terrain_under_buildings();
 
+        // Mark building footprints in region map for pathfinding walkability
+        self.populate_buildings_in_region_map();
+
         self.rebuild_spawn_model();
         self.center_on_tribe0_shaman();
 
@@ -1018,16 +1044,22 @@ impl App {
         if self.script_index >= self.script_commands.len() {
             return false; // done
         }
+        // If we're in a timed wait, check if it's expired
+        if let Some(deadline) = self.script_wait_until {
+            if Instant::now() < deadline {
+                self.do_render = true;
+                return true; // keep waiting
+            }
+            self.script_wait_until = None;
+        }
+
         let cmd = self.script_commands[self.script_index].clone();
         self.script_index += 1;
 
-        // Parse wait command: "wait N" — pause for N frames
+        // Parse wait command: "wait N" — pause for N seconds (wall-clock)
         if let Some(val) = cmd.strip_prefix("wait ") {
-            if let Ok(n) = val.trim().parse::<usize>() {
-                if n > 1 {
-                    // Re-insert decremented wait before next command
-                    self.script_commands.insert(self.script_index, format!("wait {}", n - 1));
-                }
+            if let Ok(secs) = val.trim().parse::<f32>() {
+                self.script_wait_until = Some(Instant::now() + Duration::from_secs_f32(secs));
                 self.do_render = true;
                 return true;
             }
@@ -1097,6 +1129,26 @@ impl App {
             return true;
         }
 
+        // Parse dump_buildings command: log footprint coordinate details
+        if cmd.trim() == "dump_buildings" {
+            self.dump_building_footprints();
+            return true;
+        }
+
+        // Parse screenshot command: "screenshot [path]"
+        if let Some(path) = cmd.strip_prefix("screenshot ") {
+            self.screenshot_path = Some(path.trim().to_string());
+            self.do_render = true;
+            return true;
+        }
+        if cmd.trim() == "screenshot" {
+            let path = format!("screenshot_{:04}.png", self.screenshot_counter);
+            self.screenshot_counter += 1;
+            self.screenshot_path = Some(path);
+            self.do_render = true;
+            return true;
+        }
+
         // Parse zoom command
         if let Some(val) = cmd.strip_prefix("zoom ") {
             if let Ok(z) = val.trim().parse::<f32>() {
@@ -1127,6 +1179,8 @@ impl App {
             "ArrowDown" => KeyCode::ArrowDown,
             "BracketLeft" => KeyCode::BracketLeft,
             "BracketRight" => KeyCode::BracketRight,
+            "F8" => KeyCode::F8,
+            "Escape" => KeyCode::Escape,
             other => {
                 log::warn!("script: unknown command {:?}", other);
                 return true; // skip, continue
@@ -1355,31 +1409,36 @@ impl App {
     /// Flatten terrain under all building footprints (matching original game's
     /// Building_FlattenTerrain @ 0x0042F2A0). Modifies self.engine.landscape_mesh heights
     /// and re-uploads the GPU heights buffer.
+    /// Look up the OBJS footprint index for a level object.
+    /// Returns the SHAPES.DAT index from the OBJS entry's fp_idx[rotation].
+    fn obj_footprint_idx(&self, obj: &LevelObject) -> Option<usize> {
+        let idx = object_3d_index(&obj.model_type, obj.subtype, obj.tribe_index)?;
+        // Use the correct OBJS bank: bank 0 for buildings, level bank for scenery
+        let bank = match obj.model_type {
+            ModelType::Scenery => &self.engine.scenery_objects,
+            _ => &self.engine.building_objects,
+        };
+        let obj3d = bank.get(idx)?.as_ref()?;
+        let fp = obj3d.footprint_index(0); // always use rotation 0 (base shape)
+        if fp < 0 || (fp as usize) >= self.engine.shapes.len() { return None; }
+        Some(fp as usize)
+    }
+
     fn flatten_terrain_under_buildings(&mut self) {
-        for obj in &self.engine.level_objects {
-            if obj.model_type != ModelType::Building { continue; }
-            let idx = match object_3d_index(&obj.model_type, obj.subtype, obj.tribe_index) {
-                Some(i) => i,
-                None => continue,
-            };
-            let bank = &self.engine.building_objects;
-            let obj3d = match idx < bank.len() {
-                true => match &bank[idx] {
-                    Some(o) => o,
-                    None => continue,
-                },
-                false => continue,
-            };
-            // Compute rotation index (0-3) from angle, matching original:
-            // rotation = (angle + 0x1FF) >> 9
-            let rotation = ((obj.angle.wrapping_add(0x1FF)) >> 9) as usize & 3;
-            let fp_idx = obj3d.footprint_index(rotation);
-            if fp_idx < 0 || (fp_idx as usize) >= self.engine.shapes.len() { continue; }
-            let shape = &self.engine.shapes[fp_idx as usize];
+        // Collect building info first to avoid borrow conflicts
+        let buildings: Vec<_> = self.engine.level_objects.iter()
+            .filter(|obj| obj.model_type == ModelType::Building)
+            .filter_map(|obj| {
+                let fp_idx = self.obj_footprint_idx(obj)?;
+                Some((obj.cell_x as i32, obj.cell_y as i32, fp_idx))
+            })
+            .collect();
+        for (cx, cy, fp_idx) in buildings {
+            let shape = self.engine.shapes[fp_idx];
             self.engine.landscape_mesh.flatten_building_footprint(
-                obj.cell_x as usize, obj.cell_y as usize,
-                shape,
-                true, // use average height (default for most building types)
+                cx, cy, &shape, fp_idx,
+                &self.engine.shape_footprints,
+                true,
             );
         }
 
@@ -1389,6 +1448,106 @@ impl App {
                 let heights_vec = self.engine.landscape_mesh.heights_to_gpu_vec();
                 let heights_bytes: &[u8] = bytemuck::cast_slice(&heights_vec);
                 heights_buf.update(&gpu.queue, 0, heights_bytes);
+            }
+        }
+    }
+
+    fn populate_buildings_in_region_map(&mut self) {
+        let n = self.engine.landscape_mesh.width();
+        let ni = n as i32;
+        // terrain class 2 = building = unwalkable (matches original binary)
+        self.engine.unit_coordinator.region_map_mut().set_terrain_flags(2, 0x00);
+        for obj in &self.engine.level_objects {
+            if obj.model_type != ModelType::Building && obj.model_type != ModelType::Scenery { continue; }
+            let fp_idx = match self.obj_footprint_idx(obj) {
+                Some(i) => i,
+                None => continue,
+            };
+            let shape = &self.engine.shapes[fp_idx];
+            let w = shape.width as i32;
+            let h = shape.height as i32;
+            // Origin is in tile units (2 per cell), convert to cell units
+            let ox = shape.origin_x as i32 / 2;
+            let oz = shape.origin_z as i32 / 2;
+            let base_cx = obj.cell_x as i32 - ox;
+            let base_cy = obj.cell_y as i32 - oz;
+            let mut marked = 0u32;
+            for dy in 0..h {
+                for dx in 0..w {
+                    if self.engine.shape_footprints.is_cell_occupied(fp_idx, dx as usize, dy as usize) {
+                        let cx = ((base_cx + dx) % ni + ni) % ni;
+                        let cy = ((base_cy + dy) % ni + ni) % ni;
+                        let tile = cell_to_tile(cx, cy, ni);
+                        let cell = self.engine.unit_coordinator.region_map_mut().get_cell_mut(tile);
+                        cell.terrain_type = 2;
+                        cell.flags_high |= CELL_HAS_BUILDING;
+                        marked += 1;
+                    }
+                }
+            }
+            log::info!("[footprint] {:?} subtype={} cell=({},{}) fp_idx={} shape={}x{} marked={}",
+                obj.model_type, obj.subtype, obj.cell_x, obj.cell_y,
+                fp_idx, w, h, marked);
+        }
+    }
+
+    fn dump_building_footprints(&self) {
+        let n = self.engine.landscape_mesh.width();
+        let ni = n as i32;
+
+        // 1) Check tile-mapping uniqueness: do all 128×128 cells map to unique tiles?
+        let mut seen = std::collections::HashSet::new();
+        let mut duplicates = 0u32;
+        for cy in 0..ni {
+            for cx in 0..ni {
+                let tile = cell_to_tile(cx, cy, ni);
+                let idx = tile.cell_index();
+                if !seen.insert(idx) {
+                    duplicates += 1;
+                    if duplicates <= 5 {
+                        log::warn!("[tile-map] DUPLICATE: cell ({},{}) → tile ({},{}) → idx {}",
+                            cx, cy, tile.x, tile.z, idx);
+                    }
+                }
+            }
+        }
+        log::info!("[tile-map] {} unique tiles out of {} cells, {} duplicates",
+            seen.len(), n * n, duplicates);
+
+        // 2) Dump each building/scenery footprint cells
+        let ni = n as i32;
+        for obj in &self.engine.level_objects {
+            if obj.model_type != ModelType::Building && obj.model_type != ModelType::Scenery { continue; }
+            let fp_idx = match self.obj_footprint_idx(obj) {
+                Some(idx) => idx,
+                None => continue,
+            };
+            let shape = &self.engine.shapes[fp_idx];
+            let w = shape.width as i32;
+            let h = shape.height as i32;
+            // Origin is in tile units (2 per cell), convert to cell units
+            let ox = shape.origin_x as i32 / 2;
+            let oz = shape.origin_z as i32 / 2;
+            let base_cx = obj.cell_x as i32 - ox;
+            let base_cy = obj.cell_y as i32 - oz;
+
+            log::info!("[footprint] {:?} subtype={} cell=({:.1},{:.1}) corner=({},{}) shape={}x{} origin=({},{}) fp_idx={}",
+                obj.model_type, obj.subtype, obj.cell_x, obj.cell_y, base_cx, base_cy, w, h,
+                shape.origin_x, shape.origin_z, fp_idx);
+
+            for dy in 0..h {
+                for dx in 0..w {
+                    let occupied = self.engine.shape_footprints.is_cell_occupied(fp_idx, dx as usize, dy as usize);
+                    let cx = ((base_cx + dx) % ni + ni) % ni;
+                    let cy = ((base_cy + dy) % ni + ni) % ni;
+                    let tile = cell_to_tile(cx, cy, ni);
+                    let cell_idx = tile.cell_index();
+                    let region_cell = self.engine.unit_coordinator.region_map().get_cell(tile);
+                    log::info!("[footprint]   dx={} dy={} occ={} → cell ({},{}) → tile ({},{}) idx={} rm_type={} rm_bldg={}",
+                        dx, dy, occupied, cx, cy,
+                        tile.x, tile.z, cell_idx,
+                        region_cell.terrain_type, region_cell.has_building());
+                }
             }
         }
     }
@@ -1407,6 +1566,94 @@ impl App {
             ));
         }
         self.rebuild_unit_models();
+        self.rebuild_walkability_overlay();
+    }
+
+    fn rebuild_walkability_overlay(&mut self) {
+        let gpu = match self.gpu.as_ref() {
+            Some(g) => g,
+            None => return,
+        };
+        let region_map = self.engine.unit_coordinator.region_map();
+        let landscape = &self.engine.landscape_mesh;
+        let step = landscape.step();
+        let w = landscape.width();
+        let wf = w as f32;
+        let shift = landscape.get_shift_vector();
+        let center = (wf - 1.0) * step / 2.0;
+        let cs = if self.engine.curvature_enabled { self.engine.curvature_scale } else { 0.0 };
+
+        let walkable_color = Vector3::new(0.0, 0.8, 0.2);   // green = walkable land
+        let building_color = Vector3::new(0.8, 0.3, 0.1);   // red-brown = building
+        let water_color = Vector3::new(0.0, 0.3, 0.8);      // blue = water
+        let height_offset = 0.02;
+
+        let mut model: ColorModel = MeshModel::new();
+        let mut count_water = 0u32;
+        let mut count_building = 0u32;
+        let mut count_walkable = 0u32;
+
+        for cell_y in 0..w {
+            for cell_x in 0..w {
+                // Check walkability via region map
+                let tile = cell_to_tile(cell_x as i32, cell_y as i32, w as i32);
+                let walkable = region_map.is_walkable(tile);
+                let is_building = region_map.has_building(tile);
+
+                // Categorize: walkable land, building, or water
+                let color = if is_building {
+                    count_building += 1;
+                    building_color
+                } else if walkable {
+                    count_walkable += 1;
+                    walkable_color
+                } else {
+                    count_water += 1;
+                    water_color
+                };
+
+                // Compute 4 corner positions in GPU space
+                let corners: [(f32, f32); 4] = [
+                    (cell_x as f32, cell_y as f32),
+                    (cell_x as f32 + 1.0, cell_y as f32),
+                    (cell_x as f32 + 1.0, cell_y as f32 + 1.0),
+                    (cell_x as f32, cell_y as f32 + 1.0),
+                ];
+                let base_idx = model.vertices.len() as u16;
+                for (cx, cy) in &corners {
+                    let vis_x = ((*cx - shift.x as f32) % wf + wf) % wf;
+                    let vis_y = ((*cy - shift.y as f32) % wf + wf) % wf;
+                    let gx = vis_x * step;
+                    let gy = vis_y * step;
+
+                    let h = landscape.interpolate_height_at(*cx, *cy);
+                    let vdx = gx - center;
+                    let vdy = gy - center;
+                    let curvature = (vdx * vdx + vdy * vdy) * cs;
+                    let gz = h - curvature + height_offset;
+
+                    model.push_vertex(ColorVertex {
+                        coord: Vector3::new(gx, gy, gz),
+                        color,
+                    });
+                }
+                // Two triangles: 0-1-2, 0-2-3
+                model.indices.push(base_idx);
+                model.indices.push(base_idx + 1);
+                model.indices.push(base_idx + 2);
+                model.indices.push(base_idx);
+                model.indices.push(base_idx + 2);
+                model.indices.push(base_idx + 3);
+            }
+        }
+
+        log::info!("[walkability] water={} building={} walkable={} total={}", count_water, count_building, count_walkable, w*w);
+        if model.vertices.is_empty() {
+            self.model_walkability = None;
+        } else {
+            let m = vec![(RenderType::Triangles, model)];
+            self.model_walkability = Some(ModelEnvelop::<ColorModel>::new(&gpu.device, m));
+        }
     }
 
     fn rebuild_hud(&mut self) {
@@ -1959,6 +2206,17 @@ impl App {
                 }
             }
 
+            // Draw walkability debug overlay (F8 toggle)
+            if self.engine.walkability_visible {
+                if let Some(ref walk_pipeline) = self.walkability_pipeline {
+                    render_pass.set_pipeline(walk_pipeline);
+                    render_pass.set_bind_group(0, self.objects_group0_bind_group.as_ref().unwrap(), &[]);
+                    if let Some(ref model) = self.model_walkability {
+                        model.draw(&mut render_pass);
+                    }
+                }
+            }
+
         }
 
         // HUD pass (2D overlay — no depth, load existing color)
@@ -1974,7 +2232,84 @@ impl App {
 
         let gpu = self.gpu.as_ref().unwrap();
         gpu.queue.submit(std::iter::once(encoder.finish()));
+
+        if let Some(path) = self.screenshot_path.take() {
+            self.capture_screenshot(&output.texture, &path);
+        }
+
         output.present();
+    }
+
+    fn capture_screenshot(&self, texture: &wgpu::Texture, path: &str) {
+        let gpu = match self.gpu.as_ref() {
+            Some(g) => g,
+            None => return,
+        };
+        let width = gpu.config.width;
+        let height = gpu.config.height;
+        let bytes_per_pixel = 4u32;
+        let unpadded_bytes_per_row = width * bytes_per_pixel;
+        let padded_bytes_per_row = (unpadded_bytes_per_row + 255) & !255;
+        let buffer_size = (padded_bytes_per_row * height) as u64;
+
+        let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            size: buffer_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+            label: Some("screenshot_buffer"),
+        });
+
+        let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("screenshot_encoder"),
+        });
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        gpu.queue.submit(Some(encoder.finish()));
+
+        let slice = buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        let _ = gpu.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+
+        match rx.recv() {
+            Ok(Ok(())) => {
+                let data = slice.get_mapped_range();
+                let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+                for row in 0..height {
+                    let offset = (row * padded_bytes_per_row) as usize;
+                    let row_data = &data[offset..offset + (width * 4) as usize];
+                    for pixel in row_data.chunks(4) {
+                        // BGRA → RGBA (force alpha=255, surface alpha is unreliable on macOS)
+                        pixels.push(pixel[2]); // R
+                        pixels.push(pixel[1]); // G
+                        pixels.push(pixel[0]); // B
+                        pixels.push(255);      // A
+                    }
+                }
+                drop(data);
+                buffer.unmap();
+
+                if let Some(img) = image::RgbaImage::from_raw(width, height, pixels) {
+                    match img.save(path) {
+                        Ok(()) => eprintln!("[screenshot] saved {}", path),
+                        Err(e) => eprintln!("[screenshot] save error: {}", e),
+                    }
+                }
+            }
+            _ => {
+                eprintln!("[screenshot] buffer map failed");
+            }
+        }
     }
 }
 
@@ -2326,6 +2661,18 @@ impl ApplicationHandler for App {
             "level_objects_pipeline",
         );
 
+        // Walkability overlay pipeline (alpha blended)
+        let walkability_shader = include_str!("../../shaders/walkability_overlay.wgsl");
+        let walkability_layouts = ColorModel::vertex_buffer_layouts();
+        let walkability_pipeline = create_pipeline_blended(
+            device, walkability_shader, &walkability_layouts,
+            &[&objects_group0_layout],
+            gpu.surface_format(), true,
+            wgpu::PrimitiveTopology::TriangleList,
+            "walkability_overlay_pipeline",
+            wgpu::BlendState::ALPHA_BLENDING,
+        );
+
         // Unit sprite atlases are built after self.gpu is set (see below)
 
         // Load dual OBJS banks: bank 0 for buildings, level bank for scenery.
@@ -2342,8 +2689,9 @@ impl ApplicationHandler for App {
             level_bank, scenery_objects.len(), scn_count);
         let bank_str = level_bank.to_string();
         let obj_paths = ObjectPaths::from_default_dir(&base, &bank_str);
-        let shapes: Vec<Shape> = Shape::from_file_vec(&obj_paths.shapes);
-        eprintln!("[shapes] loaded {} entries", shapes.len());
+        let shape_footprints = ShapeFootprints::from_file(&obj_paths.shapes);
+        let shapes: Vec<Shape> = shape_footprints.shapes().to_vec();
+        eprintln!("[shapes] loaded {} entries with footprint bitmaps", shapes.len());
         for (i, s) in shapes.iter().take(10).enumerate() {
             let sref = s.shape_ref;
             eprintln!("[shapes] [{}] {}x{} origin=({},{}) ref={}",
@@ -2593,9 +2941,11 @@ impl ApplicationHandler for App {
         self.building_bind_group_0 = Some(lit_group0_bind_group);
         self.lighting_buffer = Some(lighting_buffer);
         self.objects_marker_pipeline = Some(objects_marker_pipeline);
+        self.walkability_pipeline = Some(walkability_pipeline);
         self.engine.building_objects = building_objects;
         self.engine.scenery_objects = scenery_objects;
         self.engine.shapes = shapes;
+        self.engine.shape_footprints = shape_footprints;
         self.building_pipeline = Some(building_pipeline);
         self.building_bind_group_1 = Some(building_bind_group_1);
         self.sky_pipeline = sky_pipeline;
@@ -2626,6 +2976,9 @@ impl ApplicationHandler for App {
 
         // Flatten terrain under buildings (modifies heightmap + re-uploads GPU buffer)
         self.flatten_terrain_under_buildings();
+
+        // Mark building footprints in region map for pathfinding walkability
+        self.populate_buildings_in_region_map();
 
         self.rebuild_spawn_model();
         self.center_on_tribe0_shaman();

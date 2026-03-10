@@ -54,6 +54,7 @@ pub enum GameCommand {
     SetHudTab(HudTab),
     ToggleHud,
     ToggleCompass,
+    ToggleWalkability,
 
     // Lifecycle
     Quit,
@@ -112,6 +113,7 @@ pub fn translate_key(key: KeyCode) -> Option<GameCommand> {
         // HUD
         KeyCode::F1 => Some(GameCommand::ToggleHud),
         KeyCode::F2 => Some(GameCommand::ToggleCompass),
+        KeyCode::F8 => Some(GameCommand::ToggleWalkability),
 
         // Debug: sprite z-offset (F3 up / F4 down)
         KeyCode::F3 => Some(GameCommand::AdjustSpriteOffset { delta: 0.005 }),
@@ -235,6 +237,11 @@ mod tests {
     #[test]
     fn test_translate_toggle_compass() {
         assert!(matches!(translate_key(KeyCode::F2), Some(GameCommand::ToggleCompass)));
+    }
+
+    #[test]
+    fn test_translate_toggle_walkability() {
+        assert!(matches!(translate_key(KeyCode::F8), Some(GameCommand::ToggleWalkability)));
     }
 
     #[test]

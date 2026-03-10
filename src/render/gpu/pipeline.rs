@@ -8,6 +8,21 @@ pub fn create_pipeline(
     topology: wgpu::PrimitiveTopology,
     label: &str,
 ) -> wgpu::RenderPipeline {
+    create_pipeline_blended(device, shader_source, vertex_layouts, bind_group_layouts,
+        surface_format, depth, topology, label, wgpu::BlendState::REPLACE)
+}
+
+pub fn create_pipeline_blended(
+    device: &wgpu::Device,
+    shader_source: &str,
+    vertex_layouts: &[wgpu::VertexBufferLayout],
+    bind_group_layouts: &[&wgpu::BindGroupLayout],
+    surface_format: wgpu::TextureFormat,
+    depth: bool,
+    topology: wgpu::PrimitiveTopology,
+    label: &str,
+    blend: wgpu::BlendState,
+) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
         source: wgpu::ShaderSource::Wgsl(shader_source.into()),
@@ -45,7 +60,7 @@ pub fn create_pipeline(
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: surface_format,
-                blend: Some(wgpu::BlendState::REPLACE),
+                blend: Some(blend),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             compilation_options: Default::default(),
