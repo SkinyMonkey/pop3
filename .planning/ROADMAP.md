@@ -125,11 +125,11 @@ Plans:
 
 Plans:
 - [ ] 05-01-PLAN.md -- AI module skeleton with mlua Lua VM and PopScript constants
-- [ ] 05-02-PLAN.md -- Save/load system with serde + bincode and quicksave
-- [ ] 05-03-PLAN.md -- Menu state machine and HUD rendering
+- [x] 05-02-PLAN.md -- Save/load system with serde + bincode and quicksave
+- [x] 05-03-PLAN.md -- Menu state machine and HUD rendering
 - [ ] 05-04-PLAN.md -- PopScript function registry with EVERY macro and game state bridge
 - [ ] 05-05-PLAN.md -- AI behavior: target scoring, shaman commands, building AI, difficulty
-- [ ] 05-06-PLAN.md -- Campaign progression and OBJECTIV.DAT parser
+- [x] 05-06-PLAN.md -- Campaign progression and OBJECTIV.DAT parser
 - [ ] 05-07-PLAN.md -- AI tick integration and script file loading
 - [ ] 05-08-PLAN.md -- Full integration: wire menu, campaign, AI, save/load into App
 

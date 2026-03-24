@@ -99,25 +99,25 @@ Requirements for playable single-player campaign (25 levels).
 
 ### Menu System
 
-- [ ] **MENU-01**: Main menu with campaign/load/options navigation
-- [ ] **MENU-02**: Campaign level select screen
-- [ ] **MENU-03**: Load game screen
-- [ ] **MENU-04**: Options/settings screen
-- [ ] **MENU-05**: Menu button system with transitions
+- [x] **MENU-01**: Main menu with campaign/load/options navigation
+- [x] **MENU-02**: Campaign level select screen
+- [x] **MENU-03**: Load game screen
+- [x] **MENU-04**: Options/settings screen
+- [x] **MENU-05**: Menu button system with transitions
 
 ### Campaign
 
-- [ ] **CAMP-01**: Victory conditions (all enemies eliminated)
-- [ ] **CAMP-02**: Defeat conditions (player eliminated, reincarnation timer)
-- [ ] **CAMP-03**: Campaign progression (25-level sequence, completion flags)
-- [ ] **CAMP-04**: Discovery system (stone head worship for spell/building unlocks)
-- [ ] **CAMP-05**: Level objectives loading (OBJECTIV.DAT)
+- [x] **CAMP-01**: Victory conditions (all enemies eliminated)
+- [x] **CAMP-02**: Defeat conditions (player eliminated, reincarnation timer)
+- [x] **CAMP-03**: Campaign progression (25-level sequence, completion flags)
+- [x] **CAMP-04**: Discovery system (stone head worship for spell/building unlocks)
+- [x] **CAMP-05**: Level objectives loading (OBJECTIV.DAT)
 
 ### Save/Load
 
-- [ ] **SAVE-01**: Save full game state to file (860KB state)
-- [ ] **SAVE-02**: Load game state and restore all systems
-- [ ] **SAVE-03**: Quicksave support (slot 99)
+- [x] **SAVE-01**: Save full game state to file (860KB state)
+- [x] **SAVE-02**: Load game state and restore all systems
+- [x] **SAVE-03**: Quicksave support (slot 99)
 
 ### Effects (Minimal)
 
@@ -249,19 +249,19 @@ Deferred to post-campaign. Tracked but not in current roadmap.
 | AI-05 | Phase 4 | Pending |
 | AI-06 | Phase 4 | Pending |
 | AI-07 | Phase 4 | Pending |
-| MENU-01 | Phase 4 | Pending |
-| MENU-02 | Phase 4 | Pending |
-| MENU-03 | Phase 4 | Pending |
-| MENU-04 | Phase 4 | Pending |
-| MENU-05 | Phase 4 | Pending |
-| CAMP-01 | Phase 4 | Pending |
-| CAMP-02 | Phase 4 | Pending |
-| CAMP-03 | Phase 4 | Pending |
-| CAMP-04 | Phase 4 | Pending |
-| CAMP-05 | Phase 4 | Pending |
-| SAVE-01 | Phase 4 | Pending |
-| SAVE-02 | Phase 4 | Pending |
-| SAVE-03 | Phase 4 | Pending |
+| MENU-01 | Phase 4 | Complete |
+| MENU-02 | Phase 4 | Complete |
+| MENU-03 | Phase 4 | Complete |
+| MENU-04 | Phase 4 | Complete |
+| MENU-05 | Phase 4 | Complete |
+| CAMP-01 | Phase 4 | Complete |
+| CAMP-02 | Phase 4 | Complete |
+| CAMP-03 | Phase 4 | Complete |
+| CAMP-04 | Phase 4 | Complete |
+| CAMP-05 | Phase 4 | Complete |
+| SAVE-01 | Phase 4 | Complete |
+| SAVE-02 | Phase 4 | Complete |
+| SAVE-03 | Phase 4 | Complete |
 
 **Coverage:**
 - v1 requirements: 81 total

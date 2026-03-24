@@ -2,16 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Phase 5 context gathered
-last_updated: "2026-03-24T01:16:17.112Z"
-last_activity: 2026-03-18 -- Completed 03-05 Health bars and effect spawning wiring
+status: Ready to execute
+stopped_at: Completed 05-02-PLAN.md (save/load system)
+last_updated: "2026-03-24T02:11:07.902Z"
 progress:
   total_phases: 6
   completed_phases: 3
-  total_plans: 19
-  completed_plans: 18
-  percent: 100
+  total_plans: 27
+  completed_plans: 21
 ---
 
 # Project State
@@ -21,16 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Faithful reproduction of the original Populous: The Beginning gameplay on modern platforms
-**Current focus:** Phase 3: HUD and Effects
+**Current focus:** Phase 05 — ai-and-campaign
 
 ## Current Position
 
-Phase: 3 of 5 (HUD and Effects) -- COMPLETE
-Plan: 5 of 5 in current phase (all done)
-Status: Phase 3 complete, ready for Phase 4
-Last activity: 2026-03-18 -- Completed 03-05 Health bars and effect spawning wiring
-
-Progress: [██████████] 100%
+Phase: 05 (ai-and-campaign) — EXECUTING
+Plan: 4 of 8
 
 ## Performance Metrics
 
@@ -62,6 +56,9 @@ Progress: [██████████] 100%
 | Phase 03 P01 | 4min | 2 tasks | 4 files |
 | Phase 03 P04 | 4min | 2 tasks | 2 files |
 | Phase 03 P05 | 7min | 2 tasks | 5 files |
+| Phase 05 P03 | 3min | 2 tasks | 6 files |
+| Phase 05 P06 | 3min | 2 tasks | 3 files |
+| Phase 05 P02 | 3min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -122,6 +119,10 @@ Recent decisions affecting current work:
 - [03-05]: EffectAction deferred pattern matches DeferredAction/BuildingTickActions collect-then-process approach
 - [03-05]: pending_effect_actions Vec on UnitCoordinator, drained by app loop via drain_effect_actions()
 - [03-05]: Building fire effect spawns every tick while in Destroying state (continuous visual via LOOP flag)
+- [Phase 05]: MenuSystem uses MenuRenderData contract to decouple engine from HUD renderer
+- [Phase 05]: Linear 25-level campaign, objectives informational only in v1, victory via existing victory.rs
+- [Phase 05-02]: bincode 2 with serde feature for compact binary save format (not original 860KB C-struct format)
+- [Phase 05-02]: Single quicksave slot via QUICKSAVE_FILENAME constant
 
 ### Pending Todos
 
@@ -135,6 +136,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T01:16:17.106Z
-Stopped at: Phase 5 context gathered
-Resume file: .planning/phases/05-ai-and-campaign/05-CONTEXT.md
+Last session: 2026-03-24T02:11:07.900Z
+Stopped at: Completed 05-02-PLAN.md (save/load system)
+Resume file: None
