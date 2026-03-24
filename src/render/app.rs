@@ -69,6 +69,8 @@ use crate::engine::state::mana_tick::ManaTickBridge;
 use crate::engine::effects::{EffectPool, EffectAction};
 use crate::engine::effects::spawn::spawn_at as effect_spawn_at;
 use crate::engine::{GameCommand, FrameState, translate_key};
+use crate::engine::menu::{MenuSystem, MenuAction, MenuScreen};
+use crate::engine::campaign::{CampaignState, CampaignEvent};
 
 use crate::render::hud::{
     self, HudTab, HudState, HudRenderer,
@@ -177,6 +179,10 @@ pub struct GameEngine {
     game_world: GameWorld,
     game_time: StdTimeSource,
     effect_pool: EffectPool,
+
+    // Menu and campaign
+    menu_system: MenuSystem,
+    campaign_state: CampaignState,
 
     // Level data
     level_objects: Vec<LevelObject>,
@@ -415,6 +421,68 @@ impl GameEngine {
         ids
     }
 
+    fn handle_menu_action(&mut self, action: MenuAction) {
+        match action {
+            MenuAction::None => {}
+            MenuAction::NavigateTo(screen) => {
+                self.menu_system.navigate_to(screen);
+            }
+            MenuAction::StartLevel(level) => {
+                // StatsScreen returns 0 for Continue/Retry; resolve here
+                let actual_level = if level == 0 {
+                    // From StatsScreen: cursor 0 = Continue (next), cursor 1 = Retry (same)
+                    if self.menu_system.cursor == 0 {
+                        // Continue: advance and start next level
+                        self.campaign_state.advance_level();
+                        self.campaign_state.current_level
+                    } else {
+                        // Retry: restart current level
+                        self.campaign_state.retry_level();
+                        self.campaign_state.current_level
+                    }
+                } else {
+                    self.campaign_state.set_level(level);
+                    level
+                };
+                self.level_num = actual_level as u8;
+                self.game_world.state = GameState::InGame;
+                self.game_world.game_tick = 0;
+                self.game_world.flags = crate::engine::state::flags::GameFlags::new();
+            }
+            MenuAction::LoadSave(filename) => {
+                let save_dir = dirs::data_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join("pop3")
+                    .join("saves");
+                let path = save_dir.join(format!("{}.pop3save", filename));
+                match crate::engine::save::load_game(&path) {
+                    Ok(save) => {
+                        self.game_world.game_tick = save.game_tick;
+                        self.game_world.tick_counter = save.tick_counter;
+                        self.game_world.game_speed = save.game_speed;
+                        self.game_world.player_tribe = save.player_tribe;
+                        self.game_world.ai_update_mult = save.ai_update_mult;
+                        self.game_world.flags = save.flags;
+                        self.game_world.rng = save.rng;
+                        self.game_world.tribes = save.tribes;
+                        self.campaign_state.set_level(save.level_num);
+                        self.level_num = save.level_num as u8;
+                        self.game_world.state = GameState::InGame;
+                        log::info!("Loaded save: {}", filename);
+                    }
+                    Err(e) => log::error!("Failed to load save {}: {}", filename, e),
+                }
+            }
+            MenuAction::Back => {
+                self.menu_system.back();
+            }
+            MenuAction::Quit => {
+                // Will be handled by the event loop checking game_world.state
+                // or a quit flag
+            }
+        }
+    }
+
     fn build_hud_state(&self) -> HudState {
         let dots: Vec<MinimapDot> = self.unit_coordinator.units().iter()
             .filter(|u| u.alive)
@@ -561,7 +629,10 @@ impl GameEngine {
             camera_viewport,
             selected_info,
             health_bars,
-            menu_render_data: None,
+            menu_render_data: match self.game_world.state {
+                GameState::Frontend | GameState::Outro => Some(self.menu_system.render_data()),
+                _ => None,
+            },
         }
     }
 
@@ -681,11 +752,9 @@ impl GameEngine {
             }
             GameCommand::ToggleSimulation => {
                 if self.game_world.state == GameState::InGame {
-                    self.game_world.state = GameState::Frontend;
-                    log::info!("game simulation OFF");
-                } else {
-                    self.game_world.state = GameState::InGame;
-                    log::info!("game simulation ON");
+                    let paused = self.game_world.flags.is_paused();
+                    self.game_world.flags.set_paused(!paused);
+                    log::info!("game simulation {}", if paused { "ON" } else { "OFF" });
                 }
                 true
             }
@@ -718,22 +787,95 @@ impl GameEngine {
                 true
             }
             GameCommand::Quit => true,
+            // Menu navigation
+            GameCommand::MenuUp => {
+                self.menu_system.move_cursor(-1);
+                true
+            }
+            GameCommand::MenuDown => {
+                self.menu_system.move_cursor(1);
+                true
+            }
+            GameCommand::MenuSelect => {
+                let action = self.menu_system.select_item();
+                self.handle_menu_action(action);
+                true
+            }
+            GameCommand::MenuBack => {
+                self.menu_system.back();
+                true
+            }
+            GameCommand::MenuNavigate(target) => {
+                let screen = match target {
+                    crate::engine::command::MenuTarget::CampaignSelect => MenuScreen::CampaignSelect,
+                    crate::engine::command::MenuTarget::LoadGame => MenuScreen::LoadGame,
+                    crate::engine::command::MenuTarget::Options => MenuScreen::Options,
+                };
+                self.menu_system.navigate_to(screen);
+                true
+            }
+            GameCommand::StartLevel { level_num } => {
+                self.campaign_state.set_level(*level_num);
+                self.level_num = *level_num as u8;
+                self.game_world.state = GameState::InGame;
+                self.game_world.game_tick = 0;
+                true
+            }
+            // Save/Load
+            GameCommand::QuickSave => {
+                let save = crate::engine::save::SaveFile {
+                    version: crate::engine::save::SAVE_VERSION,
+                    level_num: self.campaign_state.current_level,
+                    game_tick: self.game_world.game_tick,
+                    tick_counter: self.game_world.tick_counter,
+                    game_speed: self.game_world.game_speed,
+                    player_tribe: self.game_world.player_tribe,
+                    ai_update_mult: self.game_world.ai_update_mult,
+                    flags: self.game_world.flags.clone(),
+                    rng: self.game_world.rng.clone(),
+                    tribes: self.game_world.tribes.clone(),
+                    ai_script_variables: Vec::new(),
+                    ai_every_counters: Vec::new(),
+                };
+                let save_dir = dirs::data_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join("pop3")
+                    .join("saves");
+                match crate::engine::save::quicksave(&save, &save_dir) {
+                    Ok(()) => log::info!("Quicksave complete"),
+                    Err(e) => log::error!("Quicksave failed: {}", e),
+                }
+                false
+            }
+            GameCommand::QuickLoad => {
+                let save_dir = dirs::data_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join("pop3")
+                    .join("saves");
+                match crate::engine::save::quickload(&save_dir) {
+                    Ok(save) => {
+                        self.game_world.game_tick = save.game_tick;
+                        self.game_world.tick_counter = save.tick_counter;
+                        self.game_world.game_speed = save.game_speed;
+                        self.game_world.player_tribe = save.player_tribe;
+                        self.game_world.ai_update_mult = save.ai_update_mult;
+                        self.game_world.flags = save.flags;
+                        self.game_world.rng = save.rng;
+                        self.game_world.tribes = save.tribes;
+                        self.campaign_state.set_level(save.level_num);
+                        log::info!("Quickload complete");
+                    }
+                    Err(e) => log::error!("Quickload failed: {}", e),
+                }
+                true
+            }
+            GameCommand::SaveGame { .. } | GameCommand::LoadGame { .. } => false,
             // Building commands: handled by game logic, not renderer
             GameCommand::PlaceBuilding { .. }
             | GameCommand::CancelPlacement
             | GameCommand::EnterBuildMode { .. }
             | GameCommand::EnterBuilding { .. }
-            | GameCommand::TrainUnit { .. }
-            | GameCommand::MenuNavigate(_)
-            | GameCommand::MenuSelect
-            | GameCommand::MenuBack
-            | GameCommand::MenuUp
-            | GameCommand::MenuDown
-            | GameCommand::StartLevel { .. }
-            | GameCommand::QuickSave
-            | GameCommand::QuickLoad
-            | GameCommand::SaveGame { .. }
-            | GameCommand::LoadGame { .. } => false,
+            | GameCommand::TrainUnit { .. } => false,
         }
     }
 
@@ -935,6 +1077,8 @@ impl App {
                 },
                 game_time: StdTimeSource::new(),
                 effect_pool: EffectPool::new(),
+                menu_system: MenuSystem::new(20),
+                campaign_state: CampaignState::new(),
                 level_objects: Vec::new(),
                 building_objects: Vec::new(),
                 scenery_objects: Vec::new(),
@@ -3549,13 +3693,57 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
                     if let PhysicalKey::Code(key) = event.physical_key {
-                        if let Some(cmd) = translate_key(key) {
+                        // When in Frontend/Outro, intercept keys for menu navigation.
+                        // This prevents game commands from leaking into the menu (per MENU-05).
+                        let in_menu = matches!(
+                            self.engine.game_world.state,
+                            GameState::Frontend | GameState::Outro
+                        );
+                        if in_menu {
+                            let menu_cmd = match key {
+                                KeyCode::ArrowUp => Some(GameCommand::MenuUp),
+                                KeyCode::ArrowDown => Some(GameCommand::MenuDown),
+                                KeyCode::Enter => Some(GameCommand::MenuSelect),
+                                KeyCode::Escape => Some(GameCommand::MenuBack),
+                                _ => translate_key(key),
+                            };
+                            if let Some(cmd) = menu_cmd {
+                                match &cmd {
+                                    GameCommand::Quit => {
+                                        // In menu, Escape goes back; at MainMenu root, exit
+                                        if self.engine.menu_system.screen == MenuScreen::MainMenu {
+                                            event_loop.exit();
+                                            return;
+                                        }
+                                        self.engine.apply_command(&GameCommand::MenuBack);
+                                    }
+                                    GameCommand::MenuSelect => {
+                                        let action = self.engine.menu_system.select_item();
+                                        match &action {
+                                            MenuAction::Quit => { event_loop.exit(); return; }
+                                            _ => {}
+                                        }
+                                        self.engine.handle_menu_action(action);
+                                        // If we transitioned to InGame, trigger level reload
+                                        if self.engine.game_world.state == GameState::InGame {
+                                            self.update_level();
+                                        }
+                                    }
+                                    _ => { self.engine.apply_command(&cmd); }
+                                }
+                                self.do_render = true;
+                            }
+                        } else if let Some(cmd) = translate_key(key) {
                             let prev_shift = self.engine.landscape_mesh.get_shift_vector();
                             self.engine.apply_command(&cmd);
 
                             // App-level side effects that need GPU state
                             match &cmd {
-                                GameCommand::Quit => { event_loop.exit(); return; }
+                                GameCommand::Quit => {
+                                    // In game: Escape opens menu instead of quitting
+                                    self.engine.game_world.state = GameState::Frontend;
+                                    self.engine.menu_system.navigate_to(MenuScreen::MainMenu);
+                                }
                                 GameCommand::NextShader => { self.program_container.next(); }
                                 GameCommand::PrevShader => { self.program_container.prev(); }
                                 GameCommand::NextLevel | GameCommand::PrevLevel => {
@@ -3641,6 +3829,25 @@ impl ApplicationHandler for App {
                         self.rebuild_spawn_model();
                         self.rebuild_unit_models();
                         self.do_render = true;
+
+                        // Check campaign progress after ticks
+                        let event = self.engine.campaign_state.check_progress(
+                            self.engine.game_world.flags.has_won(),
+                            self.engine.game_world.flags.has_lost(),
+                        );
+                        match event {
+                            CampaignEvent::Victory(_) => {
+                                self.engine.menu_system.navigate_to(MenuScreen::StatsScreen { victory: true });
+                                self.engine.game_world.state = GameState::Outro;
+                                log::info!("Victory! Showing stats screen");
+                            }
+                            CampaignEvent::Defeat(_) => {
+                                self.engine.menu_system.navigate_to(MenuScreen::StatsScreen { victory: false });
+                                self.engine.game_world.state = GameState::Outro;
+                                log::info!("Defeat. Showing stats screen");
+                            }
+                            CampaignEvent::None => {}
+                        }
                     }
                 }
 

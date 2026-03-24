@@ -160,6 +160,10 @@ pub fn translate_key(key: KeyCode) -> Option<GameCommand> {
         KeyCode::Equal => Some(GameCommand::IncreaseGameSpeed),
         KeyCode::Minus => Some(GameCommand::DecreaseGameSpeed),
 
+        // Save / Load
+        KeyCode::F9 => Some(GameCommand::QuickSave),
+        KeyCode::F10 => Some(GameCommand::QuickLoad),
+
         // Quit
         KeyCode::Escape => Some(GameCommand::Quit),
 
@@ -287,8 +291,13 @@ mod tests {
 
     #[test]
     fn test_translate_unmapped_returns_none() {
-        assert!(translate_key(KeyCode::Enter).is_none());
         assert!(translate_key(KeyCode::Tab).is_none());
+    }
+
+    #[test]
+    fn test_translate_quicksave_quickload() {
+        assert!(matches!(translate_key(KeyCode::F9), Some(GameCommand::QuickSave)));
+        assert!(matches!(translate_key(KeyCode::F10), Some(GameCommand::QuickLoad)));
     }
 
     #[test]
