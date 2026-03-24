@@ -587,11 +587,12 @@ pub fn register_popscript_functions(
         globals.set(
             *name,
             lua.create_function(move |_, args: mlua::MultiValue| -> LuaResult<i32> {
-                panic!(
-                    "PopScript function '{}' not yet implemented (called with {} args)",
+                log::warn!(
+                    "PopScript stub '{}' called with {} args — returning 0",
                     name_owned,
                     args.len()
                 );
+                Ok(0)
             })?,
         )?;
     }
@@ -755,15 +756,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "not yet implemented")]
-    fn unimplemented_function_panics() {
+    fn unimplemented_function_returns_zero() {
         let (lua, _bridge) = setup();
-        let _: i32 = lua
+        let result: i32 = lua
             .globals()
             .get::<LuaFunction>("COUNT_PEOPLE_IN_HOUSES")
             .unwrap()
             .call(())
             .unwrap();
+        assert_eq!(result, 0);
     }
 
     #[test]
@@ -853,15 +854,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "not yet implemented")]
-    fn unimplemented_query_panics() {
+    fn unimplemented_query_returns_zero() {
         let (lua, _bridge) = setup();
-        let _: i32 = lua
+        let result: i32 = lua
             .globals()
             .get::<LuaFunction>("IS_SHAMAN_AVAILABLE_FOR_ATTACK")
             .unwrap()
             .call(())
             .unwrap();
+        assert_eq!(result, 0);
     }
 
     #[test]

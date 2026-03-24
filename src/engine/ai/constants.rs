@@ -1,16 +1,17 @@
 use mlua::prelude::*;
 
-/// Register a PopScript function stub that panics when called (per D-04).
+/// Register a PopScript function stub that warns when called.
 fn register_stub(lua: &Lua, globals: &LuaTable, name: &str) -> LuaResult<()> {
     let name_owned = name.to_string();
     globals.set(
         name,
         lua.create_function(move |_, args: mlua::MultiValue| -> LuaResult<i32> {
-            panic!(
-                "PopScript function '{}' not yet implemented (called with {} args)",
+            log::warn!(
+                "PopScript stub '{}' called with {} args — returning 0",
                 name_owned,
                 args.len()
             );
+            Ok(0)
         })?,
     )?;
     Ok(())
@@ -1076,15 +1077,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "not yet implemented")]
-    fn test_stub_function_panics() {
+    fn test_stub_function_returns_zero() {
         let lua = setup_lua();
-        let _: i32 = lua
+        let result: i32 = lua
             .globals()
             .get::<LuaFunction>("ATTACK")
             .unwrap()
             .call(())
             .unwrap();
+        assert_eq!(result, 0);
     }
 
     #[test]
