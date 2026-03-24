@@ -1,4 +1,8 @@
+pub mod building_ai;
 pub mod constants;
+pub mod difficulty;
+pub mod shaman_cmd;
+pub mod target;
 
 use mlua::prelude::*;
 use std::collections::HashMap;
