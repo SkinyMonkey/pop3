@@ -1,8 +1,10 @@
 // HUD data types, layout computation, rendering helpers, and GPU renderer.
+pub mod menu;
 
 use crate::render::gpu::buffer::GpuBuffer;
 use crate::render::gpu::texture::GpuTexture;
 use crate::data::psfb::ContainerPSFB;
+use crate::engine::menu::MenuRenderData;
 // FontData provides the multi-size glyph API (8x8, 16x16, 24x24 via integer scaling).
 // Currently draw_text_sized() delegates to the atlas-based draw_text() which already
 // supports arbitrary pixel sizes. FontData will be used directly when loading the
@@ -87,6 +89,7 @@ pub struct HudState {
     pub camera_viewport: MinimapViewport,
     pub selected_info: Option<SelectedEntityInfo>,
     pub health_bars: Vec<HealthBarEntry>,
+    pub menu_render_data: Option<MenuRenderData>,
 }
 
 pub struct MinimapData {

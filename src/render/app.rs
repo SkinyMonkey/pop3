@@ -561,6 +561,7 @@ impl GameEngine {
             camera_viewport,
             selected_info,
             health_bars,
+            menu_render_data: None,
         }
     }
 
@@ -722,7 +723,17 @@ impl GameEngine {
             | GameCommand::CancelPlacement
             | GameCommand::EnterBuildMode { .. }
             | GameCommand::EnterBuilding { .. }
-            | GameCommand::TrainUnit { .. } => false,
+            | GameCommand::TrainUnit { .. }
+            | GameCommand::MenuNavigate(_)
+            | GameCommand::MenuSelect
+            | GameCommand::MenuBack
+            | GameCommand::MenuUp
+            | GameCommand::MenuDown
+            | GameCommand::StartLevel { .. }
+            | GameCommand::QuickSave
+            | GameCommand::QuickLoad
+            | GameCommand::SaveGame { .. }
+            | GameCommand::LoadGame { .. } => false,
         }
     }
 
