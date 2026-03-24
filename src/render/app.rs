@@ -1550,6 +1550,48 @@ impl App {
         }
     }
 
+    /// GPU-side effects for game commands that modify camera or visual state.
+    /// Called after `apply_command` to rebuild object meshes, log camera, etc.
+    fn handle_command_gpu_effects(
+        &mut self,
+        cmd: &GameCommand,
+        prev_shift: cgmath::Vector4<i32>,
+        key: KeyCode,
+    ) {
+        match cmd {
+            GameCommand::NextShader => { self.program_container.next(); }
+            GameCommand::PrevShader => { self.program_container.prev(); }
+            GameCommand::NextLevel | GameCommand::PrevLevel => {
+                self.update_level();
+            }
+            GameCommand::CenterOnShaman => {
+                self.center_on_tribe0_shaman();
+                self.log_camera_state("space_center");
+            }
+            GameCommand::ResetCamera => {
+                self.rebuild_spawn_model();
+                self.log_camera_state("reset");
+            }
+            GameCommand::ToggleCurvature | GameCommand::AdjustCurvature { .. }
+            | GameCommand::AdjustSpriteOffset { .. } | GameCommand::AdjustSpriteScale { .. } => {
+                self.rebuild_spawn_model();
+            }
+            GameCommand::PanScreen { .. } | GameCommand::PanTerrain { .. } => {
+                self.shaman_pan = None;
+                let new_shift = self.engine.landscape_mesh.get_shift_vector();
+                if new_shift != prev_shift {
+                    self.rebuild_spawn_model();
+                    self.log_camera_state(&format!("{:?}", key));
+                }
+            }
+            GameCommand::RotateCamera { .. } | GameCommand::TiltCamera { .. } => {
+                self.rebuild_spawn_model();
+                self.log_camera_state(&format!("{:?}", key));
+            }
+            _ => {}
+        }
+    }
+
     fn rebuild_spawn_model(&mut self) {
         if let Some(ref gpu) = self.gpu {
             let cs = if self.engine.curvature_enabled { self.engine.curvature_scale } else { 0.0 };
@@ -3774,7 +3816,11 @@ impl ApplicationHandler for App {
                                             self.update_level();
                                         }
                                     }
-                                    _ => { self.engine.apply_command(&cmd); }
+                                    _ => {
+                                        let prev_shift = self.engine.landscape_mesh.get_shift_vector();
+                                        self.engine.apply_command(&cmd);
+                                        self.handle_command_gpu_effects(&cmd, prev_shift, key);
+                                    }
                                 }
                                 self.do_render = true;
                             }
@@ -3789,36 +3835,9 @@ impl ApplicationHandler for App {
                                     self.engine.game_world.state = GameState::Frontend;
                                     self.engine.menu_system.navigate_to(MenuScreen::MainMenu);
                                 }
-                                GameCommand::NextShader => { self.program_container.next(); }
-                                GameCommand::PrevShader => { self.program_container.prev(); }
-                                GameCommand::NextLevel | GameCommand::PrevLevel => {
-                                    self.update_level();
+                                _ => {
+                                    self.handle_command_gpu_effects(&cmd, prev_shift, key);
                                 }
-                                GameCommand::CenterOnShaman => {
-                                    self.center_on_tribe0_shaman();
-                                    self.log_camera_state("space_center");
-                                }
-                                GameCommand::ResetCamera => {
-                                    self.rebuild_spawn_model();
-                                    self.log_camera_state("reset");
-                                }
-                                GameCommand::ToggleCurvature | GameCommand::AdjustCurvature { .. }
-                | GameCommand::AdjustSpriteOffset { .. } | GameCommand::AdjustSpriteScale { .. } => {
-                                    self.rebuild_spawn_model();
-                                }
-                                GameCommand::PanScreen { .. } | GameCommand::PanTerrain { .. } => {
-                                    self.shaman_pan = None;
-                                    let new_shift = self.engine.landscape_mesh.get_shift_vector();
-                                    if new_shift != prev_shift {
-                                        self.rebuild_spawn_model();
-                                        self.log_camera_state(&format!("{:?}", key));
-                                    }
-                                }
-                                GameCommand::RotateCamera { .. } | GameCommand::TiltCamera { .. } => {
-                                    self.rebuild_spawn_model();
-                                    self.log_camera_state(&format!("{:?}", key));
-                                }
-                                _ => {}
                             }
                             self.do_render = true;
                         }

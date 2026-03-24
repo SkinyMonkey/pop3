@@ -79,12 +79,22 @@ fn check_singleplayer_victory(
         }
     }
 
-    // Check if all enemy tribes are eliminated
-    let all_enemies_dead = tribes.tribes.iter().enumerate()
-        .filter(|(i, t)| *i != player && t.active)
-        .all(|(_, t)| t.population == 0);
+    // Check if all enemy tribes are eliminated.
+    // Must have at least one active enemy — if no tribes are active yet
+    // (e.g. level just loaded, tribes not initialized), skip the check.
+    let active_enemies = tribes.tribes.iter().enumerate()
+        .filter(|(i, t)| *i != player && t.active);
+    let mut has_active_enemy = false;
+    let mut all_dead = true;
+    for (_, t) in active_enemies {
+        has_active_enemy = true;
+        if t.population > 0 {
+            all_dead = false;
+            break;
+        }
+    }
 
-    if all_enemies_dead {
+    if has_active_enemy && all_dead {
         // Original: sets victory flag, transitions units to celebrate state (0x29)
         flags.set_won();
     }
@@ -212,6 +222,16 @@ mod tests {
         tribes.tribes[3].reincarnation_timer = REINCARNATION_TIMER_MAX;
         check_victory_conditions(0x20, &mut flags, &mut tribes, 0);
         assert!(flags.has_won());
+    }
+
+    #[test]
+    fn test_sp_no_victory_when_no_active_enemies() {
+        let mut flags = GameFlags::new();
+        // All enemies inactive — should NOT trigger victory (empty .all() guard)
+        let mut tribes = setup_tribes([10, 0, 0, 0], [true, false, false, false]);
+        check_victory_conditions(0x20, &mut flags, &mut tribes, 0);
+        assert!(!flags.has_won(), "Should not win when no enemies are active");
+        assert!(!flags.has_lost());
     }
 
     #[test]
