@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use super::state::traits::AiTick;
+use difficulty::DifficultyScaling;
 
 /// Data bridge between Rust game state and Lua PopScript functions.
 /// Populated from GameWorld before AI tick, written back after.
@@ -134,6 +135,17 @@ pub struct AiShamanMoveCommand {
     pub marker: i32,
 }
 
+/// Snapshot of all pending AI commands, returned by drain_pending_commands.
+pub struct AiPendingCommands {
+    pub attacks: Vec<AiAttackCommand>,
+    pub builds: Vec<AiBuildCommand>,
+    pub spells: Vec<AiSpellCommand>,
+    pub trains: Vec<AiTrainCommand>,
+    pub moves: Vec<AiMoveCommand>,
+    pub converts: Vec<AiConvertCommand>,
+    pub shaman_moves: Vec<AiShamanMoveCommand>,
+}
+
 #[derive(Debug, Clone)]
 pub struct MarkerEntry {
     pub marker: i32,
@@ -192,6 +204,9 @@ pub struct AiSystem {
 
     /// Shared bridge for Lua <-> Rust communication.
     bridge: Rc<RefCell<AiGameBridge>>,
+
+    /// Per-tribe difficulty scaling (mana adjust, training costs).
+    difficulty: [DifficultyScaling; 4],
 }
 
 impl AiSystem {
@@ -227,6 +242,12 @@ impl AiSystem {
             scripts_loaded: [false; 4],
             player_tribe: 0,
             bridge,
+            difficulty: [
+                DifficultyScaling::normal(),
+                DifficultyScaling::normal(),
+                DifficultyScaling::normal(),
+                DifficultyScaling::normal(),
+            ],
         })
     }
 
@@ -243,6 +264,26 @@ impl AiSystem {
     /// Get a reference to the bridge (for external state sync).
     pub fn bridge(&self) -> &Rc<RefCell<AiGameBridge>> {
         &self.bridge
+    }
+
+    /// Clone pending commands from bridge for dispatch.
+    /// Commands remain in bridge and are cleared by update_bridge at start of next tick.
+    pub fn drain_pending_commands(&self) -> AiPendingCommands {
+        let bridge = self.bridge.borrow();
+        AiPendingCommands {
+            attacks: bridge.pending_attacks.clone(),
+            builds: bridge.pending_builds.clone(),
+            spells: bridge.pending_spells.clone(),
+            trains: bridge.pending_trains.clone(),
+            moves: bridge.pending_moves.clone(),
+            converts: bridge.pending_convert.clone(),
+            shaman_moves: bridge.pending_shaman_move.clone(),
+        }
+    }
+
+    /// Get mana adjustment factor for a tribe (100 = no change).
+    pub fn mana_adjust(&self, tribe_idx: usize) -> u32 {
+        self.difficulty[tribe_idx].mana_adjust
     }
 
     /// Populate the AiGameBridge with current game state before AI tick.
@@ -553,6 +594,26 @@ mod tests {
         assert_eq!(system.bridge.borrow().pending_attacks.len(), 1);
         system.update_bridge(0, 0, [0; 4], [0; 4], [false; 4], [0; 4]);
         assert_eq!(system.bridge.borrow().pending_attacks.len(), 0);
+    }
+
+    #[test]
+    fn drain_pending_commands_returns_queued_attacks() {
+        let system = AiSystem::new().unwrap();
+        system.bridge.borrow_mut().pending_attacks.push(AiAttackCommand {
+            target_tribe: 2, num_people: 15, attack_type: 1, marker: Some((100, 200)),
+        });
+        let cmds = system.drain_pending_commands();
+        assert_eq!(cmds.attacks.len(), 1);
+        assert_eq!(cmds.attacks[0].target_tribe, 2);
+        assert_eq!(cmds.attacks[0].num_people, 15);
+    }
+
+    #[test]
+    fn difficulty_defaults_to_normal() {
+        let system = AiSystem::new().unwrap();
+        for i in 0..4 {
+            assert_eq!(system.mana_adjust(i), 100);
+        }
     }
 
     #[test]
