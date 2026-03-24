@@ -561,6 +561,7 @@ impl GameEngine {
             camera_viewport,
             selected_info,
             health_bars,
+            menu_render_data: None,
         }
     }
 
