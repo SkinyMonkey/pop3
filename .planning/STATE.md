@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Phase complete — ready for verification
-stopped_at: Completed 05-09-PLAN.md (AI gap closure - command dispatch and difficulty)
-last_updated: "2026-03-24T03:33:52.073Z"
+stopped_at: Completed 05-10-PLAN.md (AI save/load gap closure)
+last_updated: "2026-03-24T03:37:56.965Z"
 progress:
   total_phases: 6
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 29
-  completed_plans: 27
+  completed_plans: 28
 ---
 
 # Project State
@@ -65,6 +65,7 @@ Plan: 8 of 8
 | Phase 05 P07 | 4min | 2 tasks | 3 files |
 | Phase 05 P08 | 7min | 3 tasks | 4 files |
 | Phase 05 P09 | 3min | 2 tasks | 2 files |
+| Phase 05 P10 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -138,6 +139,7 @@ Recent decisions affecting current work:
 - [Phase 05-07]: Instruction limit 100K via mlua HookTriggers prevents runaway AI scripts
 - [Phase 05]: ToggleSimulation uses pause flag instead of Frontend state; Escape in InGame opens menu; update_bridge clears pending AI commands each tick
 - [Phase 05]: AI commands logged for now; real gameplay effects deferred to subsystem maturity
+- [Phase 05]: EVERY counters stored as single global entry since Lua VM is shared across tribes
 
 ### Pending Todos
 
@@ -151,6 +153,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T03:33:52.070Z
-Stopped at: Completed 05-09-PLAN.md (AI gap closure - command dispatch and difficulty)
+Last session: 2026-03-24T03:37:56.963Z
+Stopped at: Completed 05-10-PLAN.md (AI save/load gap closure)
 Resume file: None
