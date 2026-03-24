@@ -245,6 +245,37 @@ impl AiSystem {
         &self.bridge
     }
 
+    /// Populate the AiGameBridge with current game state before AI tick.
+    /// Must be called each tick BEFORE tick_update_ai so PopScript functions
+    /// read fresh values.
+    pub fn update_bridge(
+        &mut self,
+        game_tick: u32,
+        player_tribe: u8,
+        tribe_populations: [u32; 4],
+        tribe_mana: [u32; 4],
+        tribe_active: [bool; 4],
+        tribe_num_buildings: [u32; 4],
+    ) {
+        let mut bridge = self.bridge.borrow_mut();
+        bridge.game_tick = game_tick;
+        bridge.player_tribe = player_tribe;
+        bridge.tribe_populations = tribe_populations;
+        bridge.tribe_mana = tribe_mana;
+        bridge.tribe_active = tribe_active;
+        bridge.tribe_num_buildings = tribe_num_buildings;
+        // Clear pending commands from previous tick
+        bridge.pending_attacks.clear();
+        bridge.pending_builds.clear();
+        bridge.pending_spells.clear();
+        bridge.pending_trains.clear();
+        bridge.pending_moves.clear();
+        bridge.pending_pray.clear();
+        bridge.pending_cleanup.clear();
+        bridge.pending_convert.clear();
+        bridge.pending_shaman_move.clear();
+    }
+
     /// Load scripts for a level. Called when transitioning to InGame.
     /// Finds and loads .lua scripts from the scripts directory for all
     /// non-player tribes.
@@ -500,6 +531,28 @@ mod tests {
         assert_eq!(bridge.defence_radius[2], 42);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_bridge_populates_state() {
+        let mut system = AiSystem::new().unwrap();
+        system.update_bridge(42, 0, [10, 20, 30, 40], [100, 200, 300, 400], [true, true, false, false], [5, 3, 0, 0]);
+        let bridge = system.bridge.borrow();
+        assert_eq!(bridge.game_tick, 42);
+        assert_eq!(bridge.player_tribe, 0);
+        assert_eq!(bridge.tribe_populations, [10, 20, 30, 40]);
+        assert_eq!(bridge.tribe_mana, [100, 200, 300, 400]);
+    }
+
+    #[test]
+    fn update_bridge_clears_pending_commands() {
+        let mut system = AiSystem::new().unwrap();
+        system.bridge.borrow_mut().pending_attacks.push(AiAttackCommand {
+            target_tribe: 1, num_people: 10, attack_type: 0, marker: None,
+        });
+        assert_eq!(system.bridge.borrow().pending_attacks.len(), 1);
+        system.update_bridge(0, 0, [0; 4], [0; 4], [false; 4], [0; 4]);
+        assert_eq!(system.bridge.borrow().pending_attacks.len(), 0);
     }
 
     #[test]

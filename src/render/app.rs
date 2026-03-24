@@ -184,6 +184,9 @@ pub struct GameEngine {
     menu_system: MenuSystem,
     campaign_state: CampaignState,
 
+    // AI system (None if mlua initialization fails)
+    ai_system: Option<crate::engine::ai::AiSystem>,
+
     // Level data
     level_objects: Vec<LevelObject>,
     building_objects: Vec<Option<Object3D>>,  // from OBJS bank 0 (building models)
@@ -1079,6 +1082,16 @@ impl App {
                 effect_pool: EffectPool::new(),
                 menu_system: MenuSystem::new(20),
                 campaign_state: CampaignState::new(),
+                ai_system: match crate::engine::ai::AiSystem::new() {
+                    Ok(sys) => {
+                        log::info!("AI system initialized");
+                        Some(sys)
+                    }
+                    Err(e) => {
+                        log::error!("Failed to create AI system: {}", e);
+                        None
+                    }
+                },
                 level_objects: Vec::new(),
                 building_objects: Vec::new(),
                 scenery_objects: Vec::new(),
@@ -3786,13 +3799,50 @@ impl ApplicationHandler for App {
                 // objects slot, so person state machines run inside the proper
                 // tick order (after terrain, before water).
                 {
-                    let (mut a, mut c, mut d, mut e, mut f, mut g, mut h, mut i, mut j, mut k) =
-                        (NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp);
+                    // Update AI bridge with current game state BEFORE tick
+                    if let Some(ref mut ai) = self.engine.ai_system {
+                        let tribes = &self.engine.game_world.tribes;
+                        let pops = [
+                            tribes.tribes[0].population,
+                            tribes.tribes[1].population,
+                            tribes.tribes[2].population,
+                            tribes.tribes[3].population,
+                        ];
+                        let manas = [
+                            tribes.tribes[0].mana,
+                            tribes.tribes[1].mana,
+                            tribes.tribes[2].mana,
+                            tribes.tribes[3].mana,
+                        ];
+                        let actives = [
+                            tribes.tribes[0].active,
+                            tribes.tribes[1].active,
+                            tribes.tribes[2].active,
+                            tribes.tribes[3].active,
+                        ];
+                        let buildings = [0u32; 4]; // TODO: wire building counts when available
+                        ai.update_bridge(
+                            self.engine.game_world.game_tick,
+                            self.engine.game_world.player_tribe,
+                            pops,
+                            manas,
+                            actives,
+                            buildings,
+                        );
+                    }
+
+                    let (mut a, mut c, mut d, mut e, mut f, mut g, mut h, mut j, mut k) =
+                        (NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp);
+                    let mut noop_ai = NoOp;
                     let mut subs = TickSubsystems {
                         terrain: &mut a, objects: &mut self.engine.unit_coordinator,
                         water: &mut c,
                         network: &mut d, actions: &mut e, game_time: &mut f,
-                        single_player: &mut g, tutorial: &mut h, ai: &mut i,
+                        single_player: &mut g, tutorial: &mut h,
+                        ai: match self.engine.ai_system {
+                            Some(ref mut ai) => ai as &mut dyn crate::engine::state::traits::AiTick,
+                            None => &mut noop_ai as &mut dyn crate::engine::state::traits::AiTick,
+                        },
                         population: &mut j, mana: &mut k,
                     };
                     let ticks = self.engine.game_world.simulation_tick(&self.engine.game_time, &mut subs);
