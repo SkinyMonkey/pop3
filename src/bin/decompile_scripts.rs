@@ -349,11 +349,12 @@ fn command_param_count(name: &str) -> usize {
     match name {
         "CONSTRUCT_BUILDING" | "FETCH_WOOD" | "SHAMAN_GET_WILDS" | "HOUSE_A_PERSON"
         | "SEND_GHOSTS" | "BRING_NEW_PEOPLE_BACK" | "TRAIN_PEOPLE"
-        | "POPULATE_DRUM_TOWER" | "DEFEND" | "DEFEND_BASE" | "SPELL_DEFENSE"
+        | "POPULATE_DRUM_TOWER" | "DEFEND" | "DEFEND_BASE"
         | "PREACH" | "BUILD_WALLS" | "SABOTAGE" | "SPELL_OFFENSIVE"
         | "FIREWARRIOR_DEFEND" | "BUILD_VEHICLE" | "FETCH_LOST_PEOPLE"
         | "FETCH_LOST_VEHICLE" | "FETCH_FAR_VEHICLE" | "AUTO_ATTACK"
-        | "SHAMAN_DEFEND" | "FLATTEN_BASE" | "BUILD_OUTER_DEFENCES" => 2,  // state ON/OFF
+        | "SHAMAN_DEFEND" | "FLATTEN_BASE" | "BUILD_OUTER_DEFENCES" => 1,  // state ON/OFF
+        "SPELL_DEFENSE" => 2,  // has extra param
         "ATTACK" => 13,
         "ATTACK_BLUE" | "ATTACK_RED" | "ATTACK_YELLOW" | "ATTACK_GREEN" => 13,
         "SPELL_ATTACK" => 6,
@@ -532,7 +533,7 @@ impl Decompiler {
         let f = self.script.fields[code as usize];
         match f.field_type {
             FIELD_CONSTANT => format!("{}", f.value),
-            FIELD_USER => format!("$var{}", f.value),
+            FIELD_USER => format!("_var{}", f.value),
             FIELD_INTERNAL => {
                 let idx = f.value as u16;
                 self.internals.get(&idx)
@@ -694,18 +695,14 @@ impl Decompiler {
         };
 
         self.write_indent();
-        if has_offset && offset != 0 {
-            self.output.push_str(&format!("EVERY({}, {})\n", interval, offset));
-        } else {
-            self.output.push_str(&format!("EVERY({})\n", interval));
-        }
+        self.output.push_str(&format!("EVERY({}, function()\n", interval));
 
         self.indent += 1;
         self.decompile_body()?;
         self.indent -= 1;
 
         self.write_indent();
-        self.output.push_str("END_EVERY\n");
+        self.output.push_str("end)\n");
         Ok(())
     }
 

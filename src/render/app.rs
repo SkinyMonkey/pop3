@@ -1291,6 +1291,19 @@ impl App {
                 hud.build_atlas(&gpu.device, &gpu.queue, &panel_container, &level_res.params.palette);
             }
         }
+
+        // Load AI scripts for this level
+        let scripts_dir = std::path::Path::new("data/scripts");
+        if let Some(ref mut ai) = self.engine.ai_system {
+            let level = self.engine.level_num as u32;
+            let player_tribe = self.engine.game_world.player_tribe;
+            ai.load_level_scripts(level, &scripts_dir, player_tribe);
+            let loaded_count = ai.loaded_tribe_count();
+            log::info!(
+                "AI scripts: loaded {} tribe script(s) for level {} from {}",
+                loaded_count, level, scripts_dir.display()
+            );
+        }
     }
 
     fn log_camera_state(&mut self, event: &str) {
@@ -3578,6 +3591,18 @@ impl ApplicationHandler for App {
             } else {
                 log::warn!("[hud] plspanel.spr not found at {:?}, using font-only atlas", panel_path);
             }
+        }
+
+        // Load AI scripts for this level
+        let scripts_dir = std::path::Path::new("data/scripts");
+        if let Some(ref mut ai) = self.engine.ai_system {
+            let level = self.engine.level_num as u32;
+            let player_tribe = self.engine.game_world.player_tribe;
+            ai.load_level_scripts(level, &scripts_dir, player_tribe);
+            log::info!(
+                "AI scripts: loaded {} tribe script(s) for level {} from {}",
+                ai.loaded_tribe_count(), level, scripts_dir.display()
+            );
         }
 
         self.do_render = true;

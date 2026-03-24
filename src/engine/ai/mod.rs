@@ -407,6 +407,11 @@ impl AiSystem {
         bridge.pending_shaman_move.clear();
     }
 
+    /// How many tribes have scripts loaded.
+    pub fn loaded_tribe_count(&self) -> usize {
+        self.scripts_loaded.iter().filter(|&&s| s).count()
+    }
+
     /// Load scripts for a level. Called when transitioning to InGame.
     /// Finds and loads .lua scripts from the scripts directory for all
     /// non-player tribes.
