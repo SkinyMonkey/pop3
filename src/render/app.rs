@@ -3894,41 +3894,28 @@ impl ApplicationHandler for App {
 
                         // 7g. AI command dispatch -- read pending commands from bridge and act on them.
                         // Without this, AI scripts produce commands that are silently discarded each tick.
-                        if let Some(ref ai) = self.engine.ai_system {
+                        // AI command dispatch: take() temporarily to avoid borrow
+                        // conflict between ai_system and unit_coordinator.
+                        if let Some(mut ai) = self.engine.ai_system.take() {
                             let cmds = ai.drain_pending_commands();
+                            let marker_entries = ai.marker_entries();
                             let player_tribe = self.engine.game_world.player_tribe;
-                            for atk in &cmds.attacks {
-                                log::info!(
-                                    "AI tribe {} attacks tribe {} with {} people (type {})",
-                                    player_tribe ^ 1, atk.target_tribe, atk.num_people, atk.attack_type
+
+                            // Dispatch commands for each active AI tribe
+                            for tribe_idx in 0..4u8 {
+                                if tribe_idx == player_tribe {
+                                    continue;
+                                }
+                                if !ai.tribe_states[tribe_idx as usize].active {
+                                    continue;
+                                }
+                                crate::engine::ai::dispatch::dispatch_ai_commands(
+                                    &cmds,
+                                    &marker_entries,
+                                    &mut self.engine.unit_coordinator,
+                                    &mut ai,
+                                    tribe_idx,
                                 );
-                            }
-                            for bld in &cmds.builds {
-                                log::info!(
-                                    "AI tribe builds type {} at ({}, {})",
-                                    bld.building_type, bld.marker_x, bld.marker_y
-                                );
-                            }
-                            for trn in &cmds.trains {
-                                log::info!(
-                                    "AI tribe trains {} units of type {}",
-                                    trn.count, trn.unit_type
-                                );
-                            }
-                            for spl in &cmds.spells {
-                                log::info!(
-                                    "AI tribe casts spell {} at ({}, {})",
-                                    spl.spell_type, spl.target_x, spl.target_y
-                                );
-                            }
-                            for mv in &cmds.moves {
-                                log::info!("AI tribe moves {} people to marker {}", mv.num_people, mv.marker);
-                            }
-                            for cnv in &cmds.converts {
-                                log::info!("AI tribe converts at marker {}", cnv.marker);
-                            }
-                            for sm in &cmds.shaman_moves {
-                                log::info!("AI shaman moves to marker {}", sm.marker);
                             }
 
                             // Apply difficulty mana adjustment for AI tribes
@@ -3943,6 +3930,8 @@ impl ApplicationHandler for App {
                                         crate::engine::ai::difficulty::apply_mana_adjust(current, adjust);
                                 }
                             }
+
+                            self.engine.ai_system = Some(ai);
                         }
 
                         self.sync_unit_render_cells();
