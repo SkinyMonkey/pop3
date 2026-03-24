@@ -11,7 +11,7 @@ pub const QUICKSAVE_FILENAME: &str = "quicksave.pop3save";
 /// Uses serde + bincode for our own serialization format (not the original
 /// 860KB binary format). This captures all state needed to restore a game
 /// in progress.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SaveFile {
     pub version: u32,
     pub level_num: u32,
@@ -56,6 +56,44 @@ pub fn save_game(save: &SaveFile, path: &std::path::Path) -> Result<(), SaveErro
     std::fs::write(path, encoded)
         .map_err(|e| SaveError::Io(e.to_string()))?;
     Ok(())
+}
+
+pub fn quicksave(save: &SaveFile, save_dir: &std::path::Path) -> Result<(), SaveError> {
+    std::fs::create_dir_all(save_dir)
+        .map_err(|e| SaveError::Io(e.to_string()))?;
+    save_game(save, &save_dir.join(QUICKSAVE_FILENAME))
+}
+
+pub fn quickload(save_dir: &std::path::Path) -> Result<SaveFile, SaveError> {
+    load_game(&save_dir.join(QUICKSAVE_FILENAME))
+}
+
+pub struct SaveEntry {
+    pub filename: String,
+    pub path: std::path::PathBuf,
+    pub modified: Option<std::time::SystemTime>,
+}
+
+pub fn list_saves(save_dir: &std::path::Path) -> Result<Vec<SaveEntry>, SaveError> {
+    let mut entries = Vec::new();
+    let read_dir = std::fs::read_dir(save_dir)
+        .map_err(|e| SaveError::Io(e.to_string()))?;
+    for entry in read_dir {
+        let entry = entry.map_err(|e| SaveError::Io(e.to_string()))?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("pop3save") {
+            let filename = path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let modified = entry.metadata()
+                .and_then(|m| m.modified())
+                .ok();
+            entries.push(SaveEntry { filename, path, modified });
+        }
+    }
+    entries.sort_by(|a, b| b.modified.cmp(&a.modified));
+    Ok(entries)
 }
 
 pub fn load_game(path: &std::path::Path) -> Result<SaveFile, SaveError> {
@@ -186,6 +224,97 @@ mod tests {
         assert_eq!(loaded.player_tribe, 0);
         assert_eq!(loaded.tribes.tribes[0].mana, 500_000);
         assert_eq!(loaded.rng.seed(), 0xDEADBEEF);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_quicksave_writes_to_quicksave_filename() {
+        let save = make_test_save();
+        let dir = std::env::temp_dir().join("pop3_test_quicksave");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        quicksave(&save, &dir).unwrap();
+        assert!(dir.join(QUICKSAVE_FILENAME).exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_quickload_reads_quicksave() {
+        let save = make_test_save();
+        let dir = std::env::temp_dir().join("pop3_test_quickload");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        quicksave(&save, &dir).unwrap();
+        let loaded = quickload(&dir).unwrap();
+        assert_eq!(loaded.game_tick, 1234);
+        assert_eq!(loaded.level_num, 5);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_quicksave_overwrites_previous() {
+        let dir = std::env::temp_dir().join("pop3_test_quicksave_overwrite");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let mut save1 = make_test_save();
+        save1.game_tick = 100;
+        quicksave(&save1, &dir).unwrap();
+
+        let mut save2 = make_test_save();
+        save2.game_tick = 999;
+        quicksave(&save2, &dir).unwrap();
+
+        let loaded = quickload(&dir).unwrap();
+        assert_eq!(loaded.game_tick, 999);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_load_game_version_mismatch() {
+        let dir = std::env::temp_dir().join("pop3_test_version_mismatch");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("bad_version.pop3save");
+
+        let mut save = make_test_save();
+        save.version = 99;
+        // Write directly with bincode (bypasses version check in save_game)
+        let encoded = bincode::serde::encode_to_vec(&save, bincode::config::standard()).unwrap();
+        std::fs::write(&path, encoded).unwrap();
+
+        let result = load_game(&path);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            SaveError::VersionMismatch { expected, found } => {
+                assert_eq!(expected, SAVE_VERSION);
+                assert_eq!(found, 99);
+            }
+            other => panic!("Expected VersionMismatch, got: {:?}", other),
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_list_saves_returns_pop3save_files() {
+        let dir = std::env::temp_dir().join("pop3_test_list_saves");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+
+        let save = make_test_save();
+        save_game(&save, &dir.join("save1.pop3save")).unwrap();
+        save_game(&save, &dir.join("save2.pop3save")).unwrap();
+        // Create a non-save file that should be excluded
+        std::fs::write(dir.join("notes.txt"), "not a save").unwrap();
+
+        let entries = list_saves(&dir).unwrap();
+        assert_eq!(entries.len(), 2);
+        let names: Vec<&str> = entries.iter().map(|e| e.filename.as_str()).collect();
+        assert!(names.contains(&"save1"));
+        assert!(names.contains(&"save2"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
