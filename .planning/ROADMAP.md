@@ -124,7 +124,7 @@ Plans:
 **Plans**: 8 plans
 
 Plans:
-- [ ] 05-01-PLAN.md -- AI module skeleton with mlua Lua VM and PopScript constants
+- [x] 05-01-PLAN.md -- AI module skeleton with mlua Lua VM and PopScript constants
 - [x] 05-02-PLAN.md -- Save/load system with serde + bincode and quicksave
 - [x] 05-03-PLAN.md -- Menu state machine and HUD rendering
 - [ ] 05-04-PLAN.md -- PopScript function registry with EVERY macro and game state bridge

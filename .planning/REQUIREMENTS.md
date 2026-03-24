@@ -78,9 +78,9 @@ Requirements for playable single-player campaign (25 levels).
 
 ### AI/Scripting
 
-- [ ] **AI-01**: AI scripting engine -- Lua-based interpreter (community has documented Lua equivalents of original bytecode scripts) instead of raw bytecode VM
+- [x] **AI-01**: AI scripting engine -- Lua-based interpreter (community has documented Lua equivalents of original bytecode scripts) instead of raw bytecode VM
 - [ ] **AI-02**: Script flow control (IF/ELSE/ENDIF, EVERY/DO loops, subroutine calls)
-- [ ] **AI-03**: Script value types (literal, variable, internal attribute 1000-1237)
+- [x] **AI-03**: Script value types (literal, variable, internal attribute 1000-1237)
 - [ ] **AI-04**: AI decision making (target selection scoring, threat assessment)
 - [ ] **AI-05**: AI building placement (7-state placement machine)
 - [ ] **AI-06**: Shaman command system (8 command types, 10 slots per tribe)
@@ -242,9 +242,9 @@ Deferred to post-campaign. Tracked but not in current roadmap.
 | HUD-06 | Phase 3 | Complete |
 | HUD-07 | Phase 3 | Complete |
 | HUD-08 | Phase 3 | Complete |
-| AI-01 | Phase 4 | Pending |
+| AI-01 | Phase 4 | Complete |
 | AI-02 | Phase 4 | Pending |
-| AI-03 | Phase 4 | Pending |
+| AI-03 | Phase 4 | Complete |
 | AI-04 | Phase 4 | Pending |
 | AI-05 | Phase 4 | Pending |
 | AI-06 | Phase 4 | Pending |
