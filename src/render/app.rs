@@ -3820,7 +3820,16 @@ impl ApplicationHandler for App {
                             tribes.tribes[2].active,
                             tribes.tribes[3].active,
                         ];
-                        let buildings = [0u32; 4]; // TODO: wire building counts when available
+                        // Count active buildings per tribe from the object pool.
+                        let mut buildings = [0u32; 4];
+                        for (_handle, header, bdata) in self.engine.unit_coordinator.pool().buildings() {
+                            if bdata.state == crate::engine::buildings::BuildingState::Active {
+                                let tribe = header.tribe as usize;
+                                if tribe < 4 {
+                                    buildings[tribe] += 1;
+                                }
+                            }
+                        }
                         ai.update_bridge(
                             self.engine.game_world.game_tick,
                             self.engine.game_world.player_tribe,
@@ -3875,6 +3884,60 @@ impl ApplicationHandler for App {
                         for _ in 0..ticks {
                             self.engine.effect_pool.update_all();
                         }
+
+                        // 7g. AI command dispatch -- read pending commands from bridge and act on them.
+                        // Without this, AI scripts produce commands that are silently discarded each tick.
+                        if let Some(ref ai) = self.engine.ai_system {
+                            let cmds = ai.drain_pending_commands();
+                            let player_tribe = self.engine.game_world.player_tribe;
+                            for atk in &cmds.attacks {
+                                log::info!(
+                                    "AI tribe {} attacks tribe {} with {} people (type {})",
+                                    player_tribe ^ 1, atk.target_tribe, atk.num_people, atk.attack_type
+                                );
+                            }
+                            for bld in &cmds.builds {
+                                log::info!(
+                                    "AI tribe builds type {} at ({}, {})",
+                                    bld.building_type, bld.marker_x, bld.marker_y
+                                );
+                            }
+                            for trn in &cmds.trains {
+                                log::info!(
+                                    "AI tribe trains {} units of type {}",
+                                    trn.count, trn.unit_type
+                                );
+                            }
+                            for spl in &cmds.spells {
+                                log::info!(
+                                    "AI tribe casts spell {} at ({}, {})",
+                                    spl.spell_type, spl.target_x, spl.target_y
+                                );
+                            }
+                            for mv in &cmds.moves {
+                                log::info!("AI tribe moves {} people to marker {}", mv.num_people, mv.marker);
+                            }
+                            for cnv in &cmds.converts {
+                                log::info!("AI tribe converts at marker {}", cnv.marker);
+                            }
+                            for sm in &cmds.shaman_moves {
+                                log::info!("AI shaman moves to marker {}", sm.marker);
+                            }
+
+                            // Apply difficulty mana adjustment for AI tribes
+                            for tribe_idx in 0..4u8 {
+                                if tribe_idx == player_tribe {
+                                    continue;
+                                }
+                                let adjust = ai.mana_adjust(tribe_idx as usize);
+                                if adjust != 100 {
+                                    let current = self.engine.game_world.tribes.tribes[tribe_idx as usize].mana;
+                                    self.engine.game_world.tribes.tribes[tribe_idx as usize].mana =
+                                        crate::engine::ai::difficulty::apply_mana_adjust(current, adjust);
+                                }
+                            }
+                        }
+
                         self.sync_unit_render_cells();
                         self.rebuild_spawn_model();
                         self.rebuild_unit_models();
