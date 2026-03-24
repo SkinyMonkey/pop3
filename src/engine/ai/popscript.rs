@@ -152,61 +152,315 @@ pub fn register_popscript_functions(
         )?;
     }
 
-    // IS_PLAYER_TRIBE(tribe) -> 1 if tribe is the human player, else 0
-    // Note: registered as IS_PLAYER_TRIBE but not in the original 168 function list;
-    // original scripts use direct comparison. Kept for utility.
+    // ---- Action commands (push to bridge pending lists) ----
+
+    // ATTACK(target_tribe, num_people, attack_type)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "ATTACK",
+            lua.create_function(move |_, (target, num, atype): (i32, i32, i32)| {
+                b.borrow_mut().pending_attacks.push(super::AiAttackCommand {
+                    target_tribe: target as u8,
+                    num_people: num as u32,
+                    attack_type: atype as u32,
+                    marker: None,
+                });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // ATTACK_MARKER(target_tribe, marker, num_people, attack_type)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "ATTACK_MARKER",
+            lua.create_function(
+                move |_, (target, marker, num, atype): (i32, i32, i32, i32)| {
+                    b.borrow_mut().pending_attacks.push(super::AiAttackCommand {
+                        target_tribe: target as u8,
+                        num_people: num as u32,
+                        attack_type: atype as u32,
+                        marker: Some((marker, 0)),
+                    });
+                    Ok(0)
+                },
+            )?,
+        )?;
+    }
+
+    // BUILD_AT(building_type, x, y)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "BUILD_AT",
+            lua.create_function(move |_, (btype, x, y): (i32, i32, i32)| {
+                b.borrow_mut().pending_builds.push(super::AiBuildCommand {
+                    building_type: btype as u8,
+                    marker_x: x,
+                    marker_y: y,
+                });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // TRAIN_PEOPLE_NOW(unit_type, count)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "TRAIN_PEOPLE_NOW",
+            lua.create_function(move |_, (utype, count): (i32, i32)| {
+                b.borrow_mut().pending_trains.push(super::AiTrainCommand {
+                    unit_type: utype as u8,
+                    count: count as u32,
+                });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // SPELL_AT_MARKER(spell_type, marker)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "SPELL_AT_MARKER",
+            lua.create_function(move |_, (spell, marker): (i32, i32)| {
+                b.borrow_mut().pending_spells.push(super::AiSpellCommand {
+                    spell_type: spell as u8,
+                    target_x: marker,
+                    target_y: 0,
+                });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // CONVERT_AT_MARKER(marker)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "CONVERT_AT_MARKER",
+            lua.create_function(move |_, marker: i32| {
+                b.borrow_mut()
+                    .pending_convert
+                    .push(super::AiConvertCommand { marker });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // SEND_PEOPLE_TO_MARKER(marker, num)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "SEND_PEOPLE_TO_MARKER",
+            lua.create_function(move |_, (marker, num): (i32, i32)| {
+                b.borrow_mut().pending_moves.push(super::AiMoveCommand {
+                    marker,
+                    num_people: num as u32,
+                });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // SEND_SHAMAN_TO_MARKER(marker) -- alias: SEND_SHAMAN_DEFENDERS_HOME uses marker 0
+    {
+        let b = bridge.clone();
+        globals.set(
+            "SEND_SHAMAN_DEFENDERS_HOME",
+            lua.create_function(move |_, ()| {
+                b.borrow_mut()
+                    .pending_shaman_move
+                    .push(super::AiShamanMoveCommand { marker: 0 });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // PRAY_AT_HEAD(head_num)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "PRAY_AT_HEAD",
+            lua.create_function(move |_, head_num: i32| {
+                b.borrow_mut()
+                    .pending_pray
+                    .push(super::AiPrayCommand { head_num });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // SET_MARKER_ENTRY(marker, x, y)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "SET_MARKER_ENTRY",
+            lua.create_function(move |_, (marker, x, y): (i32, i32, i32)| {
+                b.borrow_mut()
+                    .marker_entries
+                    .push(super::MarkerEntry { marker, x, y });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // DELETE_SMOKE_STUFF(x, y)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "DELETE_SMOKE_STUFF",
+            lua.create_function(move |_, (x, y): (i32, i32)| {
+                b.borrow_mut()
+                    .pending_cleanup
+                    .push(super::AiCleanupCommand { x, y });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // ---- Configuration setters (store in bridge fields) ----
+
+    // SET_DEFENSE_RADIUS(r)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "SET_DEFENSE_RADIUS",
+            lua.create_function(move |_, r: i32| {
+                let mut bridge = b.borrow_mut();
+                let tribe = bridge.current_tribe as usize;
+                bridge.defence_radius[tribe] = r as u32;
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // SET_BASE_RADIUS(r)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "SET_BASE_RADIUS",
+            lua.create_function(move |_, r: i32| {
+                let mut bridge = b.borrow_mut();
+                let tribe = bridge.current_tribe as usize;
+                bridge.base_radius[tribe] = r as u32;
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // SET_ATTACK_VARIABLE(v)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "SET_ATTACK_VARIABLE",
+            lua.create_function(move |_, v: i32| {
+                let mut bridge = b.borrow_mut();
+                let tribe = bridge.current_tribe as usize;
+                bridge.attack_variable[tribe] = v as u32;
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // SET_SPELL_ENTRY(spell, enabled)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "SET_SPELL_ENTRY",
+            lua.create_function(move |_, (spell, enabled): (i32, i32)| {
+                let mut bridge = b.borrow_mut();
+                let tribe = bridge.current_tribe as usize;
+                if (spell as usize) < 21 {
+                    bridge.spell_entry[tribe][spell as usize] = enabled != 0;
+                }
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // SET_REINCARNATION(on)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "SET_REINCARNATION",
+            lua.create_function(move |_, on: i32| {
+                let mut bridge = b.borrow_mut();
+                let tribe = bridge.current_tribe as usize;
+                bridge.reincarnation[tribe] = on != 0;
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // SET_BUCKET_USAGE(on)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "SET_BUCKET_USAGE",
+            lua.create_function(move |_, on: i32| {
+                let mut bridge = b.borrow_mut();
+                let tribe = bridge.current_tribe as usize;
+                bridge.bucket_usage[tribe] = on != 0;
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // SET_BUCKET_COUNT_FOR_SPELL(spell, count) -- not in original 168 list but
+    // referenced in plan; register as stub since it's config-only
+    // MAX_BUILDING_TYPE(type, count)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "MAX_BUILDING_TYPE",
+            lua.create_function(move |_, (btype, count): (i32, i32)| {
+                let mut bridge = b.borrow_mut();
+                let tribe = bridge.current_tribe as usize;
+                if (btype as usize) < 16 {
+                    bridge.max_building_type[tribe][btype as usize] = count as u32;
+                }
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // ENABLE_BUILDING_TYPE(type) -- not in original 168 function list;
+    // building enable is handled via MAX_BUILDING_TYPE > 0 or ATTR flags.
 
     // ---- Remaining stub functions that panic per D-04 ----
-    // These replace the stubs from constants.rs for all functions
-    // not yet given real implementations.
+    // Functions that need game state not yet available in the bridge keep their
+    // panic stubs. They will be wired when underlying game systems are ready.
 
     let stub_functions = [
-        // Attack/Defense commands (will get real impl in Task 2)
-        "ATTACK",
-        "ATTACK_MARKER",
         "DEFEND_SHAMEN",
         "SEND_ALL_PEOPLE_TO_MARKER",
         "SEND_BLUE_PEOPLE_TO_MARKER",
         "SEND_RED_PEOPLE_TO_MARKER",
         "SEND_GREEN_PEOPLE_TO_MARKER",
-        "SEND_PEOPLE_TO_MARKER",
         "SEND_GHOSTS_TO_MARKER",
-        "SEND_SHAMAN_DEFENDERS_HOME",
-        "SET_ATTACK_VARIABLE",
-        "SET_DEFENSE_RADIUS",
         "SET_BASE_MARKER",
         "RESET_BASE_MARKER",
-        "SET_BASE_RADIUS",
-        "SET_MARKER_ENTRY",
         "MARKER_ENTRIES",
-        // Building commands
-        "BUILD_AT",
         "SET_DRUM_TOWER_POS",
         "SET_BUILDING_DIRECTION",
         "SET_BOAT_HOUSE_WITH_BOAT",
         "PARTIAL_BUILDING_COUNT",
         "IS_BUILDING_NEAR",
-        // Training/People commands
-        "TRAIN_PEOPLE_NOW",
-        "CONVERT_AT_MARKER",
         "PREACH_AT_MARKER",
         "COUNT_PEOPLE_IN_HOUSES",
         "CLEAR_STANDING_PEOPLE",
         "DESELECT_ALL_PEOPLE",
-        "PRAY_AT_HEAD",
-        "SET_REINCARNATION",
-        "SET_BUCKET_USAGE",
         "SET_WOOD_COLLECTION_RADII",
         "ONLY_STAND_AT_MARKERS",
         "I_KILL_CONVERTABLE",
         "CLEAR_HOUSE_INFO_FLAG",
         "FIX_WILD_IN_AREA",
-        // Spell commands
-        "SPELL_AT_MARKER",
         "SPELL_AT_THING",
-        "SET_SPELL_ENTRY",
         "GIVE_MANA_TO_PLAYER",
-        // State/Control commands
         "STATE_SET",
         "SET_TIMER_GOING",
         "HAS_TIMER_REACHED_ZERO",
@@ -217,7 +471,6 @@ pub fn register_popscript_functions(
         "TRIGGER_LEVEL_LOST",
         "TURN_PUSH_ON",
         "TURN_PUSH_OFF",
-        // Targeting commands
         "TARGET_SHAMAN",
         "TARGET_MEDICINE_MAN",
         "TARGET_WARRIORS",
@@ -236,7 +489,6 @@ pub fn register_popscript_functions(
         "TARGET_YELLOW_SUPER_WARRIORS",
         "TARGET_GREEN_SUPER_WARRIORS",
         "DONT_TARGET_SHAMAN",
-        // Query commands
         "IS_SHAMAN_AVAILABLE_FOR_ATTACK",
         "IS_SHAMAN_IN_AREA",
         "IS_PRISONER_LEFT",
@@ -244,7 +496,6 @@ pub fn register_popscript_functions(
         "GET_HEAD_TRIGGER_COUNT",
         "GET_HEIGHT_AT_POS",
         "THING_COUNT_IN_AREA",
-        // Camera/Flyby commands
         "CAMERA_ROTATION",
         "FLYBY_CREATE_NEW",
         "FLYBY_SET_EVENT_POS",
@@ -256,7 +507,6 @@ pub fn register_popscript_functions(
         "FLYBY_START",
         "FLYBY_STOP",
         "FLYBY_ALLOW_INTERRUPT",
-        // Dialog/Message commands
         "OPEN_DIALOG",
         "SET_MSG_AUTO_OPEN_DLG",
         "SET_MSG_DELETE_ON_OK",
@@ -264,20 +514,16 @@ pub fn register_popscript_functions(
         "SET_MSG_NARRATIVE",
         "SET_MSG_OK_SAVE",
         "SET_MSG_TIMEOUT",
-        // Visual commands
         "FLASH_BUTTON",
-        "DELETE_SMOKE_STUFF",
         "MARVELLOUS_HOUSE_DEATH",
         "REMOVE_HEAD_AT_POS",
         "REMOVE_PLAYER_THING",
-        // Tribe enable/disable
         "SET_NO_BLUE",
         "SET_NO_RED",
         "SET_NO_GREEN",
         "SET_NO_YELLOW",
-        // Boat patrol
         "BOAT_PATROL",
-        // Game state query stubs (the ones not yet implemented with bridge reads)
+        // Game state query stubs (need game systems not yet in bridge)
         "MY_NUM_KILLED_BY_BLUE",
         "MY_NUM_KILLED_BY_RED",
         "MY_NUM_KILLED_BY_YELLOW",
@@ -535,5 +781,139 @@ mod tests {
             .eval()
             .unwrap();
         assert_eq!(val, 100);
+    }
+
+    // ---- Task 2 tests: Action commands and configuration setters ----
+
+    #[test]
+    fn attack_pushes_command() {
+        let (lua, bridge) = setup();
+        lua.load("ATTACK(1, 10, 0)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_attacks.len(), 1);
+        assert_eq!(b.pending_attacks[0].target_tribe, 1);
+        assert_eq!(b.pending_attacks[0].num_people, 10);
+        assert_eq!(b.pending_attacks[0].attack_type, 0);
+        assert!(b.pending_attacks[0].marker.is_none());
+    }
+
+    #[test]
+    fn build_at_pushes_command() {
+        let (lua, bridge) = setup();
+        lua.load("BUILD_AT(1, 100, 200)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_builds.len(), 1);
+        assert_eq!(b.pending_builds[0].building_type, 1);
+        assert_eq!(b.pending_builds[0].marker_x, 100);
+        assert_eq!(b.pending_builds[0].marker_y, 200);
+    }
+
+    #[test]
+    fn train_people_now_pushes_command() {
+        let (lua, bridge) = setup();
+        lua.load("TRAIN_PEOPLE_NOW(3, 5)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_trains.len(), 1);
+        assert_eq!(b.pending_trains[0].unit_type, 3);
+        assert_eq!(b.pending_trains[0].count, 5);
+    }
+
+    #[test]
+    fn spell_at_marker_pushes_command() {
+        let (lua, bridge) = setup();
+        lua.load("SPELL_AT_MARKER(2, 5)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_spells.len(), 1);
+        assert_eq!(b.pending_spells[0].spell_type, 2);
+        assert_eq!(b.pending_spells[0].target_x, 5);
+    }
+
+    #[test]
+    fn set_defence_radius_stores_value() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 2;
+        lua.load("SET_DEFENSE_RADIUS(512)").exec().unwrap();
+        assert_eq!(bridge.borrow().defence_radius[2], 512);
+    }
+
+    #[test]
+    fn set_base_radius_stores_value() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 1;
+        lua.load("SET_BASE_RADIUS(256)").exec().unwrap();
+        assert_eq!(bridge.borrow().base_radius[1], 256);
+    }
+
+    #[test]
+    fn set_attack_variable_stores_value() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 0;
+        lua.load("SET_ATTACK_VARIABLE(42)").exec().unwrap();
+        assert_eq!(bridge.borrow().attack_variable[0], 42);
+    }
+
+    #[test]
+    #[should_panic(expected = "not yet implemented")]
+    fn unimplemented_query_panics() {
+        let (lua, _bridge) = setup();
+        let _: i32 = lua
+            .globals()
+            .get::<LuaFunction>("IS_SHAMAN_AVAILABLE_FOR_ATTACK")
+            .unwrap()
+            .call(())
+            .unwrap();
+    }
+
+    #[test]
+    fn send_people_to_marker_pushes_command() {
+        let (lua, bridge) = setup();
+        lua.load("SEND_PEOPLE_TO_MARKER(3, 8)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_moves.len(), 1);
+        assert_eq!(b.pending_moves[0].marker, 3);
+        assert_eq!(b.pending_moves[0].num_people, 8);
+    }
+
+    #[test]
+    fn pray_at_head_pushes_command() {
+        let (lua, bridge) = setup();
+        lua.load("PRAY_AT_HEAD(2)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_pray.len(), 1);
+        assert_eq!(b.pending_pray[0].head_num, 2);
+    }
+
+    #[test]
+    fn set_spell_entry_stores_config() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 1;
+        lua.load("SET_SPELL_ENTRY(3, 1)").exec().unwrap();
+        assert!(bridge.borrow().spell_entry[1][3]);
+    }
+
+    #[test]
+    fn set_reincarnation_stores_flag() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 0;
+        lua.load("SET_REINCARNATION(1)").exec().unwrap();
+        assert!(bridge.borrow().reincarnation[0]);
+    }
+
+    #[test]
+    fn set_bucket_usage_stores_flag() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 3;
+        lua.load("SET_BUCKET_USAGE(1)").exec().unwrap();
+        assert!(bridge.borrow().bucket_usage[3]);
+    }
+
+    #[test]
+    fn delete_smoke_stuff_pushes_cleanup() {
+        let (lua, bridge) = setup();
+        lua.load("DELETE_SMOKE_STUFF(10, 20)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_cleanup.len(), 1);
+        assert_eq!(b.pending_cleanup[0].x, 10);
+        assert_eq!(b.pending_cleanup[0].y, 20);
     }
 }
