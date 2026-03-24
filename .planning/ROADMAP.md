@@ -121,7 +121,7 @@ Plans:
   3. Player can progress through all 25 campaign levels, with stone head discovery unlocking new spells and buildings between levels
   4. Player can save the full game state to a file (including quicksave), load it back, and resume play with all systems restored identically
   5. Main menu provides navigation to campaign select, load game, and options, with proper transitions between screens
-**Plans**: 8 plans
+**Plans**: 10 plans
 
 Plans:
 - [x] 05-01-PLAN.md -- AI module skeleton with mlua Lua VM and PopScript constants
@@ -132,6 +132,8 @@ Plans:
 - [x] 05-06-PLAN.md -- Campaign progression and OBJECTIV.DAT parser
 - [x] 05-07-PLAN.md -- AI tick integration and script file loading
 - [x] 05-08-PLAN.md -- Full integration: wire menu, campaign, AI, save/load into App
+- [ ] 05-09-PLAN.md -- Gap closure: AI command dispatch, difficulty scaling, building counts
+- [ ] 05-10-PLAN.md -- Gap closure: AI script state save/load (variables + EVERY counters)
 
 ## Progress
 
@@ -145,4 +147,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 3.1 -> 4 -> 5
 | 3. HUD and Effects | 5/5 | Complete | 2026-03-18 |
 | 3.1 HUD Polish | 0/1 | Not started | - |
 | 4. Spell System | 0/3 | Not started | - |
-| 5. AI and Campaign | 0/8 | Not started | - |
+| 5. AI and Campaign | 8/10 | Gap closure | - |
