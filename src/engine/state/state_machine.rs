@@ -4,7 +4,9 @@
 /// The game transitions through these states during its lifecycle:
 /// Frontend → Loading → InGame → (Outro or back to Frontend)
 /// Multiplayer is entered from Frontend for network games.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GameState {
     /// Main menu / frontend. Handles menu rendering and navigation.
     /// Original: GameState_Frontend at 0x004baa40

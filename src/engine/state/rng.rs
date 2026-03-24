@@ -1,3 +1,4 @@
+use serde::{Serialize, Deserialize};
 use super::constants::*;
 
 /// Faithful LCG matching g_RandomSeed behavior (0x00885710).
@@ -10,7 +11,7 @@ use super::constants::*;
 ///
 /// Used for AI decisions, spawn randomization, and other game logic.
 /// Must be deterministic for multiplayer lockstep synchronization.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameRng {
     seed: u32,
 }

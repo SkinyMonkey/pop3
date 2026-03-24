@@ -1,8 +1,9 @@
+use serde::{Serialize, Deserialize};
 use super::constants::*;
 
 /// Typed wrapper for g_GameFlags (0x00884bf9).
 /// Each method maps to a documented bit in the original bitfield.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GameFlags(u32);
 
 impl GameFlags {

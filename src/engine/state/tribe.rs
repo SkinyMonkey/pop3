@@ -1,3 +1,4 @@
+use serde::{Serialize, Deserialize};
 use super::constants::*;
 
 /// Per-tribe game data.
@@ -6,7 +7,7 @@ use super::constants::*;
 /// each 0xC65 (3173) bytes. This struct captures the fields needed by
 /// the game-state subsystem. Additional fields will be added as other
 /// subsystems (person-units, buildings, AI) come online.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TribeData {
     /// Tribe index (0=Blue, 1=Red, 2=Yellow, 3=Green).
     pub index: u8,
@@ -66,7 +67,7 @@ impl TribeData {
 
 /// Array of all tribes. Always exactly MAX_TRIBES (4).
 /// Original: g_TribeArray at 0x00885760
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TribeArray {
     pub tribes: [TribeData; MAX_TRIBES],
 }
