@@ -281,6 +281,70 @@ impl AiSystem {
         }
     }
 
+    /// Extract AI state for serialization (save game).
+    ///
+    /// Returns (per-tribe variables, EVERY counters from Lua VM).
+    /// EVERY counters are global (not per-tribe), stored as a single entry.
+    pub fn extract_save_state(&self) -> (Vec<Vec<i32>>, Vec<Vec<(String, u32)>>) {
+        // Extract per-tribe variables
+        let variables: Vec<Vec<i32>> = self
+            .tribe_states
+            .iter()
+            .map(|ts| ts.variables.clone())
+            .collect();
+
+        // Extract EVERY counters from Lua VM
+        let every_counters = match self.lua.globals().get::<LuaFunction>("_get_every_counters") {
+            Ok(func) => match func.call::<LuaTable>(()) {
+                Ok(table) => {
+                    let mut entries = Vec::new();
+                    for pair in table.pairs::<String, u32>() {
+                        if let Ok((k, v)) = pair {
+                            entries.push((k, v));
+                        }
+                    }
+                    if entries.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![entries]
+                    }
+                }
+                Err(_) => Vec::new(),
+            },
+            Err(_) => Vec::new(),
+        };
+
+        (variables, every_counters)
+    }
+
+    /// Restore AI state from deserialized save data (load game).
+    ///
+    /// Restores per-tribe variables and EVERY counters into the Lua VM.
+    pub fn restore_save_state(
+        &mut self,
+        variables: &[Vec<i32>],
+        every_counters: &[Vec<(String, u32)>],
+    ) {
+        // Restore per-tribe variables
+        for (i, vars) in variables.iter().enumerate() {
+            if i < 4 {
+                self.tribe_states[i].variables = vars.clone();
+            }
+        }
+
+        // Restore EVERY counters into Lua VM
+        if !every_counters.is_empty() {
+            if let Ok(table) = self.lua.create_table() {
+                for (k, v) in &every_counters[0] {
+                    let _ = table.set(k.as_str(), *v);
+                }
+                if let Ok(func) = self.lua.globals().get::<LuaFunction>("_set_every_counters") {
+                    let _ = func.call::<()>(table);
+                }
+            }
+        }
+    }
+
     /// Get mana adjustment factor for a tribe (100 = no change).
     pub fn mana_adjust(&self, tribe_idx: usize) -> u32 {
         self.difficulty[tribe_idx].mana_adjust
@@ -613,6 +677,59 @@ mod tests {
         let system = AiSystem::new().unwrap();
         for i in 0..4 {
             assert_eq!(system.mana_adjust(i), 100);
+        }
+    }
+
+    #[test]
+    fn extract_and_restore_round_trip() {
+        let mut system = AiSystem::new().unwrap();
+
+        // Set tribe 1's variable[0] to 42
+        system.tribe_states[1].variables[0] = 42;
+
+        // Push an EVERY counter into Lua
+        system
+            .lua
+            .load(r#"_set_every_counters({["64_0"] = 100})"#)
+            .exec()
+            .unwrap();
+
+        // Extract state
+        let (vars, every) = system.extract_save_state();
+        assert_eq!(vars[1][0], 42);
+        assert!(!every.is_empty());
+        let has_counter = every[0].iter().any(|(k, v)| k == "64_0" && *v == 100);
+        assert!(has_counter, "Expected EVERY counter '64_0' = 100");
+
+        // Create a fresh system and restore
+        let mut system2 = AiSystem::new().unwrap();
+        system2.restore_save_state(&vars, &every);
+        assert_eq!(system2.tribe_states[1].variables[0], 42);
+
+        // Verify Lua-side EVERY counters restored
+        let val: i32 = system2
+            .lua
+            .load(r#"return _get_every_counters()["64_0"] or 0"#)
+            .eval()
+            .unwrap();
+        assert_eq!(val, 100);
+    }
+
+    #[test]
+    fn extract_empty_state_is_safe() {
+        let system = AiSystem::new().unwrap();
+        let (vars, every) = system.extract_save_state();
+
+        // All 4 tribes should have 64 variables, all zeros
+        assert_eq!(vars.len(), 4);
+        for v in &vars {
+            assert_eq!(v.len(), 64);
+            assert!(v.iter().all(|&x| x == 0));
+        }
+
+        // EVERY counters should be empty (one entry with empty vec, or empty outer)
+        if !every.is_empty() {
+            assert!(every[0].is_empty());
         }
     }
 
