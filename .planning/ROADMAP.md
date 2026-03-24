@@ -131,7 +131,7 @@ Plans:
 - [x] 05-05-PLAN.md -- AI behavior: target scoring, shaman commands, building AI, difficulty
 - [x] 05-06-PLAN.md -- Campaign progression and OBJECTIV.DAT parser
 - [x] 05-07-PLAN.md -- AI tick integration and script file loading
-- [ ] 05-08-PLAN.md -- Full integration: wire menu, campaign, AI, save/load into App
+- [x] 05-08-PLAN.md -- Full integration: wire menu, campaign, AI, save/load into App
 
 ## Progress
 

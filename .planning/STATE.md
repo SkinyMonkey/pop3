@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready to execute
-stopped_at: Completed 05-07-PLAN.md (AI tick integration)
-last_updated: "2026-03-24T02:27:22.740Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 05-08-PLAN.md (full game loop integration)
+last_updated: "2026-03-24T02:37:27.600Z"
 progress:
   total_phases: 6
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 27
-  completed_plans: 25
+  completed_plans: 26
 ---
 
 # Project State
@@ -63,6 +63,7 @@ Plan: 8 of 8
 | Phase 05 P05 | 4min | 2 tasks | 5 files |
 | Phase 05 P04 | 6min | 2 tasks | 2 files |
 | Phase 05 P07 | 4min | 2 tasks | 3 files |
+| Phase 05 P08 | 7min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -134,6 +135,7 @@ Recent decisions affecting current work:
 - [Phase 05-07]: Script body wrapped in _tribe_N_tick() function at load time for per-tick execution
 - [Phase 05-07]: AiSystem owns Rc<RefCell<AiGameBridge>> and registers PopScript functions internally during new()
 - [Phase 05-07]: Instruction limit 100K via mlua HookTriggers prevents runaway AI scripts
+- [Phase 05]: ToggleSimulation uses pause flag instead of Frontend state; Escape in InGame opens menu; update_bridge clears pending AI commands each tick
 
 ### Pending Todos
 
@@ -147,6 +149,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T02:27:22.738Z
-Stopped at: Completed 05-07-PLAN.md (AI tick integration)
+Last session: 2026-03-24T02:37:27.598Z
+Stopped at: Completed 05-08-PLAN.md (full game loop integration)
 Resume file: None
