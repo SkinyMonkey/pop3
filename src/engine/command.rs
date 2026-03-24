@@ -2,6 +2,13 @@ use winit::keyboard::KeyCode;
 
 use crate::render::hud::HudTab;
 
+#[derive(Debug, Clone)]
+pub enum MenuTarget {
+    CampaignSelect,
+    LoadGame,
+    Options,
+}
+
 /// Input boundary — every action the game engine can process,
 /// regardless of source (keyboard, mouse, script, network, test harness).
 #[derive(Debug, Clone)]
@@ -65,6 +72,22 @@ pub enum GameCommand {
     // Building interaction
     EnterBuilding { unit_id: usize, building_handle: u16 },
     TrainUnit { building_handle: u16 },
+
+    // Menu navigation
+    MenuNavigate(MenuTarget),
+    MenuSelect,
+    MenuBack,
+    MenuUp,
+    MenuDown,
+
+    // Campaign
+    StartLevel { level_num: u32 },
+
+    // Save/Load
+    QuickSave,
+    QuickLoad,
+    SaveGame { slot: u32 },
+    LoadGame { slot: u32 },
 
     // Lifecycle
     Quit,
