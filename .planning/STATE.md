@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Phase complete — ready for verification
-stopped_at: Completed 05-10-PLAN.md (AI save/load gap closure)
-last_updated: "2026-03-24T03:37:56.965Z"
+stopped_at: Completed 05-11-PLAN.md (AI command dispatch gap closure)
+last_updated: "2026-03-24T04:01:05.986Z"
 progress:
   total_phases: 6
   completed_phases: 4
-  total_plans: 29
-  completed_plans: 28
+  total_plans: 30
+  completed_plans: 29
 ---
 
 # Project State
@@ -66,6 +66,7 @@ Plan: 8 of 8
 | Phase 05 P08 | 7min | 3 tasks | 4 files |
 | Phase 05 P09 | 3min | 2 tasks | 2 files |
 | Phase 05 P10 | 3min | 2 tasks | 2 files |
+| Phase 05 P11 | 5min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -140,6 +141,8 @@ Recent decisions affecting current work:
 - [Phase 05]: ToggleSimulation uses pause flag instead of Frontend state; Escape in InGame opens menu; update_bridge clears pending AI commands each tick
 - [Phase 05]: AI commands logged for now; real gameplay effects deferred to subsystem maturity
 - [Phase 05]: EVERY counters stored as single global entry since Lua VM is shared across tribes
+- [Phase 05]: take() pattern for AiSystem ownership during dispatch to avoid borrow conflict
+- [Phase 05]: Two-phase collect-then-mutate for building training dispatch
 
 ### Pending Todos
 
@@ -153,6 +156,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T03:37:56.963Z
-Stopped at: Completed 05-10-PLAN.md (AI save/load gap closure)
+Last session: 2026-03-24T04:01:05.983Z
+Stopped at: Completed 05-11-PLAN.md (AI command dispatch gap closure)
 Resume file: None

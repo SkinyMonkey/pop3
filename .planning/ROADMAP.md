@@ -134,7 +134,7 @@ Plans:
 - [x] 05-08-PLAN.md -- Full integration: wire menu, campaign, AI, save/load into App
 - [x] 05-09-PLAN.md -- Gap closure: AI command dispatch, difficulty scaling, building counts
 - [x] 05-10-PLAN.md -- Gap closure: AI script state save/load (variables + EVERY counters)
-- [ ] 05-11-PLAN.md -- Gap closure: Real AI command dispatch (attacks move units, builds queue, trains initiate)
+- [x] 05-11-PLAN.md -- Gap closure: Real AI command dispatch (attacks move units, builds queue, trains initiate)
 
 ## Progress
 
