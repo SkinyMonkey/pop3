@@ -11,6 +11,8 @@ pub mod combat;
 pub mod effects;
 pub mod menu;
 pub mod campaign;
+pub mod save;
+pub mod ai;
 
 pub use command::{GameCommand, translate_key};
 pub use frame::FrameState;
