@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 05-04-PLAN.md (PopScript function registry)
-last_updated: "2026-03-24T02:21:30.982Z"
+stopped_at: Completed 05-07-PLAN.md (AI tick integration)
+last_updated: "2026-03-24T02:27:22.740Z"
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 27
-  completed_plans: 24
+  completed_plans: 25
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-17)
 ## Current Position
 
 Phase: 05 (ai-and-campaign) — EXECUTING
-Plan: 7 of 8
+Plan: 8 of 8
 
 ## Performance Metrics
 
@@ -62,6 +62,7 @@ Plan: 7 of 8
 | Phase 05 P01 | 6min | 2 tasks | 4 files |
 | Phase 05 P05 | 4min | 2 tasks | 5 files |
 | Phase 05 P04 | 6min | 2 tasks | 2 files |
+| Phase 05 P07 | 4min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -130,6 +131,9 @@ Recent decisions affecting current work:
 - [Phase 05-05]: Fixed plan test: exposed shaman bonus applies when defenders=0 (<3 threshold)
 - [Phase 05]: EVERY uses sequential ID instead of debug.getinfo due to mlua sandbox; _every_reset_ids() called per tick
 - [Phase 05]: AiGameBridge flat struct with per-tribe arrays, Rc<RefCell> shared between Lua closures and Rust
+- [Phase 05-07]: Script body wrapped in _tribe_N_tick() function at load time for per-tick execution
+- [Phase 05-07]: AiSystem owns Rc<RefCell<AiGameBridge>> and registers PopScript functions internally during new()
+- [Phase 05-07]: Instruction limit 100K via mlua HookTriggers prevents runaway AI scripts
 
 ### Pending Todos
 
@@ -143,6 +147,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T02:21:30.980Z
-Stopped at: Completed 05-04-PLAN.md (PopScript function registry)
+Last session: 2026-03-24T02:27:22.738Z
+Stopped at: Completed 05-07-PLAN.md (AI tick integration)
 Resume file: None
