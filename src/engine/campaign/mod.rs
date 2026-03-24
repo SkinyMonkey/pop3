@@ -20,35 +20,69 @@ pub struct CampaignState {
 
 impl CampaignState {
     pub fn new() -> Self {
-        todo!()
+        Self {
+            current_level: 1,
+            completed_levels: [false; TOTAL_LEVELS as usize],
+            campaign_complete: false,
+            outcome_acknowledged: false,
+        }
     }
 
-    pub fn check_progress(&mut self, _has_won: bool, _has_lost: bool) -> CampaignEvent {
-        todo!()
+    /// Check victory/defeat flags and return campaign event.
+    /// Called after each tick when in campaign mode.
+    pub fn check_progress(&mut self, has_won: bool, has_lost: bool) -> CampaignEvent {
+        if self.outcome_acknowledged {
+            return CampaignEvent::None;
+        }
+        if has_won {
+            self.outcome_acknowledged = true;
+            CampaignEvent::Victory(self.current_level)
+        } else if has_lost {
+            self.outcome_acknowledged = true;
+            CampaignEvent::Defeat(self.current_level)
+        } else {
+            CampaignEvent::None
+        }
     }
 
+    /// Advance to next level after victory.
     pub fn advance_level(&mut self) {
-        todo!()
+        let idx = (self.current_level - 1) as usize;
+        if idx < TOTAL_LEVELS as usize {
+            self.completed_levels[idx] = true;
+        }
+        if self.current_level < TOTAL_LEVELS {
+            self.current_level += 1;
+        } else {
+            self.campaign_complete = true;
+        }
+        self.outcome_acknowledged = false;
     }
 
+    /// Retry the current level after defeat.
     pub fn retry_level(&mut self) {
-        todo!()
+        self.outcome_acknowledged = false;
     }
 
-    pub fn is_level_completed(&self, _level: u32) -> bool {
-        todo!()
+    pub fn is_level_completed(&self, level: u32) -> bool {
+        let idx = (level - 1) as usize;
+        self.completed_levels.get(idx).copied().unwrap_or(false)
     }
 
     pub fn total_levels(&self) -> u32 {
-        todo!()
+        TOTAL_LEVELS
     }
 
-    pub fn set_level(&mut self, _level: u32) {
-        todo!()
+    /// Set current level (for level select or load game).
+    pub fn set_level(&mut self, level: u32) {
+        self.current_level = level.clamp(1, TOTAL_LEVELS);
+        self.outcome_acknowledged = false;
     }
 
+    /// Level data file name for current level.
+    /// Original format: levl20XX.dat where XX is zero-padded level number.
     pub fn level_filename(&self) -> String {
-        todo!()
+        format!("levl20{:02}.dat", self.current_level)
     }
 }
 
