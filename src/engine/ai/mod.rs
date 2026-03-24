@@ -168,6 +168,10 @@ impl TribeScriptState {
     }
 }
 
+/// Maximum Lua instructions per tribe per tick before aborting.
+/// Prevents infinite loops in AI scripts.
+const SCRIPT_INSTRUCTION_LIMIT: u32 = 100_000;
+
 /// AI scripting system owning a Lua 5.4 VM and per-tribe state.
 ///
 /// One shared Lua VM instance (per D-10) with per-tribe state tables.
@@ -179,6 +183,15 @@ pub struct AiSystem {
 
     /// Per-tribe script state (4 tribes: Blue, Red, Yellow, Green).
     pub tribe_states: [TribeScriptState; 4],
+
+    /// Whether scripts have been loaded for current level.
+    scripts_loaded: [bool; 4],
+
+    /// Player tribe index (skip AI for this tribe).
+    player_tribe: u8,
+
+    /// Shared bridge for Lua <-> Rust communication.
+    bridge: Rc<RefCell<AiGameBridge>>,
 }
 
 impl AiSystem {
@@ -187,6 +200,20 @@ impl AiSystem {
         let lua = Lua::new();
         constants::register_constants(&lua)?;
 
+        // Set instruction count hook for safety (per Pitfall 2 from research).
+        lua.set_hook(
+            mlua::HookTriggers::new().every_nth_instruction(SCRIPT_INSTRUCTION_LIMIT),
+            |_lua, _debug| {
+                Err(mlua::Error::RuntimeError(
+                    "AI script exceeded instruction limit (100000)".into(),
+                ))
+            },
+        )?;
+
+        let bridge = Rc::new(RefCell::new(AiGameBridge::new()));
+        popscript::register_popscript_functions(&lua, &bridge)?;
+        popscript::register_every(&lua)?;
+
         let tribe_states = [
             TribeScriptState::new(),
             TribeScriptState::new(),
@@ -194,7 +221,13 @@ impl AiSystem {
             TribeScriptState::new(),
         ];
 
-        Ok(Self { lua, tribe_states })
+        Ok(Self {
+            lua,
+            tribe_states,
+            scripts_loaded: [false; 4],
+            player_tribe: 0,
+            bridge,
+        })
     }
 
     /// Check if the given tribe index is the human player.
@@ -206,11 +239,100 @@ impl AiSystem {
     pub fn lua(&self) -> &Lua {
         &self.lua
     }
+
+    /// Get a reference to the bridge (for external state sync).
+    pub fn bridge(&self) -> &Rc<RefCell<AiGameBridge>> {
+        &self.bridge
+    }
+
+    /// Load scripts for a level. Called when transitioning to InGame.
+    /// Finds and loads .lua scripts from the scripts directory for all
+    /// non-player tribes.
+    pub fn load_level_scripts(
+        &mut self,
+        level: u32,
+        scripts_dir: &std::path::Path,
+        player_tribe: u8,
+    ) {
+        self.player_tribe = player_tribe;
+        self.scripts_loaded = [false; 4];
+
+        let scripts = crate::data::scripts::find_scripts_for_level(level, scripts_dir);
+        for (tribe, path) in scripts {
+            if tribe == player_tribe {
+                continue; // Skip player tribe
+            }
+            match crate::data::scripts::load_tribe_script(&path) {
+                Ok(source) => {
+                    // Wrap source in a tick function for this tribe.
+                    // The script body becomes the function body so it runs
+                    // each tick when called.
+                    let wrapped = format!(
+                        "function _tribe_{}_tick()\n{}\nend",
+                        tribe, source
+                    );
+                    match self.lua.load(&wrapped).set_name(path.to_string_lossy().as_ref()).exec() {
+                        Ok(()) => {
+                            self.scripts_loaded[tribe as usize] = true;
+                            self.tribe_states[tribe as usize].active = true;
+                            log::info!(
+                                "Loaded AI script for tribe {} from {}",
+                                tribe,
+                                path.display()
+                            );
+                        }
+                        Err(e) => {
+                            log::error!(
+                                "Failed to compile AI script for tribe {}: {}",
+                                tribe,
+                                e
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("No AI script for tribe {}: {}", tribe, e);
+                }
+            }
+        }
+    }
 }
 
 impl AiTick for AiSystem {
+    /// Mirrors AI_UpdateAllTribes @ 0x0041a7d0.
+    /// For each tribe 0-3: if not player and active and script loaded,
+    /// set current_tribe in bridge and execute the tribe's tick function.
     fn tick_update_ai(&mut self) {
-        // Empty stub -- wired in plan 06.
+        for tribe_idx in 0..4u8 {
+            if tribe_idx == self.player_tribe {
+                continue;
+            }
+            if !self.tribe_states[tribe_idx as usize].active {
+                continue;
+            }
+            if !self.scripts_loaded[tribe_idx as usize] {
+                continue;
+            }
+
+            // Set current tribe in bridge for PopScript functions
+            self.bridge.borrow_mut().current_tribe = tribe_idx;
+
+            // Reset EVERY IDs for deterministic counter keying
+            let _ = self.lua.load("_every_reset_ids()").exec();
+
+            // Execute the tribe's script tick function
+            let func_name = format!("_tribe_{}_tick", tribe_idx);
+            match self.lua.globals().get::<LuaFunction>(func_name.as_str()) {
+                Ok(func) => {
+                    if let Err(e) = func.call::<()>(()) {
+                        log::error!("AI script error for tribe {}: {}", tribe_idx, e);
+                    }
+                }
+                Err(_) => {
+                    // No per-tick function defined; script may have failed to load
+                }
+            }
+        }
     }
 }
 
@@ -234,7 +356,7 @@ mod tests {
     #[test]
     fn ai_system_implements_ai_tick() {
         let mut system = AiSystem::new().unwrap();
-        // Should be callable without panic
+        // Should be callable without panic (no scripts loaded = no-op)
         system.tick_update_ai();
     }
 
@@ -252,5 +374,151 @@ mod tests {
         assert!(system.is_player(0, 0));
         assert!(!system.is_player(1, 0));
         assert!(system.is_player(2, 2));
+    }
+
+    #[test]
+    fn tick_update_ai_no_scripts_no_panic() {
+        let mut system = AiSystem::new().unwrap();
+        // Activate tribes but don't load scripts
+        system.tribe_states[1].active = true;
+        system.tribe_states[2].active = true;
+        // Should not panic
+        system.tick_update_ai();
+    }
+
+    #[test]
+    fn load_level_scripts_skips_player_tribe() {
+        let mut system = AiSystem::new().unwrap();
+        let dir = std::env::temp_dir().join("pop3_test_load_skip_player");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Create scripts for all 4 tribes
+        for t in 0..4u8 {
+            let name = crate::data::scripts::script_filename(1, t);
+            std::fs::write(
+                dir.join(&name),
+                format!("-- tribe {} script\nSET_DEFENSE_RADIUS(100)\n", t),
+            )
+            .unwrap();
+        }
+
+        // Player is tribe 0
+        system.load_level_scripts(1, &dir, 0);
+
+        // Player tribe should NOT have script loaded
+        assert!(!system.scripts_loaded[0]);
+        // Other tribes should have scripts loaded
+        assert!(system.scripts_loaded[1]);
+        assert!(system.scripts_loaded[2]);
+        assert!(system.scripts_loaded[3]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tick_update_ai_skips_player_tribe() {
+        let mut system = AiSystem::new().unwrap();
+        let dir = std::env::temp_dir().join("pop3_test_skip_player");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Create script for tribe 0 and 1
+        for t in 0..2u8 {
+            let name = crate::data::scripts::script_filename(1, t);
+            std::fs::write(
+                dir.join(&name),
+                "SET_DEFENSE_RADIUS(999)\n",
+            )
+            .unwrap();
+        }
+
+        // Player is tribe 0 -- tribe 0's script should be skipped
+        system.load_level_scripts(1, &dir, 0);
+
+        // Reset bridge defence_radius
+        system.bridge.borrow_mut().defence_radius = [0; 4];
+
+        system.tick_update_ai();
+
+        let bridge = system.bridge.borrow();
+        // Tribe 0 is player, should NOT have been updated
+        assert_eq!(bridge.defence_radius[0], 0);
+        // Tribe 1 is AI, should have been updated
+        assert_eq!(bridge.defence_radius[1], 999);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tick_update_ai_skips_inactive_tribes() {
+        let mut system = AiSystem::new().unwrap();
+
+        // Manually mark tribe 1 as having a script loaded but not active
+        system.scripts_loaded[1] = true;
+        system.tribe_states[1].active = false;
+        system.player_tribe = 0;
+
+        // Define a tick function that would set something
+        system
+            .lua
+            .load("function _tribe_1_tick() SET_DEFENSE_RADIUS(500) end")
+            .exec()
+            .unwrap();
+
+        system.tick_update_ai();
+
+        // Should NOT have executed (tribe inactive)
+        let bridge = system.bridge.borrow();
+        assert_eq!(bridge.defence_radius[1], 0);
+    }
+
+    #[test]
+    fn tick_update_ai_sets_current_tribe_before_execution() {
+        let mut system = AiSystem::new().unwrap();
+        let dir = std::env::temp_dir().join("pop3_test_current_tribe");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Script for tribe 2 that reads MY_NUM_PEOPLE (depends on current_tribe)
+        let name = crate::data::scripts::script_filename(1, 2);
+        std::fs::write(
+            dir.join(&name),
+            "SET_DEFENSE_RADIUS(MY_NUM_PEOPLE())\n",
+        )
+        .unwrap();
+
+        system.load_level_scripts(1, &dir, 0);
+
+        // Set tribe 2's population to 42
+        system.bridge.borrow_mut().tribe_populations[2] = 42;
+
+        system.tick_update_ai();
+
+        // Defence radius for tribe 2 should be 42 (matching its population)
+        let bridge = system.bridge.borrow();
+        assert_eq!(bridge.defence_radius[2], 42);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn instruction_limit_aborts_runaway_script() {
+        let mut system = AiSystem::new().unwrap();
+
+        // Define a tick function with infinite loop
+        system
+            .lua
+            .load("function _tribe_1_tick() while true do end end")
+            .exec()
+            .unwrap();
+
+        system.scripts_loaded[1] = true;
+        system.tribe_states[1].active = true;
+        system.player_tribe = 0;
+
+        // Should not hang -- instruction limit will abort it
+        system.tick_update_ai();
+        // If we get here, the limit worked (the error is logged, not propagated)
     }
 }
