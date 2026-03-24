@@ -132,7 +132,7 @@ Plans:
 - [x] 05-06-PLAN.md -- Campaign progression and OBJECTIV.DAT parser
 - [x] 05-07-PLAN.md -- AI tick integration and script file loading
 - [x] 05-08-PLAN.md -- Full integration: wire menu, campaign, AI, save/load into App
-- [ ] 05-09-PLAN.md -- Gap closure: AI command dispatch, difficulty scaling, building counts
+- [x] 05-09-PLAN.md -- Gap closure: AI command dispatch, difficulty scaling, building counts
 - [ ] 05-10-PLAN.md -- Gap closure: AI script state save/load (variables + EVERY counters)
 
 ## Progress
