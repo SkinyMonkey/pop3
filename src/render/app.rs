@@ -826,6 +826,10 @@ impl GameEngine {
             }
             // Save/Load
             GameCommand::QuickSave => {
+                let (ai_vars, ai_every) = match &self.ai_system {
+                    Some(ai) => ai.extract_save_state(),
+                    None => (Vec::new(), Vec::new()),
+                };
                 let save = crate::engine::save::SaveFile {
                     version: crate::engine::save::SAVE_VERSION,
                     level_num: self.campaign_state.current_level,
@@ -837,8 +841,8 @@ impl GameEngine {
                     flags: self.game_world.flags.clone(),
                     rng: self.game_world.rng.clone(),
                     tribes: self.game_world.tribes.clone(),
-                    ai_script_variables: Vec::new(),
-                    ai_every_counters: Vec::new(),
+                    ai_script_variables: ai_vars,
+                    ai_every_counters: ai_every,
                 };
                 let save_dir = dirs::data_dir()
                     .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -866,6 +870,9 @@ impl GameEngine {
                         self.game_world.rng = save.rng;
                         self.game_world.tribes = save.tribes;
                         self.campaign_state.set_level(save.level_num);
+                        if let Some(ref mut ai) = self.ai_system {
+                            ai.restore_save_state(&save.ai_script_variables, &save.ai_every_counters);
+                        }
                         log::info!("Quickload complete");
                     }
                     Err(e) => log::error!("Quickload failed: {}", e),
