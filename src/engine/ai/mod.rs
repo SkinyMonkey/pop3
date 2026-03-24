@@ -1,6 +1,7 @@
 pub mod building_ai;
 pub mod constants;
 pub mod difficulty;
+pub mod dispatch;
 pub mod popscript;
 pub mod shaman_cmd;
 pub mod target;
@@ -11,7 +12,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use super::state::traits::AiTick;
+use building_ai::AiBuildingPlacement;
 use difficulty::DifficultyScaling;
+use shaman_cmd::ShamanCommandQueue;
 
 /// Data bridge between Rust game state and Lua PopScript functions.
 /// Populated from GameWorld before AI tick, written back after.
@@ -207,6 +210,12 @@ pub struct AiSystem {
 
     /// Per-tribe difficulty scaling (mana adjust, training costs).
     difficulty: [DifficultyScaling; 4],
+
+    /// Per-tribe shaman command queues (10 slots each).
+    shaman_commands: [ShamanCommandQueue; 4],
+
+    /// Per-tribe building placement state machines.
+    building_placement: [AiBuildingPlacement; 4],
 }
 
 impl AiSystem {
@@ -248,6 +257,8 @@ impl AiSystem {
                 DifficultyScaling::normal(),
                 DifficultyScaling::normal(),
             ],
+            shaman_commands: std::array::from_fn(|_| ShamanCommandQueue::new()),
+            building_placement: std::array::from_fn(|_| AiBuildingPlacement::new()),
         })
     }
 
@@ -348,6 +359,21 @@ impl AiSystem {
     /// Get mana adjustment factor for a tribe (100 = no change).
     pub fn mana_adjust(&self, tribe_idx: usize) -> u32 {
         self.difficulty[tribe_idx].mana_adjust
+    }
+
+    /// Get mutable access to a tribe's shaman command queue.
+    pub fn shaman_commands_mut(&mut self, tribe: u8) -> &mut ShamanCommandQueue {
+        &mut self.shaman_commands[tribe as usize]
+    }
+
+    /// Get mutable access to a tribe's building placement state.
+    pub fn building_placement_mut(&mut self, tribe: u8) -> &mut AiBuildingPlacement {
+        &mut self.building_placement[tribe as usize]
+    }
+
+    /// Get marker entries from bridge (for dispatch to resolve marker IDs).
+    pub fn marker_entries(&self) -> Vec<MarkerEntry> {
+        self.bridge.borrow().marker_entries.clone()
     }
 
     /// Populate the AiGameBridge with current game state before AI tick.

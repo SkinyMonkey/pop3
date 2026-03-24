@@ -214,6 +214,72 @@ impl UnitCoordinator {
         }
     }
 
+    /// Issue move orders to units of a specific tribe (for AI command dispatch).
+    /// Moves at most `max_units` alive Idle/Wander units of the given tribe toward `target`.
+    /// Returns the number of units actually moved.
+    pub fn order_move_tribe(&mut self, tribe_index: u8, target: WorldCoord, max_units: u32) -> u32 {
+        self.used_targets.clear();
+        let mut moved = 0u32;
+        for i in 0..self.units.len() {
+            if moved >= max_units {
+                break;
+            }
+            let unit = &self.units[i];
+            if !unit.alive || unit.tribe_index != tribe_index {
+                continue;
+            }
+            if unit.state != PersonState::Idle && unit.state != PersonState::Wander {
+                continue;
+            }
+            let result = state_goto(
+                &self.region_map,
+                &mut self.segment_pool,
+                &self.failure_cache,
+                &mut self.units[i].movement,
+                target,
+                &mut self.used_targets,
+            );
+            if result != RouteResult::NoRoute {
+                self.units[i].state = PersonState::GoToPoint;
+                self.units[i].target_unit = None;
+                self.units[i].movement.speed = person_type_defaults(self.units[i].subtype).speed;
+                moved += 1;
+            }
+        }
+        moved
+    }
+
+    /// Move the shaman unit (subtype 7) of a specific tribe toward a target.
+    /// Returns true if the shaman was found and moved.
+    pub fn order_move_shaman(&mut self, tribe_index: u8, target: WorldCoord) -> bool {
+        self.used_targets.clear();
+        for i in 0..self.units.len() {
+            let unit = &self.units[i];
+            if !unit.alive || unit.tribe_index != tribe_index || unit.subtype != 7 {
+                continue;
+            }
+            if unit.state != PersonState::Idle && unit.state != PersonState::Wander {
+                return false; // shaman busy
+            }
+            let result = state_goto(
+                &self.region_map,
+                &mut self.segment_pool,
+                &self.failure_cache,
+                &mut self.units[i].movement,
+                target,
+                &mut self.used_targets,
+            );
+            if result != RouteResult::NoRoute {
+                self.units[i].state = PersonState::GoToPoint;
+                self.units[i].target_unit = None;
+                self.units[i].movement.speed = person_type_defaults(self.units[i].subtype).speed;
+                return true;
+            }
+            return false;
+        }
+        false
+    }
+
     /// Advance all units by one tick: state machine + movement + combat + drowning.
     pub fn tick(&mut self) {
         let unit_count = self.units.len();
@@ -922,6 +988,12 @@ impl UnitCoordinator {
 
     pub fn region_map_mut(&mut self) -> &mut RegionMap {
         &mut self.region_map
+    }
+
+    /// Add a unit directly for testing purposes.
+    #[cfg(test)]
+    pub fn push_unit_for_test(&mut self, unit: Unit) {
+        self.units.push(unit);
     }
 }
 

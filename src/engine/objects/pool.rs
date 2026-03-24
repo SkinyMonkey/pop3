@@ -234,6 +234,24 @@ impl ObjectPool {
             None
         })
     }
+
+    /// Get mutable access to a specific building by handle.
+    /// Returns (header, building_data) if the handle points to an active building.
+    pub fn building_by_handle_mut(
+        &mut self,
+        handle: ObjectHandle,
+    ) -> Option<(&mut ObjectHeader, &mut BuildingData)> {
+        let idx = handle as usize;
+        if idx >= self.slots.len() {
+            return None;
+        }
+        if let PoolSlot::Occupied(ref mut obj) = self.slots[idx] {
+            if let GameObjectData::Building(ref mut bd) = obj.data {
+                return Some((&mut obj.header, bd));
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]
