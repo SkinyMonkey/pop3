@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 05-05-PLAN.md (AI behavior modules)
-last_updated: "2026-03-24T02:19:56.560Z"
+stopped_at: Completed 05-04-PLAN.md (PopScript function registry)
+last_updated: "2026-03-24T02:21:30.982Z"
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 27
-  completed_plans: 23
+  completed_plans: 24
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-17)
 ## Current Position
 
 Phase: 05 (ai-and-campaign) — EXECUTING
-Plan: 6 of 8
+Plan: 7 of 8
 
 ## Performance Metrics
 
@@ -61,6 +61,7 @@ Plan: 6 of 8
 | Phase 05 P02 | 3min | 2 tasks | 7 files |
 | Phase 05 P01 | 6min | 2 tasks | 4 files |
 | Phase 05 P05 | 4min | 2 tasks | 5 files |
+| Phase 05 P04 | 6min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -127,6 +128,8 @@ Recent decisions affecting current work:
 - [Phase 05-02]: Single quicksave slot via QUICKSAVE_FILENAME constant
 - [Phase 05]: Shared Lua VM instance with per-tribe TribeScriptState (per D-10)
 - [Phase 05-05]: Fixed plan test: exposed shaman bonus applies when defenders=0 (<3 threshold)
+- [Phase 05]: EVERY uses sequential ID instead of debug.getinfo due to mlua sandbox; _every_reset_ids() called per tick
+- [Phase 05]: AiGameBridge flat struct with per-tribe arrays, Rc<RefCell> shared between Lua closures and Rust
 
 ### Pending Todos
 
@@ -140,6 +143,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-24T02:19:56.558Z
-Stopped at: Completed 05-05-PLAN.md (AI behavior modules)
+Last session: 2026-03-24T02:21:30.980Z
+Stopped at: Completed 05-04-PLAN.md (PopScript function registry)
 Resume file: None
