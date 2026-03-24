@@ -17,13 +17,28 @@ pub struct LevelObjective {
 
 /// Parse OBJECTIV.DAT file contents into per-level objectives.
 /// File format: N records of 16 bytes each (4 x u32 little-endian).
-pub fn parse_objectives(_data: &[u8]) -> Result<Vec<LevelObjective>, ObjectivesError> {
-    todo!()
+pub fn parse_objectives(data: &[u8]) -> Result<Vec<LevelObjective>, ObjectivesError> {
+    if data.len() % 16 != 0 {
+        return Err(ObjectivesError::InvalidSize(data.len()));
+    }
+    let count = data.len() / 16;
+    let mut objectives = Vec::with_capacity(count);
+    for i in 0..count {
+        let offset = i * 16;
+        let flags = u32::from_le_bytes([data[offset], data[offset+1], data[offset+2], data[offset+3]]);
+        let param1 = u32::from_le_bytes([data[offset+4], data[offset+5], data[offset+6], data[offset+7]]);
+        let param2 = u32::from_le_bytes([data[offset+8], data[offset+9], data[offset+10], data[offset+11]]);
+        let param3 = u32::from_le_bytes([data[offset+12], data[offset+13], data[offset+14], data[offset+15]]);
+        objectives.push(LevelObjective { flags, param1, param2, param3 });
+    }
+    Ok(objectives)
 }
 
 /// Load objectives from file path.
-pub fn load_objectives(_path: &std::path::Path) -> Result<Vec<LevelObjective>, ObjectivesError> {
-    todo!()
+pub fn load_objectives(path: &std::path::Path) -> Result<Vec<LevelObjective>, ObjectivesError> {
+    let data = std::fs::read(path)
+        .map_err(|e| ObjectivesError::Io(e.to_string()))?;
+    parse_objectives(&data)
 }
 
 #[derive(Debug)]
