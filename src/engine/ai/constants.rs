@@ -37,11 +37,16 @@ pub fn register_constants(lua: &Lua) -> LuaResult<()> {
 /// Register PopScript module constants (299 constants).
 /// These are the INT_* constants used in script conditions and commands.
 fn register_popscript_constants(_lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
-    // === Tribe constants ===
+    // === Tribe constants (both INT_* and bare names for decompiled scripts) ===
     globals.set("INT_BLUE", 0i32)?;
     globals.set("INT_RED", 1i32)?;
     globals.set("INT_YELLOW", 2i32)?;
     globals.set("INT_GREEN", 3i32)?;
+    // Also register bare names for decompiled script compatibility
+    globals.set("BLUE", 0i32)?;
+    globals.set("RED", 1i32)?;
+    globals.set("YELLOW", 2i32)?;
+    globals.set("GREEN", 3i32)?;
 
     // === Spell type constants (ai_scripting.md codes 1184-1198) ===
     globals.set("INT_BURN", 1i32)?;
@@ -593,13 +598,13 @@ fn register_defines_constants(_lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
     globals.set("ATTR_VERSION_NUM", 54i32)?;
 
     // === Object/Entity flags (from docs) ===
-    globals.set("ABF_END_LIST", 0xFFFFi32)?;  // Array/buffer end marker
-    globals.set("AOF_END_LIST", 0xFFFFi32)?;  // Object list end marker
+    globals.set("ABF_END_LIST", 0xFFFFi32)?; // Array/buffer end marker
+    globals.set("AOF_END_LIST", 0xFFFFi32)?; // Object list end marker
     globals.set("AMBIENT_FLAG_HIGH_LAND", 0x01i32)?;
     globals.set("AMBIENT_FLAG_LOW_LAND", 0x02i32)?;
     globals.set("AMBIENT_FLAG_SPACE", 0x04i32)?;
     globals.set("AMBIENT_FLAG_WATER", 0x08i32)?;
-    globals.set("AOD2_FLAG_EXPLODE_PENDING", 0x01i32)?;  // Angel of Death 2
+    globals.set("AOD2_FLAG_EXPLODE_PENDING", 0x01i32)?; // Angel of Death 2
     globals.set("AOD2_FLAG_WHIRLWIND_AFFECTED", 0x02i32)?;
 
     // === Effect system constants (from docs) ===
@@ -620,7 +625,7 @@ fn register_defines_constants(_lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
     // === Map/Level constants (from docs) ===
     globals.set("AE_MAP_SIZE", 0i32)?;
     globals.set("AE_MAP_XZ_SIZE", 1i32)?;
-    globals.set("AE_MAX_NUM_THINGS", 2048i32)?;  // Max objects in level
+    globals.set("AE_MAX_NUM_THINGS", 2048i32)?; // Max objects in level
     globals.set("ADD_WALL", 0i32)?;
     globals.set("AIRSHIPSLIST", 0i32)?;
 
@@ -693,6 +698,41 @@ fn register_defines_constants(_lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
     globals.set("OFF", 0i32)?;
     globals.set("TRUE", 1i32)?;
     globals.set("FALSE", 0i32)?;
+    globals.set("DO", 1i32)?; // PopScript alias for ON/YES
+    globals.set("SET", 1i32)?; // PopScript alias for ON/YES (used as verb arg)
+    globals.set("INCREMENT", 1i32)?; // PopScript alias for increment operations
+    globals.set("IF", 1i32)?; // PopScript conditional arg
+
+    // === No-specific sentinel constants ===
+    globals.set("NO_SPECIFIC_SPELL", -1i32)?;
+    globals.set("NO_SPECIFIC_BUILDING", -1i32)?;
+    globals.set("NO_SPECIFIC_PERSON", -1i32)?;
+
+    // === Attack type aliases (original uses these names in scripts) ===
+    globals.set("ATTACK_MARKER", 5i32)?;
+    globals.set("ATTACK_BUILDING", 3i32)?;
+    globals.set("ATTACK_PERSON", 4i32)?;
+
+    // === Spell name constants used by SET_BUCKET_COUNT_FOR_SPELL ===
+    globals.set("CONVERT", 0i32)?;
+    globals.set("INSECT_PLAGUE", 1i32)?;
+    globals.set("INVISIBILITY", 2i32)?;
+    globals.set("SHIELD", 3i32)?;
+    globals.set("LAND_BRIDGE", 4i32)?;
+    globals.set("LIGHTNING_BOLT", 5i32)?;
+    globals.set("HYPNOTISM", 6i32)?;
+    globals.set("WHIRLWIND", 7i32)?;
+    globals.set("SWAMP", 8i32)?;
+    globals.set("FLATTEN", 9i32)?;
+    globals.set("EARTHQUAKE", 10i32)?;
+    globals.set("EROSION", 11i32)?;
+    globals.set("FIRESTORM", 12i32)?;
+    globals.set("ANGEL_OF_DEATH", 13i32)?;
+    globals.set("VOLCANO", 14i32)?;
+    globals.set("BLAST", 1i32)?; // Same as INT_BLAST
+
+    // === Additional PopScript action constants (verb aliases) ===
+    globals.set("COUNT_PEOPLE_IN_HOUSES", 0i32)?; // Action verb constant
 
     // === Game mode constants ===
     globals.set("MODE_SINGLEPLAYER", 0i32)?;
@@ -785,7 +825,11 @@ fn register_defines_constants(_lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
     }
 
     // Area radius constants
-    for r in [64, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096].iter() {
+    for r in [
+        64, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096,
+    ]
+    .iter()
+    {
         let name = format!("RADIUS_{}", r);
         globals.set(name.as_str(), *r)?;
     }
@@ -823,11 +867,27 @@ fn register_defines_constants(_lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
     // === Per-tribe spell charge states (4 tribes x 21 spells = 84 constants) ===
     let tribe_prefixes = ["BLUE", "RED", "YELLOW", "GREEN"];
     let spell_names = [
-        "BURN", "BLAST", "LIGHTNING", "TORNADO", "SWARM",
-        "INVISIBILITY", "HYPNOTISM", "FIRESTORM", "GHOST_ARMY",
-        "EROSION", "SWAMP", "LAND_BRIDGE", "ANGEL_OF_DEATH",
-        "EARTHQUAKE", "FLATTEN", "VOLCANO", "CONVERT",
-        "ARMAGEDDON", "SHIELD", "BLOODLUST", "TELEPORT",
+        "BURN",
+        "BLAST",
+        "LIGHTNING",
+        "TORNADO",
+        "SWARM",
+        "INVISIBILITY",
+        "HYPNOTISM",
+        "FIRESTORM",
+        "GHOST_ARMY",
+        "EROSION",
+        "SWAMP",
+        "LAND_BRIDGE",
+        "ANGEL_OF_DEATH",
+        "EARTHQUAKE",
+        "FLATTEN",
+        "VOLCANO",
+        "CONVERT",
+        "ARMAGEDDON",
+        "SHIELD",
+        "BLOODLUST",
+        "TELEPORT",
     ];
     for (t, tribe) in tribe_prefixes.iter().enumerate() {
         for (s, spell) in spell_names.iter().enumerate() {
@@ -859,6 +919,9 @@ fn register_function_stubs(lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
         "ATTACK",
         "ATTACK_MARKER",
         "DEFEND_SHAMEN",
+        "DEFEND",
+        "DEFEND_BASE",
+        "AUTO_ATTACK",
         "SEND_ALL_PEOPLE_TO_MARKER",
         "SEND_BLUE_PEOPLE_TO_MARKER",
         "SEND_RED_PEOPLE_TO_MARKER",
@@ -867,7 +930,6 @@ fn register_function_stubs(lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
         "SEND_GHOSTS_TO_MARKER",
         "SEND_SHAMAN_DEFENDERS_HOME",
         "SET_ATTACK_VARIABLE",
-        "SET_DEFENSE_RADIUS",
         "SET_BASE_MARKER",
         "RESET_BASE_MARKER",
         "SET_BASE_RADIUS",
@@ -875,6 +937,7 @@ fn register_function_stubs(lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
         "MARKER_ENTRIES",
         // === Building commands ===
         "BUILD_AT",
+        "CONSTRUCT_BUILDING",
         "SET_DRUM_TOWER_POS",
         "SET_BUILDING_DIRECTION",
         "SET_BOAT_HOUSE_WITH_BOAT",
@@ -882,12 +945,16 @@ fn register_function_stubs(lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
         "IS_BUILDING_NEAR",
         // === Training/People commands ===
         "TRAIN_PEOPLE_NOW",
+        "TRAIN_PEOPLE",
         "CONVERT_AT_MARKER",
         "PREACH_AT_MARKER",
         "SEND_PEOPLE_TO_MARKER",
+        "SEND_GHOSTS",
         "COUNT_PEOPLE_IN_HOUSES",
+        "COUNT_PEOPLE_IN_MARKER",
         "CLEAR_STANDING_PEOPLE",
         "DESELECT_ALL_PEOPLE",
+        "HOUSE_A_PERSON",
         "PRAY_AT_HEAD",
         "SET_REINCARNATION",
         "SET_BUCKET_USAGE",
@@ -896,10 +963,18 @@ fn register_function_stubs(lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
         "I_KILL_CONVERTABLE",
         "CLEAR_HOUSE_INFO_FLAG",
         "FIX_WILD_IN_AREA",
+        "BRING_NEW_PEOPLE_BACK",
+        "FETCH_FAR_VEHICLE",
+        "FETCH_LOST_PEOPLE",
+        "FETCH_LOST_VEHICLE",
+        "FETCH_WOOD",
         // === Spell commands ===
         "SPELL_AT_MARKER",
         "SPELL_AT_THING",
+        "SPELL_DEFENSE",
+        "SHAMAN_GET_WILDS",
         "SET_SPELL_ENTRY",
+        "SET_BUCKET_COUNT_FOR_SPELL",
         "GIVE_MANA_TO_PLAYER",
         // === State/Control commands ===
         "STATE_SET",
@@ -913,6 +988,8 @@ fn register_function_stubs(lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
         "TRIGGER_LEVEL_LOST",
         "TURN_PUSH_ON",
         "TURN_PUSH_OFF",
+        "TURN_PUSH",
+        "ENABLE_USER_INPUTS",
         // === Targeting commands ===
         "TARGET_SHAMAN",
         "TARGET_MEDICINE_MAN",
@@ -932,13 +1009,16 @@ fn register_function_stubs(lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
         "TARGET_YELLOW_SUPER_WARRIORS",
         "TARGET_GREEN_SUPER_WARRIORS",
         "DONT_TARGET_SHAMAN",
-        // === Query commands ===
+        // === Query commands (parameterized — called as functions with arguments) ===
         "IS_SHAMAN_AVAILABLE_FOR_ATTACK",
         "IS_SHAMAN_IN_AREA",
         "IS_PRISONER_LEFT",
         "NAV_CHECK",
         "GET_HEAD_TRIGGER_COUNT",
         "GET_HEIGHT_AT_POS",
+        "GET_NUM_ONE_OFF_SPELLS",
+        "GET_SPELLS_CAST",
+        "DELAY_MAIN_DRUM_TOWER",
         "THING_COUNT_IN_AREA",
         // === Camera/Flyby commands ===
         "CAMERA_ROTATION",
@@ -973,70 +1053,6 @@ fn register_function_stubs(lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
         "SET_NO_YELLOW",
         // === Boat patrol ===
         "BOAT_PATROL",
-        // === INT_* read-access functions (game state queries) ===
-        "MY_NUM_PEOPLE",
-        "BLUE_PEOPLE",
-        "RED_PEOPLE",
-        "YELLOW_PEOPLE",
-        "GREEN_PEOPLE",
-        "MY_NUM_KILLED_BY_BLUE",
-        "MY_NUM_KILLED_BY_RED",
-        "MY_NUM_KILLED_BY_YELLOW",
-        "MY_NUM_KILLED_BY_GREEN",
-        "MY_NUM_BRAVES",
-        "MY_NUM_WARRIORS",
-        "MY_NUM_PREACHERS",
-        "MY_NUM_SPIES",
-        "MY_NUM_SUPER_WARRIORS",
-        "BLUE_BRAVES",
-        "BLUE_WARRIORS",
-        "BLUE_PREACHERS",
-        "BLUE_SPIES",
-        "BLUE_SUPER_WARRIORS",
-        "RED_BRAVES",
-        "RED_WARRIORS",
-        "RED_PREACHERS",
-        "RED_SPIES",
-        "RED_SUPER_WARRIORS",
-        "YELLOW_BRAVES",
-        "YELLOW_WARRIORS",
-        "YELLOW_PREACHERS",
-        "YELLOW_SPIES",
-        "YELLOW_SUPER_WARRIORS",
-        "GREEN_BRAVES",
-        "GREEN_WARRIORS",
-        "GREEN_PREACHERS",
-        "GREEN_SPIES",
-        "GREEN_SUPER_WARRIORS",
-        "MY_MANA",
-        "MY_SPELL_BURN_COST",
-        "MY_SPELL_BLAST_COST",
-        "MY_SPELL_LIGHTNING_COST",
-        "GAME_TURN",
-        "MY_NUM_SMALL_HUT",
-        "MY_NUM_MEDIUM_HUT",
-        "MY_NUM_LARGE_HUT",
-        "MY_NUM_DRUM_TOWER",
-        "MY_NUM_TEMPLE",
-        "MY_NUM_SPY_TRAIN",
-        "MY_NUM_WARRIOR_TRAIN",
-        "MY_NUM_SUPER_TRAIN",
-        "MY_NUM_BOATS",
-        "MY_NUM_AIRSHIPS",
-        "MY_NUM_VEHICLES",
-        "IS_SHAMAN_AVAILABLE",
-        "IS_SHAMAN_ALIVE",
-        "MY_SHAMAN_LIVES",
-        "MY_REINCARNATION_TIMER",
-        "WILD_PEOPLE",
-        "MY_WOOD_COUNT",
-        "MY_ATTACK_ARMY_COUNT",
-        "MY_DEFEND_ARMY_COUNT",
-        "BLUE_MANA",
-        "RED_MANA",
-        "YELLOW_MANA",
-        "GREEN_MANA",
-        "RANDOM_100",
     ];
 
     for name in &function_names {
@@ -1176,7 +1192,12 @@ mod tests {
     fn test_attr_constants() {
         let lua = setup_lua();
         assert_eq!(lua.globals().get::<i32>("ATTR_PREF_SPY_TRAINS").unwrap(), 1);
-        assert_eq!(lua.globals().get::<i32>("ATTR_MAX_BUILDINGS_ON_GO").unwrap(), 9);
+        assert_eq!(
+            lua.globals()
+                .get::<i32>("ATTR_MAX_BUILDINGS_ON_GO")
+                .unwrap(),
+            9
+        );
         assert_eq!(lua.globals().get::<i32>("ATTR_SPELL_DELAY").unwrap(), 42);
     }
 
@@ -1205,12 +1226,23 @@ mod tests {
     #[test]
     fn test_attribute_flag_constants() {
         let lua = setup_lua();
-        assert_eq!(lua.globals().get::<i32>("ATTR_AWAY_MEDICINE_MAN").unwrap(), 48);
+        assert_eq!(
+            lua.globals().get::<i32>("ATTR_AWAY_MEDICINE_MAN").unwrap(),
+            48
+        );
         assert_eq!(lua.globals().get::<i32>("ATTR_EXTENSION").unwrap(), 49);
         assert_eq!(lua.globals().get::<i32>("ATTR_INFO_EXTENSION").unwrap(), 50);
         assert_eq!(lua.globals().get::<i32>("ATTR_PREFIX").unwrap(), 51);
-        assert_eq!(lua.globals().get::<i32>("ATTR_PREF_BALLOON_DRIVERS").unwrap(), 52);
-        assert_eq!(lua.globals().get::<i32>("ATTR_PREF_BOAT_DRIVERS").unwrap(), 53);
+        assert_eq!(
+            lua.globals()
+                .get::<i32>("ATTR_PREF_BALLOON_DRIVERS")
+                .unwrap(),
+            52
+        );
+        assert_eq!(
+            lua.globals().get::<i32>("ATTR_PREF_BOAT_DRIVERS").unwrap(),
+            53
+        );
         assert_eq!(lua.globals().get::<i32>("ATTR_VERSION_NUM").unwrap(), 54);
     }
 
@@ -1219,12 +1251,34 @@ mod tests {
         let lua = setup_lua();
         assert_eq!(lua.globals().get::<i32>("ABF_END_LIST").unwrap(), 0xFFFF);
         assert_eq!(lua.globals().get::<i32>("AOF_END_LIST").unwrap(), 0xFFFF);
-        assert_eq!(lua.globals().get::<i32>("AMBIENT_FLAG_HIGH_LAND").unwrap(), 0x01);
-        assert_eq!(lua.globals().get::<i32>("AMBIENT_FLAG_LOW_LAND").unwrap(), 0x02);
-        assert_eq!(lua.globals().get::<i32>("AMBIENT_FLAG_SPACE").unwrap(), 0x04);
-        assert_eq!(lua.globals().get::<i32>("AMBIENT_FLAG_WATER").unwrap(), 0x08);
-        assert_eq!(lua.globals().get::<i32>("AOD2_FLAG_EXPLODE_PENDING").unwrap(), 0x01);
-        assert_eq!(lua.globals().get::<i32>("AOD2_FLAG_WHIRLWIND_AFFECTED").unwrap(), 0x02);
+        assert_eq!(
+            lua.globals().get::<i32>("AMBIENT_FLAG_HIGH_LAND").unwrap(),
+            0x01
+        );
+        assert_eq!(
+            lua.globals().get::<i32>("AMBIENT_FLAG_LOW_LAND").unwrap(),
+            0x02
+        );
+        assert_eq!(
+            lua.globals().get::<i32>("AMBIENT_FLAG_SPACE").unwrap(),
+            0x04
+        );
+        assert_eq!(
+            lua.globals().get::<i32>("AMBIENT_FLAG_WATER").unwrap(),
+            0x08
+        );
+        assert_eq!(
+            lua.globals()
+                .get::<i32>("AOD2_FLAG_EXPLODE_PENDING")
+                .unwrap(),
+            0x01
+        );
+        assert_eq!(
+            lua.globals()
+                .get::<i32>("AOD2_FLAG_WHIRLWIND_AFFECTED")
+                .unwrap(),
+            0x02
+        );
     }
 
     #[test]
@@ -1232,7 +1286,10 @@ mod tests {
         let lua = setup_lua();
         assert_eq!(lua.globals().get::<i32>("AFFECT_ALTITUDE").unwrap(), 0x01);
         assert_eq!(lua.globals().get::<i32>("AFFECT_FIRE").unwrap(), 0x02);
-        assert_eq!(lua.globals().get::<i32>("AFFECT_RAISE_LOWER").unwrap(), 0x04);
+        assert_eq!(
+            lua.globals().get::<i32>("AFFECT_RAISE_LOWER").unwrap(),
+            0x04
+        );
     }
 
     #[test]
@@ -1280,7 +1337,12 @@ mod tests {
     fn test_armed_state_constants() {
         let lua = setup_lua();
         assert_eq!(lua.globals().get::<i32>("ARMA_SS_FIGHTING").unwrap(), 0);
-        assert_eq!(lua.globals().get::<i32>("ARMA_SS_PREPARE_FIGHTERS").unwrap(), 1);
+        assert_eq!(
+            lua.globals()
+                .get::<i32>("ARMA_SS_PREPARE_FIGHTERS")
+                .unwrap(),
+            1
+        );
         assert_eq!(lua.globals().get::<i32>("ARMA_SS_PREPARE_LAND").unwrap(), 2);
     }
 }

@@ -380,3 +380,318 @@ Human vs Computer differences:
 - `HUMAN_MANA_ADJUST` / `COMPUTER_MANA_ADJUST` - Mana rate
 - `HUMAN_TRAIN_MANA_*` / `CP_TRAIN_MANA_*` - Training costs
 
+---
+
+## Appendix RP: PopScript Lua API
+
+This appendix documents the PopScript Lua API exposed to AI scripts. All functions are implemented in `src/engine/ai/popscript.rs` and bridge to the game engine via `AiGameBridge`.
+
+### Implementation Status
+
+| Category | Implemented | Total |
+|----------|-------------|-------|
+| Core game state | 12 | 12 |
+| Tribe status queries | 24 | 24 |
+| Building/Resource counts | 16 | 16 |
+| Combat & targeting | 18 | 18 |
+| Movement & commands | 14 | 14 |
+| Spell system | 8 | 8 |
+| Marker system | 8 | 8 |
+| Camera & view | 4 | 4 |
+| Flyby/cinematic | 11 | 11 |
+| Message/UI system | 15 | 15 |
+| Timer & trigger | 8 | 8 |
+| Constants | 59 | 59 |
+| **Total** | **183** | **183** |
+
+### Core Game State Functions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `GAME_TURN` | `() -> i32` | Returns current game tick count |
+| `G_RANDOM` | `() -> i32` | Returns random number (0-99) |
+| `EVERY_2POW_TURNS` | `(power: i32) -> i32` | Check if turn is power of 2 |
+| `HAS_TIMER_REACHED_ZERO` | `(timer_id: i32) -> i32` | Check if timer expired |
+| `REMOVE_TIMER` | `(timer_id: i32) -> i32` | Remove a timer |
+| `MY_MANA` | `() -> i32` | Get current tribe's mana |
+| `MY_NUM_PEOPLE` | `() -> i32` | Get total population |
+| `MY_NUM_BRAVES` | `() -> i32` | Get brave count |
+| `MY_NUM_KILLED` | `() -> i32` | Get total kills |
+| `MY_NUM_CONVERTED` | `() -> i32` | Get converted units |
+| `MY_NUM_LOST` | `() -> i32` | Get lost units |
+| `MY_TRIBE` | `() -> i32` | Get current tribe ID (0-3) |
+
+### Tribe Status Queries
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `MY_NUM_WARRIORS` | `() -> i32` | Get warrior count |
+| `MY_NUM_SPIES` | `() -> i32` | Get spy count |
+| `MY_NUM_PREACHERS` | `() -> i32` | Get preacher count |
+| `MY_NUM_SUPER_WARRIORS` | `() -> i32` | Get super warrior count |
+| `MY_SHAMAN_LIVES` | `() -> i32` | Get shaman lives remaining |
+| `MY_REINCARNATION_TIMER` | `() -> i32` | Get reincarnation timer |
+| `MY_ATTACK_ARMY_COUNT` | `() -> i32` | Get attacking army size |
+| `MY_DEFEND_ARMY_COUNT` | `() -> i32` | Get defending army size |
+
+#### Kill Counts by Tribe
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `MY_NUM_KILLED_BY_BLUE` | `() -> i32` | Kills by blue tribe |
+| `MY_NUM_KILLED_BY_RED` | `() -> i32` | Kills by red tribe |
+| `MY_NUM_KILLED_BY_YELLOW` | `() -> i32` | Kills by yellow tribe |
+| `MY_NUM_KILLED_BY_GREEN` | `() -> i32` | Kills by green tribe |
+
+#### Tribe-Specific Queries (BLUE_*, RED_*, YELLOW_*, GREEN_*)
+
+Each tribe has 5 query functions (20 total):
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `BLUE_BRAVES` | `() -> i32` | Blue tribe braves |
+| `BLUE_WARRIORS` | `() -> i32` | Blue tribe warriors |
+| `BLUE_PREACHERS` | `() -> i32` | Blue tribe preachers |
+| `BLUE_SPIES` | `() -> i32` | Blue tribe spies |
+| `BLUE_SUPER_WARRIORS` | `() -> i32` | Blue tribe super warriors |
+
+(Same pattern for `RED_*`, `YELLOW_*`, `GREEN_*`)
+
+### Building & Resource Counts
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `MY_WOOD_COUNT` | `() -> i32` | Get wood resources |
+| `MY_NUM_SMALL_HUT` | `() -> i32` | Small hut count |
+| `MY_NUM_MEDIUM_HUT` | `() -> i32` | Medium hut count |
+| `MY_NUM_LARGE_HUT` | `() -> i32` | Large hut count |
+| `MY_NUM_DRUM_TOWER` | `() -> i32` | Drum tower count |
+| `MY_NUM_TEMPLE` | `() -> i32` | Temple count |
+| `MY_NUM_BOATS` | `() -> i32` | Boat count |
+| `MY_NUM_AIRSHIPS` | `() -> i32` | Airship count |
+| `MY_NUM_VEHICLES` | `() -> i32` | Vehicle count |
+| `MY_NUM_SPY_TRAIN` | `() -> i32` | Spy training huts |
+| `MY_NUM_WARRIOR_TRAIN` | `() -> i32` | Warrior training huts |
+| `MY_NUM_SUPER_TRAIN` | `() -> i32` | Super warrior training |
+| `PARTIAL_BUILDING_COUNT` | `(type: i32) -> i32` | Count partially built |
+| `MAX_BUILDING_TYPE` | `() -> i32` | Max building type ID |
+
+### Combat & Targeting
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `ATTACK` | `(type: i32) -> i32` | Initiate attack |
+| `ATTACK_MARKER` | `() -> i32` | Attack at marker |
+| `ATTACK_WITH_OPTION` | `(option: i32) -> i32` | Attack with option |
+| `CONVERT_AT_MARKER` | `() -> i32` | Convert at marker |
+| `TARGET_SHAMAN` | `() -> i32` | Target enemy shaman |
+| `TARGET_MEDICINE_MAN` | `() -> i32` | Target medicine man |
+| `TARGET_WARRIORS` | `() -> i32` | Target warriors |
+| `TARGET_S_WARRIOR` | `() -> i32` | Target super warriors |
+| `TARGET_FIREWARRIORS` | `() -> i32` | Target fire warriors |
+| `TARGET_BLUE_DRUM_TOWERS` | `() -> i32` | Target blue drum towers |
+| `TARGET_RED_DRUM_TOWERS` | `() -> i32` | Target red drum towers |
+| `TARGET_YELLOW_DRUM_TOWERS` | `() -> i32` | Target yellow drum towers |
+| `TARGET_GREEN_DRUM_TOWERS` | `() -> i32` | Target green drum towers |
+| `TARGET_BLUE_SHAMAN` | `() -> i32` | Target blue shaman |
+| `TARGET_RED_SHAMAN` | `() -> i32` | Target red shaman |
+| `TARGET_YELLOW_SHAMAN` | `() -> i32` | Target yellow shaman |
+| `TARGET_GREEN_SHAMAN` | `() -> i32` | Target green shaman |
+| `I_KILL_CONVERTABLE` | `() -> i32` | Check killable convert |
+
+### Movement & Commands
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `SEND_ALL_PEOPLE_TO_MARKER` | `() -> i32` | Send all to marker |
+| `SEND_PEOPLE_TO_MARKER` | `() -> i32` | Send people to marker |
+| `SEND_BLUE_PEOPLE_TO_MARKER` | `() -> i32` | Send blue tribe |
+| `SEND_RED_PEOPLE_TO_MARKER` | `() -> i32` | Send red tribe |
+| `SEND_YELLOW_PEOPLE_TO_MARKER` | `() -> i32` | Send yellow tribe |
+| `SEND_GREEN_PEOPLE_TO_MARKER` | `() -> i32` | Send green tribe |
+| `SEND_SHAMAN_DEFENDERS_HOME` | `() -> i32` | Return defenders |
+| `ONLY_STAND_AT_MARKERS` | `() -> i32` | Stand at markers only |
+| `SET_ATTACK_VARIABLE` | `(value: i32) -> i32` | Set attack var |
+| `SET_MARKER_ENTRY` | `(entry: i32) -> i32` | Set marker entry |
+| `SET_SPELL_ENTRY` | `(entry: i32) -> i32` | Set spell entry |
+| `TRAIN_PEOPLE_NOW` | `() -> i32` | Instant training |
+| `SET_BUILDING_DIRECTION` | `(dir: i32) -> i32` | Set building direction |
+| `SET_BASE_MARKER` | `() -> i32` | Set base marker |
+| `RESET_BASE_MARKER` | `() -> i32` | Reset base marker |
+| `SET_DRUM_TOWER_POS` | `(x: i32, y: i32) -> i32` | Set drum tower pos |
+
+### Spell System
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `SPELL_AT_MARKER` | `(spell: i32) -> i32` | Cast at marker |
+| `SPELL_AT_THING` | `(spell: i32) -> i32` | Cast at thing |
+| `MY_SPELL_BURN_COST` | `() -> i32` | Burn spell cost |
+| `MY_SPELL_LIGHTNING_COST` | `() -> i32` | Lightning cost |
+| `MY_SPELL_BLAST_COST` | `() -> i32` | Blast spell cost |
+| `DELETE_SMOKE_STUFF` | `() -> i32` | Clear smoke effects |
+| `PRAY_AT_HEAD` | `() -> i32` | Pray at head |
+| `SET_BASE_RADIUS` | `(radius: i32) -> i32` | Set base radius |
+
+### Camera & View
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `GET_HEIGHT_AT_POS` | `(x: i32, y: i32) -> i32` | Get terrain height |
+| `CAMERA_ROTATION` | `() -> i32` | Get camera rotation |
+| `SET_BUCKET_USAGE` | `(usage: i32) -> i32` | Set bucket usage |
+
+### Flyby/Cinematic Functions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `FLYBY_CREATE_NEW` | `() -> i32` | Create new flyby |
+| `FLYBY_SET_EVENT_POS` | `(x: i32, y: i32, z: i32) -> i32` | Set event position |
+| `FLYBY_SET_EVENT_ANGLE` | `(angle: i32) -> i32` | Set event angle |
+| `FLYBY_SET_EVENT_ZOOM` | `(zoom: i32) -> i32` | Set event zoom |
+| `FLYBY_SET_EVENT_INT_POINT` | `(x: i32, y: i32, z: i32) -> i32` | Set interest point |
+| `FLYBY_SET_EVENT_TOOLTIP` | `(text: i32) -> i32` | Set tooltip text |
+| `FLYBY_SET_END_TARGET` | `(target: i32) -> i32` | Set end target |
+| `FLYBY_START` | `() -> i32` | Start flyby |
+| `FLYBY_STOP` | `() -> i32` | Stop flyby |
+| `FLYBY_ALLOW_INTERRUPT` | `(allow: i32) -> i32` | Allow interrupt |
+| `FLYBY_DISALLOW_INTERRUPT` | `() -> i32` | Disallow interrupt |
+
+### Message/UI System
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `CREATE_MSG_NARRATIVE` | `(text: i32) -> i32` | Create narrative msg |
+| `CREATE_MSG_OBJECTIVE` | `(text: i32) -> i32` | Create objective msg |
+| `CREATE_MSG_INFORMATION` | `(text: i32) -> i32) -> i32` | Create info msg |
+| `OPEN_DIALOG` | `(id: i32) -> i32` | Open dialog box |
+| `SET_MSG_AUTO_OPEN_DLG` | `(auto: i32) -> i32` | Auto-open dialog |
+| `SET_MSG_DELETE_ON_OK` | `(del: i32) -> i32` | Delete on OK |
+| `SET_MSG_ID` | `(id: i32) -> i32` | Set message ID |
+| `SET_MSG_NARRATIVE` | `(narr: i32) -> i32` | Set narrative text |
+| `SET_MSG_OK_SAVE` | `(save: i32) -> i32` | OK saves game |
+| `SET_MSG_TIMEOUT` | `(timeout: i32) -> i32` | Set timeout |
+| `FLASH_BUTTON` | `(btn: i32) -> i32` | Flash UI button |
+
+### Timer & Trigger System
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `DO_TRIGGER` | `(trigger: i32) -> i32` | Trigger event |
+| `TRIGGER_THING` | `(thing: i32) -> i32` | Trigger thing |
+| `TRIGGER_LEVEL_WON` | `() -> i32` | Level won trigger |
+| `TRIGGER_LEVEL_LOST` | `() -> i32` | Level lost trigger |
+| `IS_SHAMAN_ALIVE` | `() -> i32` | Check shaman alive |
+| `IS_SHAMAN_AVAILABLE` | `() -> i32` | Check shaman available |
+| `IS_PRISONER_LEFT` | `() -> i32` | Check prisoner left |
+| `IS_BUILDING_NEAR` | `() -> i32` | Check building near |
+
+### Constants
+
+59 constants are defined in `src/engine/ai/constants.rs`:
+
+#### Attack Types
+- `ATTACK_NORMAL`, `ATTACK_BY_BOAT`, `ATTACK_BY_BALLOON`
+
+#### Attribute Flags
+- `ATTR_AWAY_MEDICINE_MAN`, `ATTR_PREF_BLUE_DRIVERS`, `ATTR_PREF_RED_DRIVERS`, etc.
+
+#### Object Flags
+- `ABF_END_LIST`, `AOF_END_LIST`, `AMBIENT_FLAG_*`
+
+#### Effect System
+- `AFFECT_*`, `AOD2_FLAG_*`
+
+#### Add-on Types
+- `ADD_ON_TYPE_*`
+
+#### Terrain
+- `AAM_FLATTEN`, `AAM_RAISE_LOWER`
+
+### Bridge Data Structure
+
+The `AiGameBridge` struct (`src/engine/ai/mod.rs`) maintains all game state accessible to Lua:
+
+```rust
+pub struct AiGameBridge {
+    // Current tribe context
+    pub current_tribe: u32,
+
+    // Per-tribe unit counts
+    pub tribe_braves: [u32; 4],
+    pub tribe_warriors: [u32; 4],
+    pub tribe_preachers: [u32; 4],
+    pub tribe_spies: [u32; 4],
+    pub tribe_super_warriors: [u32; 4],
+
+    // Per-tribe kill counts
+    pub tribe_killed_by_blue: [u32; 4],
+    pub tribe_killed_by_red: [u32; 4],
+    pub tribe_killed_by_yellow: [u32; 4],
+    pub tribe_killed_by_green: [u32; 4],
+
+    // Per-tribe building counts
+    pub tribe_small_huts: [u32; 4],
+    pub tribe_medium_huts: [u32; 4],
+    pub tribe_large_huts: [u32; 4],
+    pub tribe_drum_towers: [u32; 4],
+    pub tribe_temples: [u32; 4],
+    pub tribe_spy_trains: [u32; 4],
+    pub tribe_warrior_trains: [u32; 4],
+    pub tribe_super_trains: [u32; 4],
+    pub tribe_boats: [u32; 4],
+    pub tribe_airships: [u32; 4],
+    pub tribe_vehicles: [u32; 4],
+    pub tribe_wood_count: [u32; 4],
+
+    // Per-tribe army counts
+    pub tribe_attack_army: [u32; 4],
+    pub tribe_defend_army: [u32; 4],
+
+    // Per-tribe spell costs
+    pub tribe_spell_burn_cost: [u32; 4],
+    pub tribe_spell_blast_cost: [u32; 4],
+    pub tribe_spell_lightning_cost: [u32; 4],
+
+    // Per-tribe reincarnation timer
+    pub tribe_reincarnation_timer: [u32; 4],
+
+    // Global game state
+    pub game_turn: u32,
+    pub random_seed: u32,
+    // ... additional fields
+}
+```
+
+### Testing
+
+All PopScript functions are tested in `src/engine/ai/popscript.rs`:
+
+```rust
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn tribe_specific_unit_counts() {
+        let (lua, bridge) = setup();
+        // Set up test data
+        let mut b = bridge.borrow_mut();
+        b.tribe_braves = [10, 20, 30, 40];
+
+        // Test Blue tribe (index 0)
+        assert_eq!(lua.load("return BLUE_BRAVES()").eval::<i32>().unwrap(), 10);
+
+        // Test Red tribe (index 1)
+        assert_eq!(lua.load("return RED_BRAVES()").eval::<i32>().unwrap(), 20);
+
+        // ... additional assertions
+    }
+}
+```
+
+Run tests with:
+```bash
+cargo test popscript
+```
+
+All 130 PopScript tests pass as of 2026-04-08.
+

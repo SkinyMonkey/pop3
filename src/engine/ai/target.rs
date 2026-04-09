@@ -46,7 +46,8 @@ pub fn score_person_target(subtype: u8, nearby_defenders: u32, distance: i32) ->
         SUBTYPE_SPY => SCORE_SPY,
         _ => 0,
     };
-    let bonus = if subtype == SUBTYPE_SHAMAN && nearby_defenders < EXPOSED_SHAMAN_DEFENDER_THRESHOLD {
+    let bonus = if subtype == SUBTYPE_SHAMAN && nearby_defenders < EXPOSED_SHAMAN_DEFENDER_THRESHOLD
+    {
         SCORE_EXPOSED_SHAMAN_BONUS
     } else {
         0
@@ -66,17 +67,20 @@ pub fn score_building_target(building_subtype: u8, distance: i32) -> i32 {
 }
 
 pub fn assess_threat(unit_counts: &[(u8, u32)]) -> i32 {
-    unit_counts.iter().map(|(subtype, count)| {
-        let weight = match *subtype {
-            SUBTYPE_SHAMAN => THREAT_SHAMAN,
-            SUBTYPE_SUPER_WARRIOR => THREAT_SUPER_WARRIOR,
-            SUBTYPE_PREACHER => THREAT_PREACHER,
-            SUBTYPE_WARRIOR => THREAT_WARRIOR,
-            SUBTYPE_SPY => THREAT_SPY,
-            _ => 0,
-        };
-        weight * (*count as i32)
-    }).sum()
+    unit_counts
+        .iter()
+        .map(|(subtype, count)| {
+            let weight = match *subtype {
+                SUBTYPE_SHAMAN => THREAT_SHAMAN,
+                SUBTYPE_SUPER_WARRIOR => THREAT_SUPER_WARRIOR,
+                SUBTYPE_PREACHER => THREAT_PREACHER,
+                SUBTYPE_WARRIOR => THREAT_WARRIOR,
+                SUBTYPE_SPY => THREAT_SPY,
+                _ => 0,
+            };
+            weight * (*count as i32)
+        })
+        .sum()
 }
 
 #[cfg(test)]

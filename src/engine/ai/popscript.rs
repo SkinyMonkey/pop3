@@ -4,6 +4,1110 @@ use std::rc::Rc;
 
 use super::AiGameBridge;
 
+// ---------------------------------------------------------------------------
+// Query registry: all PopScript INT_* opcodes accessible as both variables
+// and function calls in Lua. Single source of truth for query names.
+// ---------------------------------------------------------------------------
+
+/// A PopScript query variable that reads game state.
+///
+/// In the original VM, these are `AI_EvaluateScriptValue` Type 2 values:
+/// stack pushes, not function calls. The decompiler emits them as bare
+/// identifiers (e.g. `M_PERSON_WARRIOR < 1`), so they must be available
+/// as plain integers for comparison. They're also registered as functions
+/// for call syntax (e.g. `MY_NUM_PEOPLE`).
+pub struct PopScriptQuery {
+    /// Lua global name (e.g., "M_PERSON_WARRIOR")
+    pub name: &'static str,
+    /// Read the current value from the bridge for the given tribe.
+    pub read: fn(&AiGameBridge, u8) -> i32,
+}
+
+// --- Read functions for queries with real bridge data ---
+
+fn read_game_turn(b: &AiGameBridge, _tribe: u8) -> i32 {
+    b.game_tick as i32
+}
+fn read_my_num_people(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_populations[t as usize] as i32
+}
+fn read_blue_people(b: &AiGameBridge, _t: u8) -> i32 {
+    b.tribe_populations[0] as i32
+}
+fn read_red_people(b: &AiGameBridge, _t: u8) -> i32 {
+    b.tribe_populations[1] as i32
+}
+fn read_yellow_people(b: &AiGameBridge, _t: u8) -> i32 {
+    b.tribe_populations[2] as i32
+}
+fn read_green_people(b: &AiGameBridge, _t: u8) -> i32 {
+    b.tribe_populations[3] as i32
+}
+fn read_my_mana(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_mana[t as usize] as i32
+}
+fn read_blue_mana(b: &AiGameBridge, _t: u8) -> i32 {
+    b.tribe_mana[0] as i32
+}
+fn read_red_mana(b: &AiGameBridge, _t: u8) -> i32 {
+    b.tribe_mana[1] as i32
+}
+fn read_yellow_mana(b: &AiGameBridge, _t: u8) -> i32 {
+    b.tribe_mana[2] as i32
+}
+fn read_green_mana(b: &AiGameBridge, _t: u8) -> i32 {
+    b.tribe_mana[3] as i32
+}
+fn read_my_num_braves(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_braves[t as usize] as i32
+}
+fn read_my_num_warriors(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_warriors[t as usize] as i32
+}
+fn read_my_num_preachers(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_preachers[t as usize] as i32
+}
+fn read_my_num_spies(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_spies[t as usize] as i32
+}
+fn read_my_num_super_warriors(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_super_warriors[t as usize] as i32
+}
+fn read_my_killed_by_blue(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_killed_by_blue[t as usize] as i32
+}
+fn read_my_killed_by_red(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_killed_by_red[t as usize] as i32
+}
+fn read_my_killed_by_yellow(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_killed_by_yellow[t as usize] as i32
+}
+fn read_my_killed_by_green(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_killed_by_green[t as usize] as i32
+}
+fn read_my_num_small_hut(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_small_huts[t as usize] as i32
+}
+fn read_my_num_medium_hut(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_medium_huts[t as usize] as i32
+}
+fn read_my_num_large_hut(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_large_huts[t as usize] as i32
+}
+fn read_my_num_drum_tower(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_drum_towers[t as usize] as i32
+}
+fn read_my_num_temple(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_temples[t as usize] as i32
+}
+fn read_my_num_spy_train(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_spy_trains[t as usize] as i32
+}
+fn read_my_num_warrior_train(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_warrior_trains[t as usize] as i32
+}
+fn read_my_num_super_train(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_super_trains[t as usize] as i32
+}
+fn read_my_num_boats(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_boats[t as usize] as i32
+}
+fn read_my_num_airships(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_airships[t as usize] as i32
+}
+fn read_my_num_vehicles(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_vehicles[t as usize] as i32
+}
+fn read_my_wood_count(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_wood_count[t as usize] as i32
+}
+fn read_my_attack_army(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_attack_army[t as usize] as i32
+}
+fn read_my_defend_army(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_defend_army[t as usize] as i32
+}
+fn read_my_spell_burn_cost(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_spell_burn_cost[t as usize] as i32
+}
+fn read_my_spell_blast_cost(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_spell_blast_cost[t as usize] as i32
+}
+fn read_my_spell_lightning_cost(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_spell_lightning_cost[t as usize] as i32
+}
+fn read_my_shaman_lives(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_shaman_lives[t as usize] as i32
+}
+fn read_my_reincarnation_timer(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_reincarnation_timer[t as usize] as i32
+}
+fn read_is_shaman_available(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_shaman_available[t as usize] as i32
+}
+fn read_is_shaman_alive(b: &AiGameBridge, t: u8) -> i32 {
+    b.tribe_shaman_alive[t as usize] as i32
+}
+fn read_wild_people(b: &AiGameBridge, _t: u8) -> i32 {
+    0
+} // TODO: bridge field
+
+/// Fallback read function for queries without real implementations.
+fn read_zero(_b: &AiGameBridge, _t: u8) -> i32 {
+    0
+}
+
+/// Complete registry of all PopScript query names (INT_* opcodes).
+///
+/// This is the single source of truth. Names here are:
+/// - Registered as Lua functions (for call syntax like `MY_NUM_PEOPLE`)
+/// - Set as plain integer globals each tick (for variable access like `M_PERSON_WARRIOR < 1`)
+/// - NOT registered as stub functions in constants.rs
+pub const QUERY_REGISTRY: &[PopScriptQuery] = &[
+    // --- Game state ---
+    PopScriptQuery {
+        name: "GAME_TURN",
+        read: read_game_turn,
+    },
+    // --- Per-tribe population queries ---
+    PopScriptQuery {
+        name: "MY_NUM_PEOPLE",
+        read: read_my_num_people,
+    },
+    PopScriptQuery {
+        name: "BLUE_PEOPLE",
+        read: read_blue_people,
+    },
+    PopScriptQuery {
+        name: "RED_PEOPLE",
+        read: read_red_people,
+    },
+    PopScriptQuery {
+        name: "YELLOW_PEOPLE",
+        read: read_yellow_people,
+    },
+    PopScriptQuery {
+        name: "GREEN_PEOPLE",
+        read: read_green_people,
+    },
+    // --- Mana ---
+    PopScriptQuery {
+        name: "MY_MANA",
+        read: read_my_mana,
+    },
+    PopScriptQuery {
+        name: "BLUE_MANA",
+        read: read_blue_mana,
+    },
+    PopScriptQuery {
+        name: "RED_MANA",
+        read: read_red_mana,
+    },
+    PopScriptQuery {
+        name: "YELLOW_MANA",
+        read: read_yellow_mana,
+    },
+    PopScriptQuery {
+        name: "GREEN_MANA",
+        read: read_green_mana,
+    },
+    // --- Per-tribe kill counts ---
+    PopScriptQuery {
+        name: "MY_NUM_KILLED_BY_BLUE",
+        read: read_my_killed_by_blue,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_KILLED_BY_RED",
+        read: read_my_killed_by_red,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_KILLED_BY_YELLOW",
+        read: read_my_killed_by_yellow,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_KILLED_BY_GREEN",
+        read: read_my_killed_by_green,
+    },
+    // --- My unit type counts ---
+    PopScriptQuery {
+        name: "MY_NUM_BRAVES",
+        read: read_my_num_braves,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_WARRIORS",
+        read: read_my_num_warriors,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_PREACHERS",
+        read: read_my_num_preachers,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_SPIES",
+        read: read_my_num_spies,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_SUPER_WARRIORS",
+        read: read_my_num_super_warriors,
+    },
+    // --- Per-tribe brave/warrior/preacher/spy/super_warrior counts ---
+    PopScriptQuery {
+        name: "BLUE_BRAVES",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "BLUE_WARRIORS",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "BLUE_PREACHERS",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "BLUE_SPIES",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "BLUE_SUPER_WARRIORS",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "RED_BRAVES",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "RED_WARRIORS",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "RED_PREACHERS",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "RED_SPIES",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "RED_SUPER_WARRIORS",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "YELLOW_BRAVES",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "YELLOW_WARRIORS",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "YELLOW_PREACHERS",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "YELLOW_SPIES",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "YELLOW_SUPER_WARRIORS",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "GREEN_BRAVES",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "GREEN_WARRIORS",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "GREEN_PREACHERS",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "GREEN_SPIES",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "GREEN_SUPER_WARRIORS",
+        read: read_zero,
+    },
+    // --- My spell costs ---
+    PopScriptQuery {
+        name: "MY_SPELL_BURN_COST",
+        read: read_my_spell_burn_cost,
+    },
+    PopScriptQuery {
+        name: "MY_SPELL_BLAST_COST",
+        read: read_my_spell_blast_cost,
+    },
+    PopScriptQuery {
+        name: "MY_SPELL_LIGHTNING_COST",
+        read: read_my_spell_lightning_cost,
+    },
+    PopScriptQuery {
+        name: "MY_SPELL_WHIRLWIND_COST",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "MY_SPELL_INSECT_PLAGUE_COST",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "MY_SPELL_INVISIBILITY_COST",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "MY_SPELL_HYPNOTISM_COST",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "MY_SPELL_FIRESTORM_COST",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "MY_SPELL_GHOST_ARMY_COST",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "MY_SPELL_EROSION_COST",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "MY_SPELL_SWAMP_COST",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "MY_SPELL_LAND_BRIDGE_COST",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "MY_SPELL_ANGEL_OF_DEATH_COST",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "MY_SPELL_EARTHQUAKE_COST",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "MY_SPELL_FLATTEN_COST",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "MY_SPELL_VOLCANO_COST",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "MY_SPELL_WRATH_OF_GOD_COST",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "MY_SPELL_SHIELD_COST",
+        read: read_zero,
+    },
+    // --- My building counts ---
+    PopScriptQuery {
+        name: "MY_NUM_SMALL_HUT",
+        read: read_my_num_small_hut,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_MEDIUM_HUT",
+        read: read_my_num_medium_hut,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_LARGE_HUT",
+        read: read_my_num_large_hut,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_DRUM_TOWER",
+        read: read_my_num_drum_tower,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_TEMPLE",
+        read: read_my_num_temple,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_SPY_TRAIN",
+        read: read_my_num_spy_train,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_WARRIOR_TRAIN",
+        read: read_my_num_warrior_train,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_SUPER_TRAIN",
+        read: read_my_num_super_train,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_BOATS",
+        read: read_my_num_boats,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_AIRSHIPS",
+        read: read_my_num_airships,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_VEHICLES",
+        read: read_my_num_vehicles,
+    },
+    // --- M_BUILDING_* (my building type counts) ---
+    PopScriptQuery {
+        name: "M_BUILDING_SMALL_HUT",
+        read: read_my_num_small_hut,
+    },
+    PopScriptQuery {
+        name: "M_BUILDING_MEDIUM_HUT",
+        read: read_my_num_medium_hut,
+    },
+    PopScriptQuery {
+        name: "M_BUILDING_LARGE_HUT",
+        read: read_my_num_large_hut,
+    },
+    PopScriptQuery {
+        name: "M_BUILDING_DRUM_TOWER",
+        read: read_my_num_drum_tower,
+    },
+    PopScriptQuery {
+        name: "M_BUILDING_TEMPLE",
+        read: read_my_num_temple,
+    },
+    PopScriptQuery {
+        name: "M_BUILDING_SPY_TRAIN",
+        read: read_my_num_spy_train,
+    },
+    PopScriptQuery {
+        name: "M_BUILDING_WARRIOR_TRAIN",
+        read: read_my_num_warrior_train,
+    },
+    PopScriptQuery {
+        name: "M_BUILDING_FIREWARRIOR_TRAIN",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "M_BUILDING_RECONVERSION",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "M_BUILDING_WALL_PIECE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "M_BUILDING_GATE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "M_BUILDING_CURR_OE_SLOT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "M_BUILDING_BOAT_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "M_BUILDING_BOAT_HUT_2",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "M_BUILDING_AIRSHIP_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "M_BUILDING_AIRSHIP_HUT_2",
+        read: read_zero,
+    },
+    // --- B/R/Y/G_BUILDING_* (per-tribe building counts) ---
+    PopScriptQuery {
+        name: "B_BUILDING_SMALL_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_BUILDING_MEDIUM_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_BUILDING_LARGE_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_BUILDING_DRUM_TOWER",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_BUILDING_TEMPLE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_BUILDING_SPY_TRAIN",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_BUILDING_WARRIOR_TRAIN",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_BUILDING_FIREWARRIOR_TRAIN",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_BUILDING_RECONVERSION",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_BUILDING_WALL_PIECE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_BUILDING_GATE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_BUILDING_CURR_OE_SLOT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_BUILDING_BOAT_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_BUILDING_BOAT_HUT_2",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_BUILDING_AIRSHIP_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_BUILDING_AIRSHIP_HUT_2",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_BUILDING_SMALL_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_BUILDING_MEDIUM_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_BUILDING_LARGE_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_BUILDING_DRUM_TOWER",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_BUILDING_TEMPLE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_BUILDING_SPY_TRAIN",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_BUILDING_WARRIOR_TRAIN",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_BUILDING_FIREWARRIOR_TRAIN",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_BUILDING_RECONVERSION",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_BUILDING_WALL_PIECE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_BUILDING_GATE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_BUILDING_CURR_OE_SLOT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_BUILDING_BOAT_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_BUILDING_BOAT_HUT_2",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_BUILDING_AIRSHIP_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_BUILDING_AIRSHIP_HUT_2",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_BUILDING_SMALL_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_BUILDING_MEDIUM_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_BUILDING_LARGE_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_BUILDING_DRUM_TOWER",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_BUILDING_TEMPLE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_BUILDING_SPY_TRAIN",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_BUILDING_WARRIOR_TRAIN",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_BUILDING_FIREWARRIOR_TRAIN",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_BUILDING_RECONVERSION",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_BUILDING_WALL_PIECE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_BUILDING_GATE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_BUILDING_CURR_OE_SLOT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_BUILDING_BOAT_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_BUILDING_BOAT_HUT_2",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_BUILDING_AIRSHIP_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_BUILDING_AIRSHIP_HUT_2",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_BUILDING_SMALL_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_BUILDING_MEDIUM_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_BUILDING_LARGE_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_BUILDING_DRUM_TOWER",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_BUILDING_TEMPLE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_BUILDING_SPY_TRAIN",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_BUILDING_WARRIOR_TRAIN",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_BUILDING_FIREWARRIOR_TRAIN",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_BUILDING_RECONVERSION",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_BUILDING_WALL_PIECE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_BUILDING_GATE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_BUILDING_CURR_OE_SLOT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_BUILDING_BOAT_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_BUILDING_BOAT_HUT_2",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_BUILDING_AIRSHIP_HUT",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_BUILDING_AIRSHIP_HUT_2",
+        read: read_zero,
+    },
+    // --- M_PERSON_* (my unit type counts) ---
+    PopScriptQuery {
+        name: "M_PERSON_BRAVE",
+        read: read_my_num_braves,
+    },
+    PopScriptQuery {
+        name: "M_PERSON_WARRIOR",
+        read: read_my_num_warriors,
+    },
+    PopScriptQuery {
+        name: "M_PERSON_RELIGIOUS",
+        read: read_my_num_preachers,
+    },
+    PopScriptQuery {
+        name: "M_PERSON_SPY",
+        read: read_my_num_spies,
+    },
+    PopScriptQuery {
+        name: "M_PERSON_FIREWARRIOR",
+        read: read_my_num_super_warriors,
+    },
+    PopScriptQuery {
+        name: "M_PERSON_SHAMAN",
+        read: read_zero,
+    },
+    // --- B/R/Y/G_PERSON_* (per-tribe unit counts) ---
+    PopScriptQuery {
+        name: "B_PERSON_BRAVE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_PERSON_WARRIOR",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_PERSON_RELIGIOUS",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_PERSON_SPY",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_PERSON_FIREWARRIOR",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_PERSON_SHAMAN",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_PERSON_BRAVE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_PERSON_WARRIOR",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_PERSON_RELIGIOUS",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_PERSON_SPY",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_PERSON_FIREWARRIOR",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_PERSON_SHAMAN",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_PERSON_BRAVE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_PERSON_WARRIOR",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_PERSON_RELIGIOUS",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_PERSON_SPY",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_PERSON_FIREWARRIOR",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_PERSON_SHAMAN",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_PERSON_BRAVE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_PERSON_WARRIOR",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_PERSON_RELIGIOUS",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_PERSON_SPY",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_PERSON_FIREWARRIOR",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_PERSON_SHAMAN",
+        read: read_zero,
+    },
+    // --- Shaman state ---
+    PopScriptQuery {
+        name: "IS_SHAMAN_AVAILABLE",
+        read: read_is_shaman_available,
+    },
+    PopScriptQuery {
+        name: "IS_SHAMAN_ALIVE",
+        read: read_is_shaman_alive,
+    },
+    PopScriptQuery {
+        name: "MY_SHAMAN_LIVES",
+        read: read_my_shaman_lives,
+    },
+    PopScriptQuery {
+        name: "MY_REINCARNATION_TIMER",
+        read: read_my_reincarnation_timer,
+    },
+    // NOTE: IS_SHAMAN_AVAILABLE_FOR_ATTACK and IS_PRISONER_LEFT are always
+    // called as functions with arguments, so they belong in stubs, not here.
+    // --- Resource queries ---
+    PopScriptQuery {
+        name: "WILD_PEOPLE",
+        read: read_wild_people,
+    },
+    PopScriptQuery {
+        name: "MY_WOOD_COUNT",
+        read: read_my_wood_count,
+    },
+    PopScriptQuery {
+        name: "MY_ATTACK_ARMY_COUNT",
+        read: read_my_attack_army,
+    },
+    PopScriptQuery {
+        name: "MY_DEFEND_ARMY_COUNT",
+        read: read_my_defend_army,
+    },
+    // --- Kill stats ---
+    PopScriptQuery {
+        name: "BLUE_KILLED_BY_ME",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "RED_KILLED_BY_ME",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "YELLOW_KILLED_BY_ME",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "GREEN_KILLED_BY_ME",
+        read: read_zero,
+    },
+    // --- Vehicle counts ---
+    PopScriptQuery {
+        name: "M_VEHICLE_BOAT_1",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "M_VEHICLE_AIRSHIP_1",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_VEHICLE_BOAT_1",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "B_VEHICLE_AIRSHIP_1",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_VEHICLE_BOAT_1",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "R_VEHICLE_AIRSHIP_1",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_VEHICLE_BOAT_1",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "Y_VEHICLE_AIRSHIP_1",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_VEHICLE_BOAT_1",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "G_VEHICLE_AIRSHIP_1",
+        read: read_zero,
+    },
+    // --- Special queries ---
+    PopScriptQuery {
+        name: "CP_FREE_ENTRIES",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "RANDOM_100",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "NUM_SHAMEN_DEFENDERS",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "CAMERA_ANGLE",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "CAMERA_X",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "CAMERA_Z",
+        read: read_zero,
+    },
+    // NOTE: Parameterized query names (GET_SPELLS_CAST, GET_HEIGHT_AT_POS,
+    // GET_HEAD_TRIGGER_COUNT, GET_NUM_ONE_OFF_SPELLS, THING_COUNT_IN_AREA,
+    // NAV_CHECK, IS_SHAMAN_IN_AREA, DELAY_MAIN_DRUM_TOWER) are NOT here.
+    // They take arguments and are always called as functions, so they
+    // belong in the function stubs list in constants.rs. Including them
+    // here would cause update_query_globals() to overwrite the function
+    // stub with a plain integer, breaking function-call syntax.
+    //
+    // --- Shorthand aliases used by decompiled PopScript scripts ---
+    // PopScript decompilers emit short names like M_SPELL_BLAST_COST,
+    // B_BUILDING_WARRIOR_TRAIN, B_PERSON_WARRIOR etc.
+    // These map to the same read functions as their longer counterparts.
+    PopScriptQuery {
+        name: "M_SPELL_BLAST_COST",
+        read: read_my_spell_blast_cost,
+    },
+    PopScriptQuery {
+        name: "M_SPELL_BURN_COST",
+        read: read_my_spell_burn_cost,
+    },
+    PopScriptQuery {
+        name: "M_SPELL_LIGHTNING_COST",
+        read: read_my_spell_lightning_cost,
+    },
+    PopScriptQuery {
+        name: "B_BUILDING_WARRIOR_TRAIN",
+        read: read_zero,
+    },
+    PopScriptQuery {
+        name: "MY_NUM_KILLED_BY_BLUE",
+        read: read_my_killed_by_blue,
+    },
+];
+
+/// Register all query names as Lua functions (for call syntax).
+/// Called once during AiSystem::new(). Each tick, `update_query_globals`
+/// overwrites these with plain integers for variable access in scripts.
+pub fn register_query_globals(lua: &Lua, bridge: &Rc<RefCell<AiGameBridge>>) -> LuaResult<()> {
+    let globals = lua.globals();
+    for entry in QUERY_REGISTRY {
+        let b = bridge.clone();
+        let read_fn = entry.read;
+        globals.set(
+            entry.name,
+            lua.create_function(move |_, ()| -> LuaResult<i32> {
+                let bridge = b.borrow();
+                Ok(read_fn(&bridge, bridge.current_tribe))
+            })?,
+        )?;
+    }
+    Ok(())
+}
+
+/// Update all query names as plain integer Lua globals from current bridge state.
+/// Called each tick before script execution so variable comparisons work natively.
+pub fn update_query_globals(lua: &Lua, bridge: &AiGameBridge) {
+    let globals = lua.globals();
+    let tribe = bridge.current_tribe;
+    for entry in QUERY_REGISTRY {
+        let value = (entry.read)(bridge, tribe);
+        let _ = globals.set(entry.name, value);
+    }
+}
+
+/// Initialize PopScript variables (_var0.._var63 = 0) in the Lua VM.
+/// The original VM initializes all 64 script variables to 0.
+pub fn init_script_variables(lua: &Lua) {
+    let globals = lua.globals();
+    for i in 0..64i32 {
+        let _ = globals.set(format!("_var{}", i), 0);
+    }
+}
+
+/// Preprocess a decompiled PopScript Lua source to normalize pure query
+/// name usage. The decompiler sometimes emits pure query names with
+/// parentheses (e.g., `MY_NUM_PEOPLE`) and sometimes without
+/// (e.g., `MY_NUM_PEOPLE < 80`). Since `update_query_globals` sets
+/// these names as plain integers, the function-call syntax would fail
+/// with "attempt to call a number value". This function strips no-argument
+/// parentheses from pure query names so they're always used as bare variables.
+///
+/// Parameterized queries (GET_SPELLS_CAST, GET_HEIGHT_AT_POS, etc.) are
+/// NOT affected — they remain as function calls because they take arguments.
+pub fn preprocess_script(source: &str) -> String {
+    let mut result = source.to_string();
+    for entry in QUERY_REGISTRY {
+        // Replace NAME() with NAME — but only empty-paren calls, not NAME(arg)
+        // Use a regex-like approach: NAME followed by () with nothing between
+        let pattern = format!("{}()", entry.name);
+        // Only replace when the () is truly empty (no arguments)
+        // We need to be careful not to replace NAME(arg) patterns
+        // Simple approach: replace the exact pattern "NAME()" with "NAME"
+        result = result.replace(&pattern, entry.name);
+    }
+    result
+}
+
 /// Register the EVERY macro as a Lua function.
 ///
 /// EVERY(interval, body) executes `body()` when `(game_tick - last_fire) >= interval`.
@@ -26,7 +1130,7 @@ pub fn register_every(lua: &Lua) -> LuaResult<()> {
             if not _every_counters[key] then
                 _every_counters[key] = 0
             end
-            local tick = GAME_TURN()
+            local tick = GAME_TURN
             if (tick - _every_counters[key]) >= interval then
                 _every_counters[key] = tick
                 body()
@@ -64,103 +1168,30 @@ pub fn register_popscript_functions(
 ) -> LuaResult<()> {
     let globals = lua.globals();
 
-    // ---- Game state read functions (real implementations) ----
-
-    // GAME_TURN() -> current game tick
-    {
-        let b = bridge.clone();
-        globals.set(
-            "GAME_TURN",
-            lua.create_function(move |_, ()| {
-                let bridge = b.borrow();
-                Ok(bridge.game_tick as i32)
-            })?,
-        )?;
-    }
-
-    // MY_NUM_PEOPLE() -> current tribe's population
-    {
-        let b = bridge.clone();
-        globals.set(
-            "MY_NUM_PEOPLE",
-            lua.create_function(move |_, ()| {
-                let bridge = b.borrow();
-                let tribe = bridge.current_tribe as usize;
-                Ok(bridge.tribe_populations[tribe] as i32)
-            })?,
-        )?;
-    }
-
-    // BLUE_PEOPLE() -> blue tribe population
-    {
-        let b = bridge.clone();
-        globals.set(
-            "BLUE_PEOPLE",
-            lua.create_function(move |_, ()| {
-                let bridge = b.borrow();
-                Ok(bridge.tribe_populations[0] as i32)
-            })?,
-        )?;
-    }
-
-    // RED_PEOPLE() -> red tribe population
-    {
-        let b = bridge.clone();
-        globals.set(
-            "RED_PEOPLE",
-            lua.create_function(move |_, ()| {
-                let bridge = b.borrow();
-                Ok(bridge.tribe_populations[1] as i32)
-            })?,
-        )?;
-    }
-
-    // YELLOW_PEOPLE() -> yellow tribe population
-    {
-        let b = bridge.clone();
-        globals.set(
-            "YELLOW_PEOPLE",
-            lua.create_function(move |_, ()| {
-                let bridge = b.borrow();
-                Ok(bridge.tribe_populations[2] as i32)
-            })?,
-        )?;
-    }
-
-    // GREEN_PEOPLE() -> green tribe population
-    {
-        let b = bridge.clone();
-        globals.set(
-            "GREEN_PEOPLE",
-            lua.create_function(move |_, ()| {
-                let bridge = b.borrow();
-                Ok(bridge.tribe_populations[3] as i32)
-            })?,
-        )?;
-    }
-
-    // MY_MANA() -> current tribe's mana
-    {
-        let b = bridge.clone();
-        globals.set(
-            "MY_MANA",
-            lua.create_function(move |_, ()| {
-                let bridge = b.borrow();
-                let tribe = bridge.current_tribe as usize;
-                Ok(bridge.tribe_mana[tribe] as i32)
-            })?,
-        )?;
-    }
+    // ---- Game state query functions are now in QUERY_REGISTRY ----
+    // Registered via register_query_globals(), updated via update_query_globals()
 
     // ---- Action commands (push to bridge pending lists) ----
 
-    // ATTACK(target_tribe, num_people, attack_type)
+    // ATTACK(target_tribe, num_people, [attack_type], ...)
+    // Original PopScript: up to 12 args. We use the first 3.
     {
         let b = bridge.clone();
         globals.set(
             "ATTACK",
-            lua.create_function(move |_, (target, num, atype): (i32, i32, i32)| {
+            lua.create_function(move |_, args: mlua::MultiValue| {
+                let tribe = b.borrow().current_tribe;
+                fn to_i32(v: LuaValue) -> i32 {
+                    v.as_i32()
+                        .or_else(|| v.as_f64().map(|f| f as i32))
+                        .unwrap_or(0)
+                }
+                let mut iter = args.into_iter();
+                let target = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                let num = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                let atype = to_i32(iter.next().unwrap_or(LuaValue::Nil));
                 b.borrow_mut().pending_attacks.push(super::AiAttackCommand {
+                    tribe_id: tribe,
                     target_tribe: target as u8,
                     num_people: num as u32,
                     attack_type: atype as u32,
@@ -171,65 +1202,81 @@ pub fn register_popscript_functions(
         )?;
     }
 
-    // ATTACK_MARKER(target_tribe, marker, num_people, attack_type)
+    // ATTACK_MARKER(target_tribe, marker, num_people, [attack_type], ...)
     {
         let b = bridge.clone();
         globals.set(
             "ATTACK_MARKER",
-            lua.create_function(
-                move |_, (target, marker, num, atype): (i32, i32, i32, i32)| {
-                    b.borrow_mut().pending_attacks.push(super::AiAttackCommand {
-                        target_tribe: target as u8,
-                        num_people: num as u32,
-                        attack_type: atype as u32,
-                        marker: Some((marker, 0)),
-                    });
-                    Ok(0)
-                },
-            )?,
+            lua.create_function(move |_, args: mlua::MultiValue| {
+                let tribe = b.borrow().current_tribe;
+                fn to_i32(v: LuaValue) -> i32 {
+                    v.as_i32()
+                        .or_else(|| v.as_f64().map(|f| f as i32))
+                        .unwrap_or(0)
+                }
+                let mut iter = args.into_iter();
+                let target = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                let marker = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                let num = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                let atype = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                b.borrow_mut().pending_attacks.push(super::AiAttackCommand {
+                    tribe_id: tribe,
+                    target_tribe: target as u8,
+                    num_people: num as u32,
+                    attack_type: atype as u32,
+                    marker: Some((marker, 0)),
+                });
+                Ok(0)
+            })?,
         )?;
     }
 
-    // BUILD_AT(building_type, x, y)
+    // BUILD_AT(building_type, x, [y])
     {
         let b = bridge.clone();
         globals.set(
             "BUILD_AT",
-            lua.create_function(move |_, (btype, x, y): (i32, i32, i32)| {
+            lua.create_function(move |_, (btype, x, y): (i32, i32, Option<i32>)| {
+                let tribe = b.borrow().current_tribe;
                 b.borrow_mut().pending_builds.push(super::AiBuildCommand {
+                    tribe_id: tribe,
                     building_type: btype as u8,
                     marker_x: x,
-                    marker_y: y,
+                    marker_y: y.unwrap_or(0),
                 });
                 Ok(0)
             })?,
         )?;
     }
 
-    // TRAIN_PEOPLE_NOW(unit_type, count)
+    // TRAIN_PEOPLE_NOW(unit_type, [count=1])
     {
         let b = bridge.clone();
         globals.set(
             "TRAIN_PEOPLE_NOW",
-            lua.create_function(move |_, (utype, count): (i32, i32)| {
+            lua.create_function(move |_, (utype, count): (i32, Option<i32>)| {
+                let tribe = b.borrow().current_tribe;
                 b.borrow_mut().pending_trains.push(super::AiTrainCommand {
+                    tribe_id: tribe,
                     unit_type: utype as u8,
-                    count: count as u32,
+                    count: count.unwrap_or(1) as u32,
                 });
                 Ok(0)
             })?,
         )?;
     }
 
-    // SPELL_AT_MARKER(spell_type, marker)
+    // SPELL_AT_MARKER(spell_type, marker, [...])
     {
         let b = bridge.clone();
         globals.set(
             "SPELL_AT_MARKER",
-            lua.create_function(move |_, (spell, marker): (i32, i32)| {
+            lua.create_function(move |_, (spell, marker): (i32, Option<i32>)| {
+                let tribe = b.borrow().current_tribe;
                 b.borrow_mut().pending_spells.push(super::AiSpellCommand {
+                    tribe_id: tribe,
                     spell_type: spell as u8,
-                    target_x: marker,
+                    target_x: marker.unwrap_or(0),
                     target_y: 0,
                 });
                 Ok(0)
@@ -243,23 +1290,29 @@ pub fn register_popscript_functions(
         globals.set(
             "CONVERT_AT_MARKER",
             lua.create_function(move |_, marker: i32| {
+                let tribe = b.borrow().current_tribe;
                 b.borrow_mut()
                     .pending_convert
-                    .push(super::AiConvertCommand { marker });
+                    .push(super::AiConvertCommand {
+                        tribe_id: tribe,
+                        marker,
+                    });
                 Ok(0)
             })?,
         )?;
     }
 
-    // SEND_PEOPLE_TO_MARKER(marker, num)
+    // SEND_PEOPLE_TO_MARKER(marker, [num])
     {
         let b = bridge.clone();
         globals.set(
             "SEND_PEOPLE_TO_MARKER",
-            lua.create_function(move |_, (marker, num): (i32, i32)| {
+            lua.create_function(move |_, (marker, num): (i32, Option<i32>)| {
+                let tribe = b.borrow().current_tribe;
                 b.borrow_mut().pending_moves.push(super::AiMoveCommand {
+                    tribe_id: tribe,
                     marker,
-                    num_people: num as u32,
+                    num_people: num.unwrap_or(1) as u32,
                 });
                 Ok(0)
             })?,
@@ -272,9 +1325,13 @@ pub fn register_popscript_functions(
         globals.set(
             "SEND_SHAMAN_DEFENDERS_HOME",
             lua.create_function(move |_, ()| {
+                let tribe = b.borrow().current_tribe;
                 b.borrow_mut()
                     .pending_shaman_move
-                    .push(super::AiShamanMoveCommand { marker: 0 });
+                    .push(super::AiShamanMoveCommand {
+                        tribe_id: tribe,
+                        marker: 0,
+                    });
                 Ok(0)
             })?,
         )?;
@@ -286,37 +1343,48 @@ pub fn register_popscript_functions(
         globals.set(
             "PRAY_AT_HEAD",
             lua.create_function(move |_, head_num: i32| {
-                b.borrow_mut()
-                    .pending_pray
-                    .push(super::AiPrayCommand { head_num });
+                let tribe = b.borrow().current_tribe;
+                b.borrow_mut().pending_pray.push(super::AiPrayCommand {
+                    tribe_id: tribe,
+                    head_num,
+                });
                 Ok(0)
             })?,
         )?;
     }
 
-    // SET_MARKER_ENTRY(marker, x, y)
+    // SET_MARKER_ENTRY(marker, x, [y], [extra])
     {
         let b = bridge.clone();
         globals.set(
             "SET_MARKER_ENTRY",
-            lua.create_function(move |_, (marker, x, y): (i32, i32, i32)| {
-                b.borrow_mut()
-                    .marker_entries
-                    .push(super::MarkerEntry { marker, x, y });
-                Ok(0)
-            })?,
+            lua.create_function(
+                move |_, (marker, x, y, _extra): (i32, i32, Option<i32>, Option<i32>)| {
+                    b.borrow_mut().marker_entries.push(super::MarkerEntry {
+                        marker,
+                        x,
+                        y: y.unwrap_or(0),
+                    });
+                    Ok(0)
+                },
+            )?,
         )?;
     }
 
-    // DELETE_SMOKE_STUFF(x, y)
+    // DELETE_SMOKE_STUFF(x, [y])
     {
         let b = bridge.clone();
         globals.set(
             "DELETE_SMOKE_STUFF",
-            lua.create_function(move |_, (x, y): (i32, i32)| {
+            lua.create_function(move |_, (x, y): (i32, Option<i32>)| {
+                let tribe = b.borrow().current_tribe;
                 b.borrow_mut()
                     .pending_cleanup
-                    .push(super::AiCleanupCommand { x, y });
+                    .push(super::AiCleanupCommand {
+                        tribe_id: tribe,
+                        x,
+                        y: y.unwrap_or(0),
+                    });
                 Ok(0)
             })?,
         )?;
@@ -324,15 +1392,29 @@ pub fn register_popscript_functions(
 
     // ---- Configuration setters (store in bridge fields) ----
 
-    // SET_DEFENSE_RADIUS(r)
+    // SET_DEFENSE_RADIUS(r) — also handles SET_DEFENCE_RADIUS alias
     {
         let b = bridge.clone();
         globals.set(
             "SET_DEFENSE_RADIUS",
-            lua.create_function(move |_, r: i32| {
+            lua.create_function(move |_, r: Option<i32>| {
                 let mut bridge = b.borrow_mut();
                 let tribe = bridge.current_tribe as usize;
-                bridge.defence_radius[tribe] = r as u32;
+                bridge.defence_radius[tribe] = r.unwrap_or(0) as u32;
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // SET_DEFENCE_RADIUS(r) — British spelling alias
+    {
+        let b = bridge.clone();
+        globals.set(
+            "SET_DEFENCE_RADIUS",
+            lua.create_function(move |_, r: Option<i32>| {
+                let mut bridge = b.borrow_mut();
+                let tribe = bridge.current_tribe as usize;
+                bridge.defence_radius[tribe] = r.unwrap_or(0) as u32;
                 Ok(0)
             })?,
         )?;
@@ -343,10 +1425,10 @@ pub fn register_popscript_functions(
         let b = bridge.clone();
         globals.set(
             "SET_BASE_RADIUS",
-            lua.create_function(move |_, r: i32| {
+            lua.create_function(move |_, r: Option<i32>| {
                 let mut bridge = b.borrow_mut();
                 let tribe = bridge.current_tribe as usize;
-                bridge.base_radius[tribe] = r as u32;
+                bridge.base_radius[tribe] = r.unwrap_or(0) as u32;
                 Ok(0)
             })?,
         )?;
@@ -357,25 +1439,26 @@ pub fn register_popscript_functions(
         let b = bridge.clone();
         globals.set(
             "SET_ATTACK_VARIABLE",
-            lua.create_function(move |_, v: i32| {
+            lua.create_function(move |_, v: Option<i32>| {
                 let mut bridge = b.borrow_mut();
                 let tribe = bridge.current_tribe as usize;
-                bridge.attack_variable[tribe] = v as u32;
+                bridge.attack_variable[tribe] = v.unwrap_or(0) as u32;
                 Ok(0)
             })?,
         )?;
     }
 
-    // SET_SPELL_ENTRY(spell, enabled)
+    // SET_SPELL_ENTRY(slot, spell_id, [cost], [threshold])
+    // Original PopScript: 4 args. Only the first two matter for spell_entry flags.
     {
         let b = bridge.clone();
         globals.set(
             "SET_SPELL_ENTRY",
-            lua.create_function(move |_, (spell, enabled): (i32, i32)| {
+            lua.create_function(move |_, (slot, spell_id, _cost, _threshold): (i32, i32, Option<i32>, Option<i32>)| {
                 let mut bridge = b.borrow_mut();
                 let tribe = bridge.current_tribe as usize;
-                if (spell as usize) < 21 {
-                    bridge.spell_entry[tribe][spell as usize] = enabled != 0;
+                if (slot as usize) < 21 {
+                    bridge.spell_entry[tribe][slot as usize] = spell_id != 0;
                 }
                 Ok(0)
             })?,
@@ -387,10 +1470,10 @@ pub fn register_popscript_functions(
         let b = bridge.clone();
         globals.set(
             "SET_REINCARNATION",
-            lua.create_function(move |_, on: i32| {
+            lua.create_function(move |_, on: Option<i32>| {
                 let mut bridge = b.borrow_mut();
                 let tribe = bridge.current_tribe as usize;
-                bridge.reincarnation[tribe] = on != 0;
+                bridge.reincarnation[tribe] = on.unwrap_or(0) != 0;
                 Ok(0)
             })?,
         )?;
@@ -401,17 +1484,29 @@ pub fn register_popscript_functions(
         let b = bridge.clone();
         globals.set(
             "SET_BUCKET_USAGE",
-            lua.create_function(move |_, on: i32| {
+            lua.create_function(move |_, args: mlua::MultiValue| {
                 let mut bridge = b.borrow_mut();
                 let tribe = bridge.current_tribe as usize;
+                let on: i32 = args
+                    .into_iter()
+                    .next()
+                    .and_then(|v| v.as_i32())
+                    .unwrap_or(0);
                 bridge.bucket_usage[tribe] = on != 0;
                 Ok(0)
             })?,
         )?;
     }
 
-    // SET_BUCKET_COUNT_FOR_SPELL(spell, count) -- not in original 168 list but
-    // referenced in plan; register as stub since it's config-only
+    // SET_BUCKET_COUNT_FOR_SPELL(spell, count) — stub until bucket system implemented
+    {
+        let b = bridge.clone();
+        globals.set(
+            "SET_BUCKET_COUNT_FOR_SPELL",
+            lua.create_function(move |_, _args: mlua::MultiValue| Ok(0))?,
+        )?;
+    }
+
     // MAX_BUILDING_TYPE(type, count)
     {
         let b = bridge.clone();
@@ -430,6 +1525,24 @@ pub fn register_popscript_functions(
 
     // ENABLE_BUILDING_TYPE(type) -- not in original 168 function list;
     // building enable is handled via MAX_BUILDING_TYPE > 0 or ATTR flags.
+
+    // CREATE_MSG_INFORMATION(msg_id) — log to console for debugging
+    {
+        globals.set(
+            "CREATE_MSG_INFORMATION",
+            lua.create_function(move |_, args: mlua::MultiValue| {
+                fn to_i32(v: LuaValue) -> i32 {
+                    v.as_i32()
+                        .or_else(|| v.as_f64().map(|f| f as i32))
+                        .unwrap_or(0)
+                }
+                let mut iter = args.into_iter();
+                let msg_id = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                log::info!("[PopScript] CREATE_MSG_INFORMATION({})", msg_id);
+                Ok(0)
+            })?,
+        )?;
+    }
 
     // ---- Remaining stub functions that panic per D-04 ----
     // Functions that need game state not yet available in the bridge keep their
@@ -509,7 +1622,6 @@ pub fn register_popscript_functions(
         "FLYBY_ALLOW_INTERRUPT",
         "CREATE_MSG_NARRATIVE",
         "CREATE_MSG_OBJECTIVE",
-        "CREATE_MSG_INFORMATION",
         "OPEN_DIALOG",
         "SET_MSG_AUTO_OPEN_DLG",
         "SET_MSG_DELETE_ON_OK",
@@ -526,63 +1638,6 @@ pub fn register_popscript_functions(
         "SET_NO_GREEN",
         "SET_NO_YELLOW",
         "BOAT_PATROL",
-        // Game state query stubs (need game systems not yet in bridge)
-        "MY_NUM_KILLED_BY_BLUE",
-        "MY_NUM_KILLED_BY_RED",
-        "MY_NUM_KILLED_BY_YELLOW",
-        "MY_NUM_KILLED_BY_GREEN",
-        "MY_NUM_BRAVES",
-        "MY_NUM_WARRIORS",
-        "MY_NUM_PREACHERS",
-        "MY_NUM_SPIES",
-        "MY_NUM_SUPER_WARRIORS",
-        "BLUE_BRAVES",
-        "BLUE_WARRIORS",
-        "BLUE_PREACHERS",
-        "BLUE_SPIES",
-        "BLUE_SUPER_WARRIORS",
-        "RED_BRAVES",
-        "RED_WARRIORS",
-        "RED_PREACHERS",
-        "RED_SPIES",
-        "RED_SUPER_WARRIORS",
-        "YELLOW_BRAVES",
-        "YELLOW_WARRIORS",
-        "YELLOW_PREACHERS",
-        "YELLOW_SPIES",
-        "YELLOW_SUPER_WARRIORS",
-        "GREEN_BRAVES",
-        "GREEN_WARRIORS",
-        "GREEN_PREACHERS",
-        "GREEN_SPIES",
-        "GREEN_SUPER_WARRIORS",
-        "MY_SPELL_BURN_COST",
-        "MY_SPELL_BLAST_COST",
-        "MY_SPELL_LIGHTNING_COST",
-        "MY_NUM_SMALL_HUT",
-        "MY_NUM_MEDIUM_HUT",
-        "MY_NUM_LARGE_HUT",
-        "MY_NUM_DRUM_TOWER",
-        "MY_NUM_TEMPLE",
-        "MY_NUM_SPY_TRAIN",
-        "MY_NUM_WARRIOR_TRAIN",
-        "MY_NUM_SUPER_TRAIN",
-        "MY_NUM_BOATS",
-        "MY_NUM_AIRSHIPS",
-        "MY_NUM_VEHICLES",
-        "IS_SHAMAN_AVAILABLE",
-        "IS_SHAMAN_ALIVE",
-        "MY_SHAMAN_LIVES",
-        "MY_REINCARNATION_TIMER",
-        "WILD_PEOPLE",
-        "MY_WOOD_COUNT",
-        "MY_ATTACK_ARMY_COUNT",
-        "MY_DEFEND_ARMY_COUNT",
-        "BLUE_MANA",
-        "RED_MANA",
-        "YELLOW_MANA",
-        "GREEN_MANA",
-        "RANDOM_100",
     ];
 
     for name in &stub_functions {
@@ -612,9 +1667,27 @@ mod tests {
         let lua = Lua::new();
         let bridge = Rc::new(RefCell::new(AiGameBridge::new()));
         crate::engine::ai::constants::register_constants(&lua).unwrap();
+        register_query_globals(&lua, &bridge).unwrap();
         register_popscript_functions(&lua, &bridge).unwrap();
         register_every(&lua).unwrap();
+        // Set query globals as plain integers (mirrors tick_update_ai behavior)
+        {
+            let b = bridge.borrow();
+            update_query_globals(&lua, &b);
+        }
         (lua, bridge)
+    }
+
+    /// Helper: set game_tick and refresh query globals.
+    fn set_tick(lua: &Lua, bridge: &RefCell<AiGameBridge>, tick: u32) {
+        bridge.borrow_mut().game_tick = tick;
+        update_query_globals(lua, &bridge.borrow());
+    }
+
+    /// Helper: set current_tribe and refresh query globals.
+    fn set_tribe(lua: &Lua, bridge: &RefCell<AiGameBridge>, tribe: u8) {
+        bridge.borrow_mut().current_tribe = tribe;
+        update_query_globals(lua, &bridge.borrow());
     }
 
     #[test]
@@ -634,28 +1707,28 @@ mod tests {
 
         // Ticks 1, 2, 3: should NOT fire
         for tick in 1..=3 {
-            bridge.borrow_mut().game_tick = tick;
+            set_tick(&lua, &bridge, tick);
             lua.load(script).exec().unwrap();
         }
         let count: i32 = lua.load("return _test_count").eval().unwrap();
         assert_eq!(count, 0, "EVERY(4) should not fire on ticks 1-3");
 
         // Tick 4: should fire
-        bridge.borrow_mut().game_tick = 4;
+        set_tick(&lua, &bridge, 4);
         lua.load(script).exec().unwrap();
         let count: i32 = lua.load("return _test_count").eval().unwrap();
         assert_eq!(count, 1, "EVERY(4) should fire on tick 4");
 
         // Ticks 5, 6, 7: should NOT fire
         for tick in 5..=7 {
-            bridge.borrow_mut().game_tick = tick;
+            set_tick(&lua, &bridge, tick);
             lua.load(script).exec().unwrap();
         }
         let count: i32 = lua.load("return _test_count").eval().unwrap();
         assert_eq!(count, 1, "EVERY(4) should not fire on ticks 5-7");
 
         // Tick 8: should fire
-        bridge.borrow_mut().game_tick = 8;
+        set_tick(&lua, &bridge, 8);
         lua.load(script).exec().unwrap();
         let count: i32 = lua.load("return _test_count").eval().unwrap();
         assert_eq!(count, 2, "EVERY(4) should fire on tick 8");
@@ -676,7 +1749,7 @@ mod tests {
 
         // Run through ticks 1-6
         for tick in 1..=6 {
-            bridge.borrow_mut().game_tick = tick;
+            set_tick(&lua, &bridge, tick);
             lua.load(script).exec().unwrap();
         }
 
@@ -692,26 +1765,29 @@ mod tests {
     #[test]
     fn game_turn_returns_tick() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().game_tick = 42;
-        let val: i32 = lua.load("return GAME_TURN()").eval().unwrap();
+        set_tick(&lua, &bridge, 42);
+        update_query_globals(&lua, &bridge.borrow());
+        let val: i32 = lua.load("return GAME_TURN").eval().unwrap();
         assert_eq!(val, 42);
     }
 
     #[test]
     fn my_num_people_returns_population() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 1;
+        set_tribe(&lua, &bridge, 1);
         bridge.borrow_mut().tribe_populations[1] = 25;
-        let val: i32 = lua.load("return MY_NUM_PEOPLE()").eval().unwrap();
+        update_query_globals(&lua, &bridge.borrow());
+        let val: i32 = lua.load("return MY_NUM_PEOPLE").eval().unwrap();
         assert_eq!(val, 25);
     }
 
     #[test]
     fn my_mana_returns_mana() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 2;
+        set_tribe(&lua, &bridge, 2);
         bridge.borrow_mut().tribe_mana[2] = 50000;
-        let val: i32 = lua.load("return MY_MANA()").eval().unwrap();
+        update_query_globals(&lua, &bridge.borrow());
+        let val: i32 = lua.load("return MY_MANA").eval().unwrap();
         assert_eq!(val, 50000);
     }
 
@@ -722,32 +1798,22 @@ mod tests {
             let mut b = bridge.borrow_mut();
             b.tribe_populations = [10, 20, 30, 40];
         }
-        assert_eq!(
-            lua.load("return BLUE_PEOPLE()").eval::<i32>().unwrap(),
-            10
-        );
-        assert_eq!(
-            lua.load("return RED_PEOPLE()").eval::<i32>().unwrap(),
-            20
-        );
-        assert_eq!(
-            lua.load("return YELLOW_PEOPLE()").eval::<i32>().unwrap(),
-            30
-        );
-        assert_eq!(
-            lua.load("return GREEN_PEOPLE()").eval::<i32>().unwrap(),
-            40
-        );
+        update_query_globals(&lua, &bridge.borrow());
+        assert_eq!(lua.load("return BLUE_PEOPLE").eval::<i32>().unwrap(), 10);
+        assert_eq!(lua.load("return RED_PEOPLE").eval::<i32>().unwrap(), 20);
+        assert_eq!(lua.load("return YELLOW_PEOPLE").eval::<i32>().unwrap(), 30);
+        assert_eq!(lua.load("return GREEN_PEOPLE").eval::<i32>().unwrap(), 40);
     }
 
     #[test]
     fn native_lua_if_else_works() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 0;
+        set_tribe(&lua, &bridge, 0);
         bridge.borrow_mut().tribe_populations[0] = 15;
+        update_query_globals(&lua, &bridge.borrow());
 
         let script = r#"
-            local pop = MY_NUM_PEOPLE()
+            local pop = MY_NUM_PEOPLE
             if pop > 10 then
                 return 1
             else
@@ -779,11 +1845,8 @@ mod tests {
         register_every(system.lua()).unwrap();
 
         bridge.borrow_mut().game_tick = 100;
-        let val: i32 = system
-            .lua()
-            .load("return GAME_TURN()")
-            .eval()
-            .unwrap();
+        update_query_globals(system.lua(), &bridge.borrow());
+        let val: i32 = system.lua().load("return GAME_TURN").eval().unwrap();
         assert_eq!(val, 100);
     }
 
@@ -835,7 +1898,7 @@ mod tests {
     #[test]
     fn set_defence_radius_stores_value() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 2;
+        set_tribe(&lua, &bridge, 2);
         lua.load("SET_DEFENSE_RADIUS(512)").exec().unwrap();
         assert_eq!(bridge.borrow().defence_radius[2], 512);
     }
@@ -843,7 +1906,7 @@ mod tests {
     #[test]
     fn set_base_radius_stores_value() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 1;
+        set_tribe(&lua, &bridge, 1);
         lua.load("SET_BASE_RADIUS(256)").exec().unwrap();
         assert_eq!(bridge.borrow().base_radius[1], 256);
     }
@@ -851,7 +1914,7 @@ mod tests {
     #[test]
     fn set_attack_variable_stores_value() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 0;
+        set_tribe(&lua, &bridge, 0);
         lua.load("SET_ATTACK_VARIABLE(42)").exec().unwrap();
         assert_eq!(bridge.borrow().attack_variable[0], 42);
     }
@@ -890,7 +1953,7 @@ mod tests {
     #[test]
     fn set_spell_entry_stores_config() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 1;
+        set_tribe(&lua, &bridge, 1);
         lua.load("SET_SPELL_ENTRY(3, 1)").exec().unwrap();
         assert!(bridge.borrow().spell_entry[1][3]);
     }
@@ -898,7 +1961,7 @@ mod tests {
     #[test]
     fn set_reincarnation_stores_flag() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 0;
+        set_tribe(&lua, &bridge, 0);
         lua.load("SET_REINCARNATION(1)").exec().unwrap();
         assert!(bridge.borrow().reincarnation[0]);
     }
@@ -906,7 +1969,7 @@ mod tests {
     #[test]
     fn set_bucket_usage_stores_flag() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 3;
+        set_tribe(&lua, &bridge, 3);
         lua.load("SET_BUCKET_USAGE(1)").exec().unwrap();
         assert!(bridge.borrow().bucket_usage[3]);
     }
@@ -946,7 +2009,7 @@ mod tests {
     #[test]
     fn max_building_type_stores_config() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 2;
+        set_tribe(&lua, &bridge, 2);
         lua.load("MAX_BUILDING_TYPE(1, 4)").exec().unwrap();
         let b = bridge.borrow();
         assert_eq!(b.max_building_type[2][1], 4);
@@ -955,12 +2018,10 @@ mod tests {
     #[test]
     fn max_building_type_multiple_types() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 0;
-        lua.load(
-            "MAX_BUILDING_TYPE(0, 2); MAX_BUILDING_TYPE(1, 3); MAX_BUILDING_TYPE(2, 5)",
-        )
-        .exec()
-        .unwrap();
+        set_tribe(&lua, &bridge, 0);
+        lua.load("MAX_BUILDING_TYPE(0, 2); MAX_BUILDING_TYPE(1, 3); MAX_BUILDING_TYPE(2, 5)")
+            .exec()
+            .unwrap();
         let b = bridge.borrow();
         assert_eq!(b.max_building_type[0][0], 2);
         assert_eq!(b.max_building_type[0][1], 3);
@@ -1198,54 +2259,39 @@ mod tests {
     #[test]
     fn stub_function_random_100_returns_zero() {
         let (lua, _bridge) = setup();
-        let result: i32 = lua
-            .globals()
-            .get::<LuaFunction>("RANDOM_100")
-            .unwrap()
-            .call(())
-            .unwrap();
+        // RANDOM_100 is a query global (plain integer after update_query_globals)
+        let result: i32 = lua.globals().get("RANDOM_100").unwrap();
         assert_eq!(result, 0);
     }
 
     #[test]
     fn stub_function_wild_people_returns_zero() {
         let (lua, _bridge) = setup();
-        let result: i32 = lua
-            .globals()
-            .get::<LuaFunction>("WILD_PEOPLE")
-            .unwrap()
-            .call(())
-            .unwrap();
+        // WILD_PEOPLE is a query global (plain integer after update_query_globals)
+        let result: i32 = lua.globals().get("WILD_PEOPLE").unwrap();
         assert_eq!(result, 0);
     }
 
     #[test]
     fn stub_function_my_attack_army_count_returns_zero() {
         let (lua, _bridge) = setup();
-        let result: i32 = lua
-            .globals()
-            .get::<LuaFunction>("MY_ATTACK_ARMY_COUNT")
-            .unwrap()
-            .call(())
-            .unwrap();
+        // MY_ATTACK_ARMY_COUNT is a query global (plain integer after update_query_globals)
+        let result: i32 = lua.globals().get("MY_ATTACK_ARMY_COUNT").unwrap();
         assert_eq!(result, 0);
     }
 
     #[test]
     fn stub_function_my_defend_army_count_returns_zero() {
         let (lua, _bridge) = setup();
-        let result: i32 = lua
-            .globals()
-            .get::<LuaFunction>("MY_DEFEND_ARMY_COUNT")
-            .unwrap()
-            .call(())
-            .unwrap();
+        // MY_DEFEND_ARMY_COUNT is a query global (plain integer after update_query_globals)
+        let result: i32 = lua.globals().get("MY_DEFEND_ARMY_COUNT").unwrap();
         assert_eq!(result, 0);
     }
 
     #[test]
     fn stub_function_is_prisoner_left_returns_zero() {
         let (lua, _bridge) = setup();
+        // IS_PRISONER_LEFT is a function stub (parameterized query)
         let result: i32 = lua
             .globals()
             .get::<LuaFunction>("IS_PRISONER_LEFT")
@@ -1524,7 +2570,7 @@ mod tests {
     #[test]
     fn lua_syntax_error_returns_error() {
         let (lua, _bridge) = setup();
-        let result = lua.load("if GAME_TURN() > 0 then").exec();
+        let result = lua.load("if GAME_TURN > 0 then").exec();
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("'end'"));
     }
@@ -1532,7 +2578,7 @@ mod tests {
     #[test]
     fn every_with_zero_interval_does_not_crash() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().game_tick = 5;
+        set_tick(&lua, &bridge, 5);
         lua.load("_every_reset_ids()").exec().unwrap();
         let result = lua.load("EVERY(0, function() end)").exec();
         assert!(result.is_ok());
@@ -1574,7 +2620,7 @@ mod tests {
     #[test]
     fn set_spell_entry_bounds_check() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 0;
+        set_tribe(&lua, &bridge, 0);
         lua.load("SET_SPELL_ENTRY(25, 1)").exec().unwrap();
         let b = bridge.borrow();
         assert!(!b.spell_entry[0].iter().any(|&x| x));
@@ -1583,7 +2629,7 @@ mod tests {
     #[test]
     fn max_building_type_bounds_check() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 0;
+        set_tribe(&lua, &bridge, 0);
         lua.load("MAX_BUILDING_TYPE(20, 5)").exec().unwrap();
         let b = bridge.borrow();
         assert_eq!(b.max_building_type[0].iter().sum::<u32>(), 0);
@@ -1593,8 +2639,8 @@ mod tests {
     fn tribe_population_all_zeros() {
         let (lua, bridge) = setup();
         bridge.borrow_mut().tribe_populations = [0, 0, 0, 0];
-        bridge.borrow_mut().current_tribe = 0;
-        let val: i32 = lua.load("return MY_NUM_PEOPLE()").eval().unwrap();
+        set_tribe(&lua, &bridge, 0);
+        let val: i32 = lua.load("return MY_NUM_PEOPLE").eval().unwrap();
         assert_eq!(val, 0);
     }
 
@@ -1602,24 +2648,24 @@ mod tests {
     fn tribe_mana_zero() {
         let (lua, bridge) = setup();
         bridge.borrow_mut().tribe_mana = [0, 0, 0, 0];
-        bridge.borrow_mut().current_tribe = 1;
-        let val: i32 = lua.load("return MY_MANA()").eval().unwrap();
+        set_tribe(&lua, &bridge, 1);
+        let val: i32 = lua.load("return MY_MANA").eval().unwrap();
         assert_eq!(val, 0);
     }
 
     #[test]
     fn game_tick_zero() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().game_tick = 0;
-        let val: i32 = lua.load("return GAME_TURN()").eval().unwrap();
+        set_tick(&lua, &bridge, 0);
+        let val: i32 = lua.load("return GAME_TURN").eval().unwrap();
         assert_eq!(val, 0);
     }
 
     #[test]
     fn game_tick_large_value() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().game_tick = 999999;
-        let val: i32 = lua.load("return GAME_TURN()").eval().unwrap();
+        set_tick(&lua, &bridge, 999999);
+        let val: i32 = lua.load("return GAME_TURN").eval().unwrap();
         assert_eq!(val, 999999);
     }
 
@@ -1627,7 +2673,7 @@ mod tests {
     fn every_multiple_calls_same_tick() {
         let (lua, bridge) = setup();
         lua.load("_count = 0").exec().unwrap();
-        bridge.borrow_mut().game_tick = 10;
+        set_tick(&lua, &bridge, 10);
 
         let script = r#"
             _every_reset_ids()
@@ -1675,7 +2721,9 @@ mod tests {
     #[test]
     fn delete_smoke_stuff_large_coordinates() {
         let (lua, bridge) = setup();
-        lua.load("DELETE_SMOKE_STUFF(999999, -999999)").exec().unwrap();
+        lua.load("DELETE_SMOKE_STUFF(999999, -999999)")
+            .exec()
+            .unwrap();
         let b = bridge.borrow();
         assert_eq!(b.pending_cleanup.len(), 1);
         assert_eq!(b.pending_cleanup[0].x, 999999);
@@ -1685,7 +2733,7 @@ mod tests {
     #[test]
     fn set_reincarnation_off() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 0;
+        set_tribe(&lua, &bridge, 0);
         lua.load("SET_REINCARNATION(0)").exec().unwrap();
         assert!(!bridge.borrow().reincarnation[0]);
     }
@@ -1693,7 +2741,7 @@ mod tests {
     #[test]
     fn set_bucket_usage_off() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 0;
+        set_tribe(&lua, &bridge, 0);
         lua.load("SET_BUCKET_USAGE(0)").exec().unwrap();
         assert!(!bridge.borrow().bucket_usage[0]);
     }
@@ -1728,11 +2776,11 @@ mod tests {
     #[test]
     fn lua_runtime_error_in_function() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().game_tick = 100;
+        set_tick(&lua, &bridge, 100);
         let result = lua
             .load(
                 r#"
-            local x = GAME_TURN()
+            local x = GAME_TURN
             if x > 50 then
                 error("test error")
             end
@@ -1747,7 +2795,7 @@ mod tests {
     fn every_interval_larger_than_tick() {
         let (lua, bridge) = setup();
         lua.load("_count = 0").exec().unwrap();
-        bridge.borrow_mut().game_tick = 5;
+        set_tick(&lua, &bridge, 5);
 
         let script = r#"
             _every_reset_ids()
@@ -1764,31 +2812,31 @@ mod tests {
     #[test]
     fn integration_simple_script_loop() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 0;
+        set_tribe(&lua, &bridge, 0);
         bridge.borrow_mut().tribe_populations[0] = 50;
 
         // Simulate a simple AI script that trains people when population is low
         let script = r#"
             _every_reset_ids()
             EVERY(64, function()
-                if MY_NUM_PEOPLE() < 80 then
+                if MY_NUM_PEOPLE < 80 then
                     TRAIN_PEOPLE_NOW(1, 1)
                 end
             end)
         "#;
 
         // Tick 0: script loads but doesn't fire
-        bridge.borrow_mut().game_tick = 0;
+        set_tick(&lua, &bridge, 0);
         lua.load(script).exec().unwrap();
         assert_eq!(bridge.borrow().pending_trains.len(), 0);
 
         // Tick 64: EVERY should fire
-        bridge.borrow_mut().game_tick = 64;
+        set_tick(&lua, &bridge, 64);
         lua.load(script).exec().unwrap();
         assert_eq!(bridge.borrow().pending_trains.len(), 1);
 
         // Tick 128: EVERY should fire again
-        bridge.borrow_mut().game_tick = 128;
+        set_tick(&lua, &bridge, 128);
         lua.load(script).exec().unwrap();
         assert_eq!(bridge.borrow().pending_trains.len(), 2);
     }
@@ -1796,7 +2844,7 @@ mod tests {
     #[test]
     fn integration_multiple_every_blocks() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 0;
+        set_tribe(&lua, &bridge, 0);
 
         // Script with multiple EVERY blocks at different intervals
         let script = r#"
@@ -1814,7 +2862,7 @@ mod tests {
 
         // Run through ticks
         for tick in [32, 64, 96, 128] {
-            bridge.borrow_mut().game_tick = tick;
+            set_tick(&lua, &bridge, tick);
             lua.load(script).exec().unwrap();
         }
 
@@ -1826,20 +2874,20 @@ mod tests {
     #[test]
     fn integration_condition_based_attack() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 0;
+        set_tribe(&lua, &bridge, 0);
         bridge.borrow_mut().tribe_populations[0] = 100;
 
         // Script that attacks when population exceeds threshold
         let script = r#"
             _every_reset_ids()
             EVERY(256, function()
-                if MY_NUM_PEOPLE() > 50 then
+                if MY_NUM_PEOPLE > 50 then
                     ATTACK(1, 10, 0)
                 end
             end)
         "#;
 
-        bridge.borrow_mut().game_tick = 256;
+        set_tick(&lua, &bridge, 256);
         lua.load(script).exec().unwrap();
         assert_eq!(bridge.borrow().pending_attacks.len(), 1);
         assert_eq!(bridge.borrow().pending_attacks[0].target_tribe, 1);
@@ -1849,13 +2897,13 @@ mod tests {
     #[test]
     fn integration_spell_bucket_management() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 0;
+        set_tribe(&lua, &bridge, 0);
 
         // Script that configures spell buckets based on population
         let script = r#"
             _every_reset_ids()
             EVERY(256, function()
-                if MY_NUM_PEOPLE() < 80 then
+                if MY_NUM_PEOPLE < 80 then
                     SET_BUCKET_USAGE(1)
                 else
                     SET_BUCKET_USAGE(0)
@@ -1864,14 +2912,16 @@ mod tests {
         "#;
 
         // Low population - bucket on
-        bridge.borrow_mut().game_tick = 256;
+        set_tick(&lua, &bridge, 256);
         bridge.borrow_mut().tribe_populations[0] = 50;
+        update_query_globals(&lua, &bridge.borrow());
         lua.load(script).exec().unwrap();
         assert!(bridge.borrow().bucket_usage[0]);
 
         // High population - bucket off
-        bridge.borrow_mut().game_tick = 512;
+        set_tick(&lua, &bridge, 512);
         bridge.borrow_mut().tribe_populations[0] = 100;
+        update_query_globals(&lua, &bridge.borrow());
         lua.load(script).exec().unwrap();
         assert!(!bridge.borrow().bucket_usage[0]);
     }
@@ -1879,7 +2929,7 @@ mod tests {
     #[test]
     fn integration_marker_based_movement() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 0;
+        set_tribe(&lua, &bridge, 0);
 
         // Script that sets up markers and moves people
         let script = r#"
@@ -1891,7 +2941,7 @@ mod tests {
             end)
         "#;
 
-        bridge.borrow_mut().game_tick = 64;
+        set_tick(&lua, &bridge, 64);
         lua.load(script).exec().unwrap();
 
         let b = bridge.borrow();
@@ -1905,7 +2955,7 @@ mod tests {
     #[test]
     fn integration_building_and_training() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 0;
+        set_tribe(&lua, &bridge, 0);
 
         // Script that builds and trains in sequence
         let script = r#"
@@ -1917,7 +2967,7 @@ mod tests {
             end)
         "#;
 
-        bridge.borrow_mut().game_tick = 128;
+        set_tick(&lua, &bridge, 128);
         lua.load(script).exec().unwrap();
 
         let b = bridge.borrow();
@@ -1931,7 +2981,7 @@ mod tests {
     #[test]
     fn integration_defensive_setup() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 0;
+        set_tribe(&lua, &bridge, 0);
 
         // Script that sets up defensive configuration
         let script = r#"
@@ -1944,7 +2994,7 @@ mod tests {
             end)
         "#;
 
-        bridge.borrow_mut().game_tick = 64;
+        set_tick(&lua, &bridge, 64);
         lua.load(script).exec().unwrap();
 
         let b = bridge.borrow();
@@ -1957,14 +3007,15 @@ mod tests {
     #[test]
     fn integration_reincarnation_and_mana() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 0;
+        set_tribe(&lua, &bridge, 0);
         bridge.borrow_mut().tribe_mana[0] = 100000;
+        update_query_globals(&lua, &bridge.borrow());
 
         // Script that enables reincarnation based on mana
         let script = r#"
             _every_reset_ids()
             EVERY(256, function()
-                if MY_MANA() > 50000 then
+                if MY_MANA > 50000 then
                     SET_REINCARNATION(1)
                 else
                     SET_REINCARNATION(0)
@@ -1972,13 +3023,14 @@ mod tests {
             end)
         "#;
 
-        bridge.borrow_mut().game_tick = 256;
+        set_tick(&lua, &bridge, 256);
         lua.load(script).exec().unwrap();
         assert!(bridge.borrow().reincarnation[0]);
 
         // Low mana - reincarnation off
-        bridge.borrow_mut().game_tick = 512;
+        set_tick(&lua, &bridge, 512);
         bridge.borrow_mut().tribe_mana[0] = 10000;
+        update_query_globals(&lua, &bridge.borrow());
         lua.load(script).exec().unwrap();
         assert!(!bridge.borrow().reincarnation[0]);
     }
@@ -1986,14 +3038,14 @@ mod tests {
     #[test]
     fn integration_full_tick_cycle() {
         let (lua, bridge) = setup();
-        bridge.borrow_mut().current_tribe = 0;
+        set_tribe(&lua, &bridge, 0);
         bridge.borrow_mut().tribe_populations[0] = 75;
 
         // Complex script mimicking real AI behavior
         let script = r#"
             _every_reset_ids()
             EVERY(64, function()
-                if MY_NUM_PEOPLE() < 80 then
+                if MY_NUM_PEOPLE < 80 then
                     TRAIN_PEOPLE_NOW(1, 1)
                     BUILD_AT(0, 0, 0)
                 end
@@ -2002,25 +3054,25 @@ mod tests {
                 SET_DEFENSE_RADIUS(256)
             end)
             EVERY(256, function()
-                if MY_NUM_PEOPLE() > 50 then
-                    ATTACK(1, MY_NUM_PEOPLE() / 2, 0)
+                if MY_NUM_PEOPLE > 50 then
+                    ATTACK(1, MY_NUM_PEOPLE / 2, 0)
                 end
             end)
         "#;
 
         // Tick 64: train and build
-        bridge.borrow_mut().game_tick = 64;
+        set_tick(&lua, &bridge, 64);
         lua.load(script).exec().unwrap();
         assert_eq!(bridge.borrow().pending_trains.len(), 1);
         assert_eq!(bridge.borrow().pending_builds.len(), 1);
 
         // Tick 128: defense radius
-        bridge.borrow_mut().game_tick = 128;
+        set_tick(&lua, &bridge, 128);
         lua.load(script).exec().unwrap();
         assert_eq!(bridge.borrow().defence_radius[0], 256);
 
         // Tick 256: attack trigger
-        bridge.borrow_mut().game_tick = 256;
+        set_tick(&lua, &bridge, 256);
         lua.load(script).exec().unwrap();
         assert_eq!(bridge.borrow().pending_attacks.len(), 1);
         assert_eq!(bridge.borrow().pending_attacks[0].num_people, 37); // 75 / 2
@@ -2031,14 +3083,14 @@ mod tests {
         let (lua, bridge) = setup();
 
         // Test that different tribes have isolated state
-        bridge.borrow_mut().current_tribe = 0;
+        set_tribe(&lua, &bridge, 0);
         bridge.borrow_mut().tribe_populations[0] = 100;
         bridge.borrow_mut().tribe_populations[1] = 50;
 
         let script = r#"
             _every_reset_ids()
             EVERY(64, function()
-                if MY_NUM_PEOPLE() > 75 then
+                if MY_NUM_PEOPLE > 75 then
                     SET_ATTACK_VARIABLE(100)
                 else
                     SET_ATTACK_VARIABLE(50)
@@ -2047,14 +3099,14 @@ mod tests {
         "#;
 
         // Tribe 0 (100 people) - should set to 100
-        bridge.borrow_mut().game_tick = 64;
-        bridge.borrow_mut().current_tribe = 0;
+        set_tick(&lua, &bridge, 64);
+        set_tribe(&lua, &bridge, 0);
         lua.load(script).exec().unwrap();
         assert_eq!(bridge.borrow().attack_variable[0], 100);
 
         // Tribe 1 (50 people) - should set to 50
-        bridge.borrow_mut().current_tribe = 1;
-        bridge.borrow_mut().game_tick = 128;
+        set_tribe(&lua, &bridge, 1);
+        set_tick(&lua, &bridge, 128);
         lua.load(script).exec().unwrap();
         assert_eq!(bridge.borrow().attack_variable[1], 50);
 

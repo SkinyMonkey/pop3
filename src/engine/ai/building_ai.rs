@@ -80,7 +80,7 @@ mod tests {
         // Queue housing (type 2) then drum tower (type 4)
         p.queue_building(2); // Housing
         p.queue_building(4); // DrumTower
-        // DrumTower should sort first (lower priority value = higher priority)
+                             // DrumTower should sort first (lower priority value = higher priority)
         assert_eq!(p.priority_queue[0].0, AiBuildingPriority::DrumTower);
         assert_eq!(p.priority_queue[1].0, AiBuildingPriority::Housing);
     }

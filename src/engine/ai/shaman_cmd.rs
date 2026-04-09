@@ -130,14 +130,38 @@ mod tests {
 
     #[test]
     fn from_raw_all_8_types() {
-        assert_eq!(ShamanCommandType::from_raw(0), Some(ShamanCommandType::PrimaryAttack));
-        assert_eq!(ShamanCommandType::from_raw(1), Some(ShamanCommandType::SecondaryAttack));
-        assert_eq!(ShamanCommandType::from_raw(2), Some(ShamanCommandType::DefendPosition));
-        assert_eq!(ShamanCommandType::from_raw(3), Some(ShamanCommandType::SpellCasting));
-        assert_eq!(ShamanCommandType::from_raw(4), Some(ShamanCommandType::ArmyMovement));
-        assert_eq!(ShamanCommandType::from_raw(5), Some(ShamanCommandType::BuildingPlacement));
-        assert_eq!(ShamanCommandType::from_raw(6), Some(ShamanCommandType::ResourceGathering));
-        assert_eq!(ShamanCommandType::from_raw(7), Some(ShamanCommandType::Conversion));
+        assert_eq!(
+            ShamanCommandType::from_raw(0),
+            Some(ShamanCommandType::PrimaryAttack)
+        );
+        assert_eq!(
+            ShamanCommandType::from_raw(1),
+            Some(ShamanCommandType::SecondaryAttack)
+        );
+        assert_eq!(
+            ShamanCommandType::from_raw(2),
+            Some(ShamanCommandType::DefendPosition)
+        );
+        assert_eq!(
+            ShamanCommandType::from_raw(3),
+            Some(ShamanCommandType::SpellCasting)
+        );
+        assert_eq!(
+            ShamanCommandType::from_raw(4),
+            Some(ShamanCommandType::ArmyMovement)
+        );
+        assert_eq!(
+            ShamanCommandType::from_raw(5),
+            Some(ShamanCommandType::BuildingPlacement)
+        );
+        assert_eq!(
+            ShamanCommandType::from_raw(6),
+            Some(ShamanCommandType::ResourceGathering)
+        );
+        assert_eq!(
+            ShamanCommandType::from_raw(7),
+            Some(ShamanCommandType::Conversion)
+        );
         assert_eq!(ShamanCommandType::from_raw(8), None);
     }
 }

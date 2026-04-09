@@ -27,6 +27,45 @@ pub struct AiGameBridge {
     pub tribe_mana: [u32; 4],
     pub tribe_active: [bool; 4],
     pub tribe_num_buildings: [u32; 4],
+    // Per-tribe unit counts
+    pub tribe_braves: [u32; 4],
+    pub tribe_warriors: [u32; 4],
+    pub tribe_preachers: [u32; 4],
+    pub tribe_spies: [u32; 4],
+    pub tribe_super_warriors: [u32; 4],
+    // Per-tribe kill counts
+    pub tribe_killed_by_blue: [u32; 4],
+    pub tribe_killed_by_red: [u32; 4],
+    pub tribe_killed_by_yellow: [u32; 4],
+    pub tribe_killed_by_green: [u32; 4],
+    // Per-tribe building counts
+    pub tribe_small_huts: [u32; 4],
+    pub tribe_medium_huts: [u32; 4],
+    pub tribe_large_huts: [u32; 4],
+    pub tribe_drum_towers: [u32; 4],
+    pub tribe_temples: [u32; 4],
+    pub tribe_spy_trains: [u32; 4],
+    pub tribe_warrior_trains: [u32; 4],
+    pub tribe_super_trains: [u32; 4],
+    pub tribe_boats: [u32; 4],
+    pub tribe_airships: [u32; 4],
+    pub tribe_vehicles: [u32; 4],
+    pub tribe_wood_count: [u32; 4],
+    // Per-tribe army counts
+    pub tribe_attack_army: [u32; 4],
+    pub tribe_defend_army: [u32; 4],
+    // Per-tribe spell costs
+    pub tribe_spell_burn_cost: [u32; 4],
+    pub tribe_spell_blast_cost: [u32; 4],
+    pub tribe_spell_lightning_cost: [u32; 4],
+    // Per-tribe reincarnation timer
+    pub tribe_reincarnation_timer: [u32; 4],
+    // Per-tribe shaman state
+    pub tribe_shaman_lives: [u32; 4],
+    pub tribe_shaman_alive: [bool; 4],
+    pub tribe_shaman_available: [bool; 4],
+    pub tribe_shaman_available_for_attack: [bool; 4],
+    pub tribe_prisoner_left: [bool; 4],
     // Configuration setters (written by scripts, read by game)
     pub defence_radius: [u32; 4],
     pub base_radius: [u32; 4],
@@ -38,6 +77,12 @@ pub struct AiGameBridge {
     pub building_type_enabled: [[bool; 16]; 4],
     pub spell_entry: [[bool; 21]; 4],
     pub marker_entries: Vec<MarkerEntry>,
+    // Script flags and state
+    pub state_flags: [bool; 64],
+    pub turn_push_enabled: bool,
+    pub tribe_disabled: [bool; 4],
+    pub dont_target_shaman: bool,
+    pub defend_shamen: bool,
     // AI output commands (collected during script execution)
     pub pending_attacks: Vec<AiAttackCommand>,
     pub pending_builds: Vec<AiBuildCommand>,
@@ -60,6 +105,38 @@ impl AiGameBridge {
             tribe_mana: [0; 4],
             tribe_active: [false; 4],
             tribe_num_buildings: [0; 4],
+            tribe_braves: [0; 4],
+            tribe_warriors: [0; 4],
+            tribe_preachers: [0; 4],
+            tribe_spies: [0; 4],
+            tribe_super_warriors: [0; 4],
+            tribe_killed_by_blue: [0; 4],
+            tribe_killed_by_red: [0; 4],
+            tribe_killed_by_yellow: [0; 4],
+            tribe_killed_by_green: [0; 4],
+            tribe_small_huts: [0; 4],
+            tribe_medium_huts: [0; 4],
+            tribe_large_huts: [0; 4],
+            tribe_drum_towers: [0; 4],
+            tribe_temples: [0; 4],
+            tribe_spy_trains: [0; 4],
+            tribe_warrior_trains: [0; 4],
+            tribe_super_trains: [0; 4],
+            tribe_boats: [0; 4],
+            tribe_airships: [0; 4],
+            tribe_vehicles: [0; 4],
+            tribe_wood_count: [0; 4],
+            tribe_attack_army: [0; 4],
+            tribe_defend_army: [0; 4],
+            tribe_spell_burn_cost: [0; 4],
+            tribe_spell_blast_cost: [0; 4],
+            tribe_spell_lightning_cost: [0; 4],
+            tribe_reincarnation_timer: [0; 4],
+            tribe_shaman_lives: [0; 4],
+            tribe_shaman_alive: [false; 4],
+            tribe_shaman_available: [false; 4],
+            tribe_shaman_available_for_attack: [false; 4],
+            tribe_prisoner_left: [false; 4],
             defence_radius: [0; 4],
             base_radius: [0; 4],
             attack_variable: [0; 4],
@@ -70,6 +147,11 @@ impl AiGameBridge {
             building_type_enabled: [[false; 16]; 4],
             spell_entry: [[false; 21]; 4],
             marker_entries: Vec::new(),
+            state_flags: [false; 64],
+            turn_push_enabled: false,
+            tribe_disabled: [false; 4],
+            dont_target_shaman: false,
+            defend_shamen: false,
             pending_attacks: Vec::new(),
             pending_builds: Vec::new(),
             pending_spells: Vec::new(),
@@ -85,6 +167,7 @@ impl AiGameBridge {
 
 #[derive(Debug, Clone)]
 pub struct AiAttackCommand {
+    pub tribe_id: u8,
     pub target_tribe: u8,
     pub num_people: u32,
     pub attack_type: u32,
@@ -93,6 +176,7 @@ pub struct AiAttackCommand {
 
 #[derive(Debug, Clone)]
 pub struct AiBuildCommand {
+    pub tribe_id: u8,
     pub building_type: u8,
     pub marker_x: i32,
     pub marker_y: i32,
@@ -100,6 +184,7 @@ pub struct AiBuildCommand {
 
 #[derive(Debug, Clone)]
 pub struct AiSpellCommand {
+    pub tribe_id: u8,
     pub spell_type: u8,
     pub target_x: i32,
     pub target_y: i32,
@@ -107,34 +192,40 @@ pub struct AiSpellCommand {
 
 #[derive(Debug, Clone)]
 pub struct AiTrainCommand {
+    pub tribe_id: u8,
     pub unit_type: u8,
     pub count: u32,
 }
 
 #[derive(Debug, Clone)]
 pub struct AiMoveCommand {
+    pub tribe_id: u8,
     pub marker: i32,
     pub num_people: u32,
 }
 
 #[derive(Debug, Clone)]
 pub struct AiPrayCommand {
+    pub tribe_id: u8,
     pub head_num: i32,
 }
 
 #[derive(Debug, Clone)]
 pub struct AiCleanupCommand {
+    pub tribe_id: u8,
     pub x: i32,
     pub y: i32,
 }
 
 #[derive(Debug, Clone)]
 pub struct AiConvertCommand {
+    pub tribe_id: u8,
     pub marker: i32,
 }
 
 #[derive(Debug, Clone)]
 pub struct AiShamanMoveCommand {
+    pub tribe_id: u8,
     pub marker: i32,
 }
 
@@ -185,7 +276,9 @@ impl TribeScriptState {
 
 /// Maximum Lua instructions per tribe per tick before aborting.
 /// Prevents infinite loops in AI scripts.
-const SCRIPT_INSTRUCTION_LIMIT: u32 = 100_000;
+/// Set high enough for complex initialization ticks (GAME_TURN == 0)
+/// where many variables and EVERY blocks fire simultaneously.
+const SCRIPT_INSTRUCTION_LIMIT: u32 = 500_000;
 
 /// AI scripting system owning a Lua 5.4 VM and per-tribe state.
 ///
@@ -235,6 +328,7 @@ impl AiSystem {
         )?;
 
         let bridge = Rc::new(RefCell::new(AiGameBridge::new()));
+        popscript::register_query_globals(&lua, &bridge)?;
         popscript::register_popscript_functions(&lua, &bridge)?;
         popscript::register_every(&lua)?;
 
@@ -413,8 +507,8 @@ impl AiSystem {
     }
 
     /// Load scripts for a level. Called when transitioning to InGame.
-    /// Finds and loads .lua scripts from the scripts directory for all
-    /// non-player tribes.
+    /// Finds and loads .lua scripts from the scripts directory for all tribes.
+    /// Scripts run for all tribes, but AI commands only apply to non-player tribes.
     pub fn load_level_scripts(
         &mut self,
         level: u32,
@@ -426,19 +520,27 @@ impl AiSystem {
 
         let scripts = crate::data::scripts::find_scripts_for_level(level, scripts_dir);
         for (tribe, path) in scripts {
-            if tribe == player_tribe {
-                continue; // Skip player tribe
-            }
             match crate::data::scripts::load_tribe_script(&path) {
                 Ok(source) => {
+                    // Initialize PopScript variables (_var0.._var63 = 0)
+                    popscript::init_script_variables(&self.lua);
+
+                    // Preprocess: normalize pure query name usage
+                    // (e.g., MY_NUM_PEOPLE() → MY_NUM_PEOPLE) so the
+                    // plain-integer globals work for both variable and
+                    // function-call access patterns.
+                    let source = popscript::preprocess_script(&source);
+
                     // Wrap source in a tick function for this tribe.
                     // The script body becomes the function body so it runs
                     // each tick when called.
-                    let wrapped = format!(
-                        "function _tribe_{}_tick()\n{}\nend",
-                        tribe, source
-                    );
-                    match self.lua.load(&wrapped).set_name(path.to_string_lossy().as_ref()).exec() {
+                    let wrapped = format!("function _tribe_{}_tick()\n{}\nend", tribe, source);
+                    match self
+                        .lua
+                        .load(&wrapped)
+                        .set_name(path.to_string_lossy().as_ref())
+                        .exec()
+                    {
                         Ok(()) => {
                             self.scripts_loaded[tribe as usize] = true;
                             self.tribe_states[tribe as usize].active = true;
@@ -449,11 +551,7 @@ impl AiSystem {
                             );
                         }
                         Err(e) => {
-                            log::error!(
-                                "Failed to compile AI script for tribe {}: {}",
-                                tribe,
-                                e
-                            );
+                            log::error!("Failed to compile AI script for tribe {}: {}", tribe, e);
                         }
                     }
                 }
@@ -467,13 +565,12 @@ impl AiSystem {
 
 impl AiTick for AiSystem {
     /// Mirrors AI_UpdateAllTribes @ 0x0041a7d0.
-    /// For each tribe 0-3: if not player and active and script loaded,
+    /// For each tribe 0-3: if active and script loaded,
     /// set current_tribe in bridge and execute the tribe's tick function.
+    /// Scripts run for all tribes (including player) to trigger level events,
+    /// but AI command dispatch is filtered to non-player tribes only.
     fn tick_update_ai(&mut self) {
         for tribe_idx in 0..4u8 {
-            if tribe_idx == self.player_tribe {
-                continue;
-            }
             if !self.tribe_states[tribe_idx as usize].active {
                 continue;
             }
@@ -484,6 +581,12 @@ impl AiTick for AiSystem {
             // Set current tribe in bridge for PopScript functions
             self.bridge.borrow_mut().current_tribe = tribe_idx;
 
+            // Update query globals as plain integers for variable access in scripts
+            {
+                let bridge = self.bridge.borrow();
+                popscript::update_query_globals(&self.lua, &bridge);
+            }
+
             // Reset EVERY IDs for deterministic counter keying
             let _ = self.lua.load("_every_reset_ids()").exec();
 
@@ -492,7 +595,7 @@ impl AiTick for AiSystem {
             match self.lua.globals().get::<LuaFunction>(func_name.as_str()) {
                 Ok(func) => {
                     if let Err(e) = func.call::<()>(()) {
-                        log::error!("AI script error for tribe {}: {}", tribe_idx, e);
+                        log::error!("Script error for tribe {}: {}", tribe_idx, e);
                     }
                 }
                 Err(_) => {
@@ -573,9 +676,8 @@ mod tests {
         // Player is tribe 0
         system.load_level_scripts(1, &dir, 0);
 
-        // Player tribe should NOT have script loaded
-        assert!(!system.scripts_loaded[0]);
-        // Other tribes should have scripts loaded
+        // All tribes should have scripts loaded (including player for level events)
+        assert!(system.scripts_loaded[0]);
         assert!(system.scripts_loaded[1]);
         assert!(system.scripts_loaded[2]);
         assert!(system.scripts_loaded[3]);
@@ -584,23 +686,19 @@ mod tests {
     }
 
     #[test]
-    fn tick_update_ai_skips_player_tribe() {
+    fn tick_update_ai_executes_all_tribes() {
         let mut system = AiSystem::new().unwrap();
-        let dir = std::env::temp_dir().join("pop3_test_skip_player");
+        let dir = std::env::temp_dir().join("pop3_test_all_tribes");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
         // Create script for tribe 0 and 1
         for t in 0..2u8 {
             let name = crate::data::scripts::script_filename(1, t);
-            std::fs::write(
-                dir.join(&name),
-                "SET_DEFENSE_RADIUS(999)\n",
-            )
-            .unwrap();
+            std::fs::write(dir.join(&name), "SET_DEFENSE_RADIUS(999)\n").unwrap();
         }
 
-        // Player is tribe 0 -- tribe 0's script should be skipped
+        // Player is tribe 0 -- all tribes execute (player tribe for level events)
         system.load_level_scripts(1, &dir, 0);
 
         // Reset bridge defence_radius
@@ -609,9 +707,8 @@ mod tests {
         system.tick_update_ai();
 
         let bridge = system.bridge.borrow();
-        // Tribe 0 is player, should NOT have been updated
-        assert_eq!(bridge.defence_radius[0], 0);
-        // Tribe 1 is AI, should have been updated
+        // All tribes should have been updated
+        assert_eq!(bridge.defence_radius[0], 999);
         assert_eq!(bridge.defence_radius[1], 999);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -649,11 +746,7 @@ mod tests {
 
         // Script for tribe 2 that reads MY_NUM_PEOPLE (depends on current_tribe)
         let name = crate::data::scripts::script_filename(1, 2);
-        std::fs::write(
-            dir.join(&name),
-            "SET_DEFENSE_RADIUS(MY_NUM_PEOPLE())\n",
-        )
-        .unwrap();
+        std::fs::write(dir.join(&name), "SET_DEFENSE_RADIUS(MY_NUM_PEOPLE())\n").unwrap();
 
         system.load_level_scripts(1, &dir, 0);
 
@@ -672,7 +765,14 @@ mod tests {
     #[test]
     fn update_bridge_populates_state() {
         let mut system = AiSystem::new().unwrap();
-        system.update_bridge(42, 0, [10, 20, 30, 40], [100, 200, 300, 400], [true, true, false, false], [5, 3, 0, 0]);
+        system.update_bridge(
+            42,
+            0,
+            [10, 20, 30, 40],
+            [100, 200, 300, 400],
+            [true, true, false, false],
+            [5, 3, 0, 0],
+        );
         let bridge = system.bridge.borrow();
         assert_eq!(bridge.game_tick, 42);
         assert_eq!(bridge.player_tribe, 0);
@@ -683,9 +783,17 @@ mod tests {
     #[test]
     fn update_bridge_clears_pending_commands() {
         let mut system = AiSystem::new().unwrap();
-        system.bridge.borrow_mut().pending_attacks.push(AiAttackCommand {
-            target_tribe: 1, num_people: 10, attack_type: 0, marker: None,
-        });
+        system
+            .bridge
+            .borrow_mut()
+            .pending_attacks
+            .push(AiAttackCommand {
+                tribe_id: 1,
+                target_tribe: 1,
+                num_people: 10,
+                attack_type: 0,
+                marker: None,
+            });
         assert_eq!(system.bridge.borrow().pending_attacks.len(), 1);
         system.update_bridge(0, 0, [0; 4], [0; 4], [false; 4], [0; 4]);
         assert_eq!(system.bridge.borrow().pending_attacks.len(), 0);
@@ -694,9 +802,17 @@ mod tests {
     #[test]
     fn drain_pending_commands_returns_queued_attacks() {
         let system = AiSystem::new().unwrap();
-        system.bridge.borrow_mut().pending_attacks.push(AiAttackCommand {
-            target_tribe: 2, num_people: 15, attack_type: 1, marker: Some((100, 200)),
-        });
+        system
+            .bridge
+            .borrow_mut()
+            .pending_attacks
+            .push(AiAttackCommand {
+                tribe_id: 1,
+                target_tribe: 2,
+                num_people: 15,
+                attack_type: 1,
+                marker: Some((100, 200)),
+            });
         let cmds = system.drain_pending_commands();
         assert_eq!(cmds.attacks.len(), 1);
         assert_eq!(cmds.attacks[0].target_tribe, 2);

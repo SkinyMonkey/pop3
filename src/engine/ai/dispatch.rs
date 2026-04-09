@@ -3,21 +3,21 @@
 // Replaces the log-only handlers in app.rs with actual unit movement,
 // building placement queuing, training initiation, and spell TODO markers.
 
-use super::{
-    AiPendingCommands, AiSystem, MarkerEntry,
-    target::score_person_target,
-};
-use crate::engine::units::coordinator::UnitCoordinator;
+use super::{target::score_person_target, AiPendingCommands, AiSystem, MarkerEntry};
 use crate::engine::buildings::training::{start_training, training_output_subtype};
 use crate::engine::buildings::BuildingState;
 use crate::engine::movement::WorldCoord;
+use crate::engine::units::coordinator::UnitCoordinator;
 
 /// Resolve a marker ID to a world position using the marker entries table.
 fn resolve_marker(marker_entries: &[MarkerEntry], marker_id: i32) -> Option<WorldCoord> {
     marker_entries
         .iter()
         .find(|m| m.marker == marker_id)
-        .map(|m| WorldCoord { x: m.x as i16, z: m.y as i16 })
+        .map(|m| WorldCoord {
+            x: m.x as i16,
+            z: m.y as i16,
+        })
 }
 
 /// Dispatch all pending AI commands for a single AI tribe, producing real game state changes.
@@ -39,8 +39,14 @@ pub fn dispatch_ai_commands(
 ) {
     // Attack commands: find best target, move idle units toward it
     for atk in &cmds.attacks {
+        if atk.tribe_id != ai_tribe {
+            continue;
+        }
         let target_pos = if let Some((x, z)) = atk.marker {
-            WorldCoord { x: x as i16, z: z as i16 }
+            WorldCoord {
+                x: x as i16,
+                z: z as i16,
+            }
         } else {
             // Find best enemy target using scoring
             find_best_attack_target(coordinator, atk.target_tribe)
@@ -50,22 +56,37 @@ pub fn dispatch_ai_commands(
             coordinator.order_move_tribe(ai_tribe, target_pos, atk.num_people);
             log::info!(
                 "AI tribe {} attacks tribe {} with {} people -> ({}, {})",
-                ai_tribe, atk.target_tribe, atk.num_people, target_pos.x, target_pos.z
+                ai_tribe,
+                atk.target_tribe,
+                atk.num_people,
+                target_pos.x,
+                target_pos.z
             );
         }
     }
 
     // Build commands: queue into AiBuildingPlacement
     for bld in &cmds.builds {
-        ai_system.building_placement_mut(ai_tribe).queue_building(bld.building_type);
+        if bld.tribe_id != ai_tribe {
+            continue;
+        }
+        ai_system
+            .building_placement_mut(ai_tribe)
+            .queue_building(bld.building_type);
         log::info!(
             "AI tribe {} queues building type {} at ({}, {})",
-            ai_tribe, bld.building_type, bld.marker_x, bld.marker_y
+            ai_tribe,
+            bld.building_type,
+            bld.marker_x,
+            bld.marker_y
         );
     }
 
     // Train commands: find matching training buildings and start conversion
     for trn in &cmds.trains {
+        if trn.tribe_id != ai_tribe {
+            continue;
+        }
         let mut trained = 0u32;
         // Two-phase: collect matching building handles, then mutate
         let handles: Vec<u16> = coordinator
@@ -91,46 +112,70 @@ pub fn dispatch_ai_commands(
         if trained > 0 {
             log::info!(
                 "AI tribe {} initiated training of {} units of type {}",
-                ai_tribe, trained, trn.unit_type
+                ai_tribe,
+                trained,
+                trn.unit_type
             );
         }
     }
 
     // Spell commands: TODO Phase 4 spell system
     for spl in &cmds.spells {
+        if spl.tribe_id != ai_tribe {
+            continue;
+        }
         log::info!(
             "AI spell {} at ({}, {}) -- TODO: Phase 4 spell system",
-            spl.spell_type, spl.target_x, spl.target_y
+            spl.spell_type,
+            spl.target_x,
+            spl.target_y
         );
     }
 
     // Move commands: move units toward marker position
     for mv in &cmds.moves {
+        if mv.tribe_id != ai_tribe {
+            continue;
+        }
         if let Some(target) = resolve_marker(marker_entries, mv.marker) {
             coordinator.order_move_tribe(ai_tribe, target, mv.num_people);
             log::info!(
                 "AI tribe {} moves {} people to marker {} -> ({}, {})",
-                ai_tribe, mv.num_people, mv.marker, target.x, target.z
+                ai_tribe,
+                mv.num_people,
+                mv.marker,
+                target.x,
+                target.z
             );
         }
     }
 
     // Convert commands: TODO requires spell-like behavior
     for cnv in &cmds.converts {
+        if cnv.tribe_id != ai_tribe {
+            continue;
+        }
         log::info!(
             "AI tribe {} converts at marker {} -- TODO: convert wild",
-            ai_tribe, cnv.marker
+            ai_tribe,
+            cnv.marker
         );
     }
 
     // Shaman move commands: move shaman toward marker position
     for sm in &cmds.shaman_moves {
+        if sm.tribe_id != ai_tribe {
+            continue;
+        }
         if let Some(target) = resolve_marker(marker_entries, sm.marker) {
             // Move only the shaman (subtype 7) — use order_move_tribe with max 1
             coordinator.order_move_shaman(ai_tribe, target);
             log::info!(
                 "AI tribe {} shaman moves to marker {} -> ({}, {})",
-                ai_tribe, sm.marker, target.x, target.z
+                ai_tribe,
+                sm.marker,
+                target.x,
+                target.z
             );
         }
     }
@@ -170,10 +215,10 @@ mod tests {
     fn make_coordinator_with_units(units_data: &[(u8, u8, bool, u8)]) -> UnitCoordinator {
         // (tribe_index, subtype, alive, state_byte)
         // state_byte: 1=Idle, 6=Wander, 5=GoToPoint
-        use crate::engine::units::unit::Unit;
-        use crate::engine::units::person_state::PersonState;
-        use crate::engine::movement::PersonMovement;
         use crate::data::units::ModelType;
+        use crate::engine::movement::PersonMovement;
+        use crate::engine::units::person_state::PersonState;
+        use crate::engine::units::unit::Unit;
 
         let mut coord = UnitCoordinator::new();
         for (i, &(tribe, subtype, alive, state_byte)) in units_data.iter().enumerate() {
@@ -213,7 +258,10 @@ mod tests {
                 building_handle: None,
                 wood_carried: 0,
             };
-            unit.movement.position = WorldCoord { x: (i as i16 + 1) * 100, z: (i as i16 + 1) * 100 };
+            unit.movement.position = WorldCoord {
+                x: (i as i16 + 1) * 100,
+                z: (i as i16 + 1) * 100,
+            };
             coord.push_unit_for_test(unit);
         }
         coord
@@ -222,9 +270,9 @@ mod tests {
     #[test]
     fn order_move_tribe_moves_matching_idle_units() {
         let mut coord = make_coordinator_with_units(&[
-            (1, 2, true, 1),  // tribe 1, brave, alive, idle -> should move
-            (1, 2, true, 1),  // tribe 1, brave, alive, idle -> should move
-            (0, 2, true, 1),  // tribe 0, brave, alive, idle -> wrong tribe
+            (1, 2, true, 1), // tribe 1, brave, alive, idle -> should move
+            (1, 2, true, 1), // tribe 1, brave, alive, idle -> should move
+            (0, 2, true, 1), // tribe 0, brave, alive, idle -> wrong tribe
         ]);
         let target = WorldCoord { x: 500, z: 500 };
         let moved = coord.order_move_tribe(1, target, 10);
@@ -245,9 +293,9 @@ mod tests {
     #[test]
     fn order_move_tribe_skips_non_idle_units() {
         let mut coord = make_coordinator_with_units(&[
-            (1, 2, true, 5),  // tribe 1, GoToPoint -> skip (already moving)
-            (1, 2, true, 1),  // tribe 1, Idle -> should move
-            (1, 2, true, 6),  // tribe 1, Wander -> should move
+            (1, 2, true, 5), // tribe 1, GoToPoint -> skip (already moving)
+            (1, 2, true, 1), // tribe 1, Idle -> should move
+            (1, 2, true, 6), // tribe 1, Wander -> should move
         ]);
         let target = WorldCoord { x: 500, z: 500 };
         let moved = coord.order_move_tribe(1, target, 10);
@@ -257,9 +305,9 @@ mod tests {
     #[test]
     fn order_move_tribe_respects_num_people_limit() {
         let mut coord = make_coordinator_with_units(&[
-            (1, 2, true, 1),  // tribe 1, idle
-            (1, 2, true, 1),  // tribe 1, idle
-            (1, 2, true, 1),  // tribe 1, idle
+            (1, 2, true, 1), // tribe 1, idle
+            (1, 2, true, 1), // tribe 1, idle
+            (1, 2, true, 1), // tribe 1, idle
         ]);
         let target = WorldCoord { x: 500, z: 500 };
         let moved = coord.order_move_tribe(1, target, 2);
@@ -269,11 +317,12 @@ mod tests {
     #[test]
     fn dispatch_attack_no_idle_units_no_changes() {
         let mut coord = make_coordinator_with_units(&[
-            (1, 2, true, 5),  // tribe 1, already moving
+            (1, 2, true, 5), // tribe 1, already moving
         ]);
         let mut ai = AiSystem::new().unwrap();
         let cmds = AiPendingCommands {
             attacks: vec![super::super::AiAttackCommand {
+                tribe_id: 1,
                 target_tribe: 0,
                 num_people: 5,
                 attack_type: 0,
@@ -288,7 +337,10 @@ mod tests {
         };
         dispatch_ai_commands(&cmds, &[], &mut coord, &mut ai, 1);
         // Unit should still be in GoToPoint (unchanged)
-        assert_eq!(coord.units()[0].state, crate::engine::units::person_state::PersonState::GoToPoint);
+        assert_eq!(
+            coord.units()[0].state,
+            crate::engine::units::person_state::PersonState::GoToPoint
+        );
     }
 
     #[test]
@@ -298,6 +350,7 @@ mod tests {
         let cmds = AiPendingCommands {
             attacks: vec![],
             builds: vec![super::super::AiBuildCommand {
+                tribe_id: 1,
                 building_type: 4, // drum tower
                 marker_x: 100,
                 marker_y: 200,
@@ -315,18 +368,21 @@ mod tests {
 
     #[test]
     fn dispatch_train_starts_training_in_matching_building() {
-        use crate::engine::buildings::types::{BuildingSubtype, BuildingState as BS, BuildingData};
         use crate::data::units::ModelType;
+        use crate::engine::buildings::types::{BuildingData, BuildingState as BS, BuildingSubtype};
         use crate::engine::movement::WorldCoord;
 
         let mut coord = UnitCoordinator::new();
         // Create a warrior training building owned by tribe 1
-        let handle = coord.pool_mut().create(
-            ModelType::Building,
-            BuildingSubtype::WarriorTrain as u8,
-            1, // tribe 1
-            WorldCoord { x: 0, z: 0 },
-        ).unwrap();
+        let handle = coord
+            .pool_mut()
+            .create(
+                ModelType::Building,
+                BuildingSubtype::WarriorTrain as u8,
+                1, // tribe 1
+                WorldCoord { x: 0, z: 0 },
+            )
+            .unwrap();
         // Set building to Active state with training flag
         if let Some((_hdr, bd)) = coord.pool_mut().building_by_handle_mut(handle) {
             bd.state = BS::Active;
@@ -341,6 +397,7 @@ mod tests {
             builds: vec![],
             spells: vec![],
             trains: vec![super::super::AiTrainCommand {
+                tribe_id: 1,
                 unit_type: 3, // warrior
                 count: 1,
             }],
@@ -363,6 +420,7 @@ mod tests {
             attacks: vec![],
             builds: vec![],
             spells: vec![super::super::AiSpellCommand {
+                tribe_id: 1,
                 spell_type: 5,
                 target_x: 100,
                 target_y: 200,
