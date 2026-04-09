@@ -1,5 +1,6 @@
 use winit::keyboard::KeyCode;
 
+use crate::engine::ai::flyby::FlybyState;
 use crate::render::hud::HudTab;
 
 #[derive(Debug, Clone)]
@@ -14,13 +15,23 @@ pub enum MenuTarget {
 #[derive(Debug, Clone)]
 pub enum GameCommand {
     // Camera / view
-    RotateCamera { delta_z: i16 },
-    TiltCamera { delta_x: i16 },
+    RotateCamera {
+        delta_z: i16,
+    },
+    TiltCamera {
+        delta_x: i16,
+    },
     /// Screen-relative pan: forward/right in screen space.
     /// Resolved to grid shifts using camera.angle_z in apply_command.
-    PanScreen { forward: f32, right: f32 },
+    PanScreen {
+        forward: f32,
+        right: f32,
+    },
     /// Direct grid shift (HJKL-style, not screen-relative).
-    PanTerrain { dx: i32, dy: i32 },
+    PanTerrain {
+        dx: i32,
+        dy: i32,
+    },
     ResetCamera,
     TopDownView,
     CenterOnShaman,
@@ -28,7 +39,9 @@ pub enum GameCommand {
 
     // Curvature
     ToggleCurvature,
-    AdjustCurvature { factor: f32 },
+    AdjustCurvature {
+        factor: f32,
+    },
 
     // Level navigation
     NextLevel,
@@ -42,17 +55,27 @@ pub enum GameCommand {
     ToggleMarkers,
 
     // Sunlight
-    AdjustSunlight { dx: f32, dy: f32 },
+    AdjustSunlight {
+        dx: f32,
+        dy: f32,
+    },
 
     // Debug: sprite tuning
-    AdjustSpriteOffset { delta: f32 },
-    AdjustSpriteScale { delta: f32 },
+    AdjustSpriteOffset {
+        delta: f32,
+    },
+    AdjustSpriteScale {
+        delta: f32,
+    },
 
     // Unit interaction (resolved game-level concepts, not raw screen coords)
     SelectUnit(usize),
     SelectMultiple(Vec<usize>),
     ClearSelection,
-    OrderMove { x: f32, z: f32 },
+    OrderMove {
+        x: f32,
+        z: f32,
+    },
 
     // Game state
     ToggleSimulation,
@@ -66,12 +89,23 @@ pub enum GameCommand {
     ToggleWalkability,
 
     // Building placement
-    PlaceBuilding { building_type: u8, cell_x: i32, cell_y: i32 },
+    PlaceBuilding {
+        building_type: u8,
+        cell_x: i32,
+        cell_y: i32,
+    },
     CancelPlacement,
-    EnterBuildMode { building_type: u8 },
+    EnterBuildMode {
+        building_type: u8,
+    },
     // Building interaction
-    EnterBuilding { unit_id: usize, building_handle: u16 },
-    TrainUnit { building_handle: u16 },
+    EnterBuilding {
+        unit_id: usize,
+        building_handle: u16,
+    },
+    TrainUnit {
+        building_handle: u16,
+    },
 
     // Menu navigation
     MenuNavigate(MenuTarget),
@@ -81,13 +115,23 @@ pub enum GameCommand {
     MenuDown,
 
     // Campaign
-    StartLevel { level_num: u32 },
+    StartLevel {
+        level_num: u32,
+    },
 
     // Save/Load
     QuickSave,
     QuickLoad,
-    SaveGame { slot: u32 },
-    LoadGame { slot: u32 },
+    SaveGame {
+        slot: u32,
+    },
+    LoadGame {
+        slot: u32,
+    },
+
+    // Flyby camera
+    StartFlyby(FlybyState),
+    StopFlyby,
 
     // Lifecycle
     Quit,
@@ -106,10 +150,22 @@ pub fn translate_key(key: KeyCode) -> Option<GameCommand> {
         KeyCode::ArrowDown => Some(GameCommand::TiltCamera { delta_x: -5 }),
 
         // Screen-relative panning (WASD)
-        KeyCode::KeyW => Some(GameCommand::PanScreen { forward: 1.0, right: 0.0 }),
-        KeyCode::KeyS => Some(GameCommand::PanScreen { forward: -1.0, right: 0.0 }),
-        KeyCode::KeyA => Some(GameCommand::PanScreen { forward: 0.0, right: -1.0 }),
-        KeyCode::KeyD => Some(GameCommand::PanScreen { forward: 0.0, right: 1.0 }),
+        KeyCode::KeyW => Some(GameCommand::PanScreen {
+            forward: 1.0,
+            right: 0.0,
+        }),
+        KeyCode::KeyS => Some(GameCommand::PanScreen {
+            forward: -1.0,
+            right: 0.0,
+        }),
+        KeyCode::KeyA => Some(GameCommand::PanScreen {
+            forward: 0.0,
+            right: -1.0,
+        }),
+        KeyCode::KeyD => Some(GameCommand::PanScreen {
+            forward: 0.0,
+            right: 1.0,
+        }),
 
         // Direct grid panning (HJKL)
         KeyCode::KeyH => Some(GameCommand::PanTerrain { dx: 0, dy: -1 }),
@@ -231,17 +287,38 @@ mod tests {
 
     #[test]
     fn test_translate_level_nav() {
-        assert!(matches!(translate_key(KeyCode::KeyB), Some(GameCommand::NextLevel)));
-        assert!(matches!(translate_key(KeyCode::KeyV), Some(GameCommand::PrevLevel)));
+        assert!(matches!(
+            translate_key(KeyCode::KeyB),
+            Some(GameCommand::NextLevel)
+        ));
+        assert!(matches!(
+            translate_key(KeyCode::KeyV),
+            Some(GameCommand::PrevLevel)
+        ));
     }
 
     #[test]
     fn test_translate_toggles() {
-        assert!(matches!(translate_key(KeyCode::KeyC), Some(GameCommand::ToggleCurvature)));
-        assert!(matches!(translate_key(KeyCode::KeyO), Some(GameCommand::ToggleObjects)));
-        assert!(matches!(translate_key(KeyCode::KeyG), Some(GameCommand::ToggleShadows)));
-        assert!(matches!(translate_key(KeyCode::KeyU), Some(GameCommand::ToggleMarkers)));
-        assert!(matches!(translate_key(KeyCode::F5), Some(GameCommand::ToggleSimulation)));
+        assert!(matches!(
+            translate_key(KeyCode::KeyC),
+            Some(GameCommand::ToggleCurvature)
+        ));
+        assert!(matches!(
+            translate_key(KeyCode::KeyO),
+            Some(GameCommand::ToggleObjects)
+        ));
+        assert!(matches!(
+            translate_key(KeyCode::KeyG),
+            Some(GameCommand::ToggleShadows)
+        ));
+        assert!(matches!(
+            translate_key(KeyCode::KeyU),
+            Some(GameCommand::ToggleMarkers)
+        ));
+        assert!(matches!(
+            translate_key(KeyCode::F5),
+            Some(GameCommand::ToggleSimulation)
+        ));
     }
 
     #[test]
@@ -258,35 +335,62 @@ mod tests {
 
     #[test]
     fn test_translate_presets() {
-        assert!(matches!(translate_key(KeyCode::KeyR), Some(GameCommand::ResetCamera)));
-        assert!(matches!(translate_key(KeyCode::KeyT), Some(GameCommand::TopDownView)));
-        assert!(matches!(translate_key(KeyCode::Space), Some(GameCommand::CenterOnShaman)));
+        assert!(matches!(
+            translate_key(KeyCode::KeyR),
+            Some(GameCommand::ResetCamera)
+        ));
+        assert!(matches!(
+            translate_key(KeyCode::KeyT),
+            Some(GameCommand::TopDownView)
+        ));
+        assert!(matches!(
+            translate_key(KeyCode::Space),
+            Some(GameCommand::CenterOnShaman)
+        ));
     }
 
     #[test]
     fn test_translate_quit() {
-        assert!(matches!(translate_key(KeyCode::Escape), Some(GameCommand::Quit)));
+        assert!(matches!(
+            translate_key(KeyCode::Escape),
+            Some(GameCommand::Quit)
+        ));
     }
 
     #[test]
     fn test_translate_toggle_hud() {
-        assert!(matches!(translate_key(KeyCode::F1), Some(GameCommand::ToggleHud)));
+        assert!(matches!(
+            translate_key(KeyCode::F1),
+            Some(GameCommand::ToggleHud)
+        ));
     }
 
     #[test]
     fn test_translate_toggle_compass() {
-        assert!(matches!(translate_key(KeyCode::F2), Some(GameCommand::ToggleCompass)));
+        assert!(matches!(
+            translate_key(KeyCode::F2),
+            Some(GameCommand::ToggleCompass)
+        ));
     }
 
     #[test]
     fn test_translate_toggle_walkability() {
-        assert!(matches!(translate_key(KeyCode::F8), Some(GameCommand::ToggleWalkability)));
+        assert!(matches!(
+            translate_key(KeyCode::F8),
+            Some(GameCommand::ToggleWalkability)
+        ));
     }
 
     #[test]
     fn test_translate_game_speed() {
-        assert!(matches!(translate_key(KeyCode::Equal), Some(GameCommand::IncreaseGameSpeed)));
-        assert!(matches!(translate_key(KeyCode::Minus), Some(GameCommand::DecreaseGameSpeed)));
+        assert!(matches!(
+            translate_key(KeyCode::Equal),
+            Some(GameCommand::IncreaseGameSpeed)
+        ));
+        assert!(matches!(
+            translate_key(KeyCode::Minus),
+            Some(GameCommand::DecreaseGameSpeed)
+        ));
     }
 
     #[test]
@@ -296,13 +400,23 @@ mod tests {
 
     #[test]
     fn test_translate_quicksave_quickload() {
-        assert!(matches!(translate_key(KeyCode::F9), Some(GameCommand::QuickSave)));
-        assert!(matches!(translate_key(KeyCode::F10), Some(GameCommand::QuickLoad)));
+        assert!(matches!(
+            translate_key(KeyCode::F9),
+            Some(GameCommand::QuickSave)
+        ));
+        assert!(matches!(
+            translate_key(KeyCode::F10),
+            Some(GameCommand::QuickLoad)
+        ));
     }
 
     #[test]
     fn test_building_commands_exist() {
-        let place = GameCommand::PlaceBuilding { building_type: 1, cell_x: 10, cell_y: 20 };
+        let place = GameCommand::PlaceBuilding {
+            building_type: 1,
+            cell_x: 10,
+            cell_y: 20,
+        };
         assert!(matches!(place, GameCommand::PlaceBuilding { .. }));
 
         let cancel = GameCommand::CancelPlacement;
@@ -311,10 +425,15 @@ mod tests {
         let build_mode = GameCommand::EnterBuildMode { building_type: 5 };
         assert!(matches!(build_mode, GameCommand::EnterBuildMode { .. }));
 
-        let enter = GameCommand::EnterBuilding { unit_id: 1, building_handle: 42 };
+        let enter = GameCommand::EnterBuilding {
+            unit_id: 1,
+            building_handle: 42,
+        };
         assert!(matches!(enter, GameCommand::EnterBuilding { .. }));
 
-        let train = GameCommand::TrainUnit { building_handle: 10 };
+        let train = GameCommand::TrainUnit {
+            building_handle: 10,
+        };
         assert!(matches!(train, GameCommand::TrainUnit { .. }));
     }
 }

@@ -1022,16 +1022,7 @@ fn register_function_stubs(lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
         "THING_COUNT_IN_AREA",
         // === Camera/Flyby commands ===
         "CAMERA_ROTATION",
-        "FLYBY_CREATE_NEW",
-        "FLYBY_SET_EVENT_POS",
-        "FLYBY_SET_EVENT_ANGLE",
-        "FLYBY_SET_EVENT_ZOOM",
-        "FLYBY_SET_EVENT_INT_POINT",
-        "FLYBY_SET_EVENT_TOOLTIP",
-        "FLYBY_SET_END_TARGET",
-        "FLYBY_START",
-        "FLYBY_STOP",
-        "FLYBY_ALLOW_INTERRUPT",
+        "FLYBY_DISALLOW_INTERRUPT",
         // === Dialog/Message commands ===
         "OPEN_DIALOG",
         "SET_MSG_AUTO_OPEN_DLG",

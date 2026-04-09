@@ -2,6 +2,7 @@ pub mod building_ai;
 pub mod constants;
 pub mod difficulty;
 pub mod dispatch;
+pub mod flyby;
 pub mod popscript;
 pub mod shaman_cmd;
 pub mod target;
@@ -14,6 +15,7 @@ use std::rc::Rc;
 use super::state::traits::AiTick;
 use building_ai::AiBuildingPlacement;
 use difficulty::DifficultyScaling;
+use flyby::{FlybyEndTarget, FlybyKeyframe, FlybyTooltip};
 use shaman_cmd::ShamanCommandQueue;
 
 /// Data bridge between Rust game state and Lua PopScript functions.
@@ -93,6 +95,7 @@ pub struct AiGameBridge {
     pub pending_cleanup: Vec<AiCleanupCommand>,
     pub pending_convert: Vec<AiConvertCommand>,
     pub pending_shaman_move: Vec<AiShamanMoveCommand>,
+    pub pending_flyby_events: Vec<FlybyEvent>,
 }
 
 impl AiGameBridge {
@@ -161,6 +164,7 @@ impl AiGameBridge {
             pending_cleanup: Vec::new(),
             pending_convert: Vec::new(),
             pending_shaman_move: Vec::new(),
+            pending_flyby_events: Vec::new(),
         }
     }
 }
@@ -229,6 +233,44 @@ pub struct AiShamanMoveCommand {
     pub marker: i32,
 }
 
+#[derive(Debug, Clone)]
+pub struct FlybyEvent {
+    pub kind: FlybyEventKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum FlybyEventKind {
+    CreateNew,
+    SetEventPos {
+        x: i16,
+        y: i16,
+        tick: u32,
+    },
+    SetEventAngle {
+        angle: i16,
+        tick: u32,
+    },
+    SetEventZoom {
+        zoom: i16,
+        tick: u32,
+    },
+    SetEventIntPoint {
+        int_point: i32,
+    },
+    SetEventTooltip {
+        tooltip_id: i32,
+        tick: u32,
+    },
+    SetEndTarget {
+        world_x: i16,
+        world_y: i16,
+        angle_z: i16,
+    },
+    Start,
+    Stop,
+    AllowInterrupt,
+}
+
 /// Snapshot of all pending AI commands, returned by drain_pending_commands.
 pub struct AiPendingCommands {
     pub attacks: Vec<AiAttackCommand>,
@@ -238,6 +280,7 @@ pub struct AiPendingCommands {
     pub moves: Vec<AiMoveCommand>,
     pub converts: Vec<AiConvertCommand>,
     pub shaman_moves: Vec<AiShamanMoveCommand>,
+    pub flyby_events: Vec<FlybyEvent>,
 }
 
 #[derive(Debug, Clone)]
@@ -383,6 +426,7 @@ impl AiSystem {
             moves: bridge.pending_moves.clone(),
             converts: bridge.pending_convert.clone(),
             shaman_moves: bridge.pending_shaman_move.clone(),
+            flyby_events: bridge.pending_flyby_events.clone(),
         }
     }
 
@@ -499,6 +543,7 @@ impl AiSystem {
         bridge.pending_cleanup.clear();
         bridge.pending_convert.clear();
         bridge.pending_shaman_move.clear();
+        bridge.pending_flyby_events.clear();
     }
 
     /// How many tribes have scripts loaded.
@@ -898,5 +943,74 @@ mod tests {
         // Should not hang -- instruction limit will abort it
         system.tick_update_ai();
         // If we get here, the limit worked (the error is logged, not propagated)
+    }
+
+    #[test]
+    fn flyby_event_kinds_construct() {
+        let create = FlybyEvent {
+            kind: FlybyEventKind::CreateNew,
+        };
+        assert!(matches!(create.kind, FlybyEventKind::CreateNew));
+
+        let set_pos = FlybyEvent {
+            kind: FlybyEventKind::SetEventPos {
+                x: 8,
+                y: 28,
+                tick: 252,
+            },
+        };
+        assert!(
+            matches!(&set_pos.kind, FlybyEventKind::SetEventPos { x, y, .. } if *x == 8 && *y == 28)
+        );
+
+        let start = FlybyEvent {
+            kind: FlybyEventKind::Start,
+        };
+        assert!(matches!(start.kind, FlybyEventKind::Start));
+    }
+
+    #[test]
+    fn bridge_stores_and_clears_flyby_events() {
+        let mut system = AiSystem::new().unwrap();
+        system
+            .bridge
+            .borrow_mut()
+            .pending_flyby_events
+            .push(FlybyEvent {
+                kind: FlybyEventKind::CreateNew,
+            });
+        system
+            .bridge
+            .borrow_mut()
+            .pending_flyby_events
+            .push(FlybyEvent {
+                kind: FlybyEventKind::Start,
+            });
+        assert_eq!(system.bridge.borrow().pending_flyby_events.len(), 2);
+
+        // update_bridge clears pending commands
+        system.update_bridge(0, 0, [0; 4], [0; 4], [false; 4], [0; 4]);
+        assert_eq!(system.bridge.borrow().pending_flyby_events.len(), 0);
+    }
+
+    #[test]
+    fn drain_pending_commands_includes_flyby_events() {
+        let system = AiSystem::new().unwrap();
+        system
+            .bridge
+            .borrow_mut()
+            .pending_flyby_events
+            .push(FlybyEvent {
+                kind: FlybyEventKind::SetEventAngle {
+                    angle: 1072,
+                    tick: 252,
+                },
+            });
+        let cmds = system.drain_pending_commands();
+        assert_eq!(cmds.flyby_events.len(), 1);
+        assert!(matches!(
+            cmds.flyby_events[0].kind,
+            FlybyEventKind::SetEventAngle { angle: 1072, .. }
+        ));
     }
 }

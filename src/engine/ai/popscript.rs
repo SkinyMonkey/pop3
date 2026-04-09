@@ -1544,6 +1544,214 @@ pub fn register_popscript_functions(
         )?;
     }
 
+    // ---- Flyby camera commands ----
+
+    // FLYBY_CREATE_NEW()
+    {
+        let b = bridge.clone();
+        globals.set(
+            "FLYBY_CREATE_NEW",
+            lua.create_function(move |_, _: ()| {
+                b.borrow_mut().pending_flyby_events.push(super::FlybyEvent {
+                    kind: super::FlybyEventKind::CreateNew,
+                });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // FLYBY_SET_EVENT_POS(x, y, tick)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "FLYBY_SET_EVENT_POS",
+            lua.create_function(move |_, args: mlua::MultiValue| {
+                fn to_i32(v: LuaValue) -> i32 {
+                    v.as_i32()
+                        .or_else(|| v.as_f64().map(|f| f as i32))
+                        .unwrap_or(0)
+                }
+                let mut iter = args.into_iter();
+                let x = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                let y = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                let tick = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                b.borrow_mut().pending_flyby_events.push(super::FlybyEvent {
+                    kind: super::FlybyEventKind::SetEventPos {
+                        x: x as i16,
+                        y: y as i16,
+                        tick: tick as u32,
+                    },
+                });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // FLYBY_SET_EVENT_ANGLE(angle, tick)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "FLYBY_SET_EVENT_ANGLE",
+            lua.create_function(move |_, args: mlua::MultiValue| {
+                fn to_i32(v: LuaValue) -> i32 {
+                    v.as_i32()
+                        .or_else(|| v.as_f64().map(|f| f as i32))
+                        .unwrap_or(0)
+                }
+                let mut iter = args.into_iter();
+                let angle = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                let tick = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                b.borrow_mut().pending_flyby_events.push(super::FlybyEvent {
+                    kind: super::FlybyEventKind::SetEventAngle {
+                        angle: angle as i16,
+                        tick: tick as u32,
+                    },
+                });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // FLYBY_SET_EVENT_ZOOM(zoom, tick)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "FLYBY_SET_EVENT_ZOOM",
+            lua.create_function(move |_, args: mlua::MultiValue| {
+                fn to_i32(v: LuaValue) -> i32 {
+                    v.as_i32()
+                        .or_else(|| v.as_f64().map(|f| f as i32))
+                        .unwrap_or(0)
+                }
+                let mut iter = args.into_iter();
+                let zoom = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                let tick = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                b.borrow_mut().pending_flyby_events.push(super::FlybyEvent {
+                    kind: super::FlybyEventKind::SetEventZoom {
+                        zoom: zoom as i16,
+                        tick: tick as u32,
+                    },
+                });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // FLYBY_SET_EVENT_INT_POINT(int_point)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "FLYBY_SET_EVENT_INT_POINT",
+            lua.create_function(move |_, args: mlua::MultiValue| {
+                fn to_i32(v: LuaValue) -> i32 {
+                    v.as_i32()
+                        .or_else(|| v.as_f64().map(|f| f as i32))
+                        .unwrap_or(0)
+                }
+                let mut iter = args.into_iter();
+                let int_point = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                b.borrow_mut().pending_flyby_events.push(super::FlybyEvent {
+                    kind: super::FlybyEventKind::SetEventIntPoint { int_point },
+                });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // FLYBY_SET_EVENT_TOOLTIP(tooltip_id, tick)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "FLYBY_SET_EVENT_TOOLTIP",
+            lua.create_function(move |_, args: mlua::MultiValue| {
+                fn to_i32(v: LuaValue) -> i32 {
+                    v.as_i32()
+                        .or_else(|| v.as_f64().map(|f| f as i32))
+                        .unwrap_or(0)
+                }
+                let mut iter = args.into_iter();
+                let tooltip_id = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                let tick = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                b.borrow_mut().pending_flyby_events.push(super::FlybyEvent {
+                    kind: super::FlybyEventKind::SetEventTooltip {
+                        tooltip_id,
+                        tick: tick as u32,
+                    },
+                });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // FLYBY_SET_END_TARGET(world_x, world_y, angle_z)
+    {
+        let b = bridge.clone();
+        globals.set(
+            "FLYBY_SET_END_TARGET",
+            lua.create_function(move |_, args: mlua::MultiValue| {
+                fn to_i32(v: LuaValue) -> i32 {
+                    v.as_i32()
+                        .or_else(|| v.as_f64().map(|f| f as i32))
+                        .unwrap_or(0)
+                }
+                let mut iter = args.into_iter();
+                let world_x = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                let world_y = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                let angle_z = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                b.borrow_mut().pending_flyby_events.push(super::FlybyEvent {
+                    kind: super::FlybyEventKind::SetEndTarget {
+                        world_x: world_x as i16,
+                        world_y: world_y as i16,
+                        angle_z: angle_z as i16,
+                    },
+                });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // FLYBY_START()
+    {
+        let b = bridge.clone();
+        globals.set(
+            "FLYBY_START",
+            lua.create_function(move |_, _: ()| {
+                b.borrow_mut().pending_flyby_events.push(super::FlybyEvent {
+                    kind: super::FlybyEventKind::Start,
+                });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // FLYBY_STOP()
+    {
+        let b = bridge.clone();
+        globals.set(
+            "FLYBY_STOP",
+            lua.create_function(move |_, _: ()| {
+                b.borrow_mut().pending_flyby_events.push(super::FlybyEvent {
+                    kind: super::FlybyEventKind::Stop,
+                });
+                Ok(0)
+            })?,
+        )?;
+    }
+
+    // FLYBY_ALLOW_INTERRUPT()
+    {
+        let b = bridge.clone();
+        globals.set(
+            "FLYBY_ALLOW_INTERRUPT",
+            lua.create_function(move |_, _: ()| {
+                b.borrow_mut().pending_flyby_events.push(super::FlybyEvent {
+                    kind: super::FlybyEventKind::AllowInterrupt,
+                });
+                Ok(0)
+            })?,
+        )?;
+    }
+
     // ---- Remaining stub functions that panic per D-04 ----
     // Functions that need game state not yet available in the bridge keep their
     // panic stubs. They will be wired when underlying game systems are ready.
@@ -1610,16 +1818,7 @@ pub fn register_popscript_functions(
         "GET_HEIGHT_AT_POS",
         "THING_COUNT_IN_AREA",
         "CAMERA_ROTATION",
-        "FLYBY_CREATE_NEW",
-        "FLYBY_SET_EVENT_POS",
-        "FLYBY_SET_EVENT_ANGLE",
-        "FLYBY_SET_EVENT_ZOOM",
-        "FLYBY_SET_EVENT_INT_POINT",
-        "FLYBY_SET_EVENT_TOOLTIP",
-        "FLYBY_SET_END_TARGET",
-        "FLYBY_START",
-        "FLYBY_STOP",
-        "FLYBY_ALLOW_INTERRUPT",
+        "FLYBY_DISALLOW_INTERRUPT",
         "CREATE_MSG_NARRATIVE",
         "CREATE_MSG_OBJECTIVE",
         "OPEN_DIALOG",
@@ -1661,7 +1860,7 @@ pub fn register_popscript_functions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::ai::{AiGameBridge, AiSystem};
+    use crate::engine::ai::{AiGameBridge, AiSystem, FlybyEventKind};
 
     fn setup() -> (Lua, Rc<RefCell<AiGameBridge>>) {
         let lua = Lua::new();
@@ -2065,39 +2264,172 @@ mod tests {
     }
 
     #[test]
-    fn stub_function_flyby_create_new_returns_zero() {
-        let (lua, _bridge) = setup();
-        let result: i32 = lua
-            .globals()
-            .get::<LuaFunction>("FLYBY_CREATE_NEW")
-            .unwrap()
-            .call(())
-            .unwrap();
-        assert_eq!(result, 0);
+    fn flyby_create_new_pushes_event() {
+        let (lua, bridge) = setup();
+        lua.load("FLYBY_CREATE_NEW()").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_flyby_events.len(), 1);
+        assert!(matches!(
+            b.pending_flyby_events[0].kind,
+            FlybyEventKind::CreateNew
+        ));
     }
 
     #[test]
-    fn stub_function_flyby_start_returns_zero() {
-        let (lua, _bridge) = setup();
-        let result: i32 = lua
-            .globals()
-            .get::<LuaFunction>("FLYBY_START")
-            .unwrap()
-            .call(())
-            .unwrap();
-        assert_eq!(result, 0);
+    fn flyby_set_event_pos_pushes_event() {
+        let (lua, bridge) = setup();
+        // FLYBY_SET_EVENT_POS(x, y, tick) — matches level 1 script usage
+        lua.load("FLYBY_SET_EVENT_POS(8, 28, 252)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_flyby_events.len(), 1);
+        match &b.pending_flyby_events[0].kind {
+            FlybyEventKind::SetEventPos { x, y, tick } => {
+                assert_eq!(*x, 8);
+                assert_eq!(*y, 28);
+                assert_eq!(*tick, 252);
+            }
+            other => panic!("expected SetEventPos, got {:?}", other),
+        }
     }
 
     #[test]
-    fn stub_function_flyby_stop_returns_zero() {
-        let (lua, _bridge) = setup();
-        let result: i32 = lua
-            .globals()
-            .get::<LuaFunction>("FLYBY_STOP")
-            .unwrap()
-            .call(())
+    fn flyby_set_event_angle_pushes_event() {
+        let (lua, bridge) = setup();
+        // FLYBY_SET_EVENT_ANGLE(angle, tick) — matches level 1 script usage
+        lua.load("FLYBY_SET_EVENT_ANGLE(1072, 252)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_flyby_events.len(), 1);
+        match &b.pending_flyby_events[0].kind {
+            FlybyEventKind::SetEventAngle { angle, tick } => {
+                assert_eq!(*angle, 1072);
+                assert_eq!(*tick, 252);
+            }
+            other => panic!("expected SetEventAngle, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn flyby_set_event_zoom_pushes_event() {
+        let (lua, bridge) = setup();
+        // FLYBY_SET_EVENT_ZOOM(zoom, tick) — matches level 1 script usage
+        lua.load("FLYBY_SET_EVENT_ZOOM(-500, 100)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_flyby_events.len(), 1);
+        match &b.pending_flyby_events[0].kind {
+            FlybyEventKind::SetEventZoom { zoom, tick } => {
+                assert_eq!(*zoom, -500);
+                assert_eq!(*tick, 100);
+            }
+            other => panic!("expected SetEventZoom, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn flyby_set_event_tooltip_pushes_event() {
+        let (lua, bridge) = setup();
+        // FLYBY_SET_EVENT_TOOLTIP(tooltip_id, tick)
+        lua.load("FLYBY_SET_EVENT_TOOLTIP(42, 26)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_flyby_events.len(), 1);
+        match &b.pending_flyby_events[0].kind {
+            FlybyEventKind::SetEventTooltip { tooltip_id, tick } => {
+                assert_eq!(*tooltip_id, 42);
+                assert_eq!(*tick, 26);
+            }
+            other => panic!("expected SetEventTooltip, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn flyby_set_end_target_pushes_event() {
+        let (lua, bridge) = setup();
+        // FLYBY_SET_END_TARGET(world_x, world_y, angle_z) — matches level 1 script
+        lua.load("FLYBY_SET_END_TARGET(28, 8, 1438)")
+            .exec()
             .unwrap();
-        assert_eq!(result, 0);
+        let b = bridge.borrow();
+        assert_eq!(b.pending_flyby_events.len(), 1);
+        match &b.pending_flyby_events[0].kind {
+            FlybyEventKind::SetEndTarget {
+                world_x,
+                world_y,
+                angle_z,
+            } => {
+                assert_eq!(*world_x, 28);
+                assert_eq!(*world_y, 8);
+                assert_eq!(*angle_z, 1438);
+            }
+            other => panic!("expected SetEndTarget, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn flyby_start_pushes_event() {
+        let (lua, bridge) = setup();
+        lua.load("FLYBY_START()").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_flyby_events.len(), 1);
+        assert!(matches!(
+            b.pending_flyby_events[0].kind,
+            FlybyEventKind::Start
+        ));
+    }
+
+    #[test]
+    fn flyby_stop_pushes_event() {
+        let (lua, bridge) = setup();
+        lua.load("FLYBY_STOP()").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_flyby_events.len(), 1);
+        assert!(matches!(
+            b.pending_flyby_events[0].kind,
+            FlybyEventKind::Stop
+        ));
+    }
+
+    #[test]
+    fn flyby_allow_interrupt_pushes_event() {
+        let (lua, bridge) = setup();
+        lua.load("FLYBY_ALLOW_INTERRUPT()").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_flyby_events.len(), 1);
+        assert!(matches!(
+            b.pending_flyby_events[0].kind,
+            FlybyEventKind::AllowInterrupt
+        ));
+    }
+
+    #[test]
+    fn flyby_full_sequence_pushes_all_events() {
+        let (lua, bridge) = setup();
+        lua.load(
+            r#"
+            FLYBY_CREATE_NEW()
+            FLYBY_SET_EVENT_POS(8, 28, 252)
+            FLYBY_SET_EVENT_ANGLE(1072, 252)
+            FLYBY_SET_EVENT_ZOOM(-500, 100)
+            FLYBY_SET_EVENT_TOOLTIP(42, 26)
+            FLYBY_ALLOW_INTERRUPT()
+            FLYBY_SET_END_TARGET(28, 8, 1438)
+            FLYBY_START()
+        "#,
+        )
+        .exec()
+        .unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_flyby_events.len(), 8);
+        assert!(matches!(
+            b.pending_flyby_events[0].kind,
+            FlybyEventKind::CreateNew
+        ));
+        assert!(matches!(
+            b.pending_flyby_events[6].kind,
+            FlybyEventKind::SetEndTarget { .. }
+        ));
+        assert!(matches!(
+            b.pending_flyby_events[7].kind,
+            FlybyEventKind::Start
+        ));
     }
 
     #[test]

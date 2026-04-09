@@ -3,9 +3,14 @@
 // Replaces the log-only handlers in app.rs with actual unit movement,
 // building placement queuing, training initiation, and spell TODO markers.
 
-use super::{target::score_person_target, AiPendingCommands, AiSystem, MarkerEntry};
+use super::flyby::{FlybyEndTarget, FlybyKeyframe, FlybyState, FlybyTooltip};
+use super::{
+    target::score_person_target, AiPendingCommands, AiSystem, FlybyEvent, FlybyEventKind,
+    MarkerEntry,
+};
 use crate::engine::buildings::training::{start_training, training_output_subtype};
 use crate::engine::buildings::BuildingState;
+use crate::engine::command::GameCommand;
 use crate::engine::movement::WorldCoord;
 use crate::engine::units::coordinator::UnitCoordinator;
 
@@ -206,6 +211,84 @@ fn find_best_attack_target(coordinator: &UnitCoordinator, target_tribe: u8) -> O
     best_pos
 }
 
+/// Convert a sequence of flyby events from PopScript into a FlybyState.
+///
+/// Events are processed in order: CreateNew resets state, SetEvent* adds keyframes,
+/// SetEndTarget sets the final camera state, AllowInterrupt flags interruptibility,
+/// Start triggers activation, Stop is returned as a separate GameCommand.
+///
+/// Returns a Vec<GameCommand> which may contain StartFlyby and/or StopFlyby.
+pub fn build_flyby_state_from_events(events: &[FlybyEvent], game_tick: u32) -> Vec<GameCommand> {
+    let mut state = FlybyState::new();
+    let mut created = false;
+    let mut commands = Vec::new();
+
+    for event in events {
+        match &event.kind {
+            FlybyEventKind::CreateNew => {
+                state = FlybyState::new();
+                created = true;
+            }
+            FlybyEventKind::SetEventPos { x, y, tick } => {
+                state.pos_x_keyframes.push(FlybyKeyframe {
+                    tick: *tick,
+                    value: *x,
+                });
+                state.pos_y_keyframes.push(FlybyKeyframe {
+                    tick: *tick,
+                    value: *y,
+                });
+            }
+            FlybyEventKind::SetEventAngle { angle, tick } => {
+                state.angle_keyframes.push(FlybyKeyframe {
+                    tick: *tick,
+                    value: *angle,
+                });
+            }
+            FlybyEventKind::SetEventZoom { zoom, tick } => {
+                state.zoom_keyframes.push(FlybyKeyframe {
+                    tick: *tick,
+                    value: *zoom,
+                });
+            }
+            FlybyEventKind::SetEventIntPoint { .. } => {}
+            FlybyEventKind::SetEventTooltip { tooltip_id, tick } => {
+                state.tooltips.push(FlybyTooltip {
+                    tick: *tick,
+                    tooltip_id: *tooltip_id,
+                });
+            }
+            FlybyEventKind::SetEndTarget {
+                world_x,
+                world_y,
+                angle_z,
+            } => {
+                state.end_target = Some(FlybyEndTarget {
+                    world_x: *world_x,
+                    world_y: *world_y,
+                    angle_z: *angle_z,
+                    angle_x: 0,
+                    zoom: 0,
+                });
+            }
+            FlybyEventKind::AllowInterrupt => {
+                state.allow_interrupt = true;
+            }
+            FlybyEventKind::Start => {
+                if created {
+                    state.start(game_tick);
+                    commands.push(GameCommand::StartFlyby(state.clone()));
+                }
+            }
+            FlybyEventKind::Stop => {
+                commands.push(GameCommand::StopFlyby);
+            }
+        }
+    }
+
+    commands
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,6 +417,7 @@ mod tests {
             moves: vec![],
             converts: vec![],
             shaman_moves: vec![],
+            flyby_events: vec![],
         };
         dispatch_ai_commands(&cmds, &[], &mut coord, &mut ai, 1);
         // Unit should still be in GoToPoint (unchanged)
@@ -360,6 +444,7 @@ mod tests {
             moves: vec![],
             converts: vec![],
             shaman_moves: vec![],
+            flyby_events: vec![],
         };
         dispatch_ai_commands(&cmds, &[], &mut coord, &mut ai, 1);
         assert_eq!(ai.building_placement_mut(1).priority_queue.len(), 1);
@@ -404,6 +489,7 @@ mod tests {
             moves: vec![],
             converts: vec![],
             shaman_moves: vec![],
+            flyby_events: vec![],
         };
         dispatch_ai_commands(&cmds, &[], &mut coord, &mut ai, 1);
         // Building should now have a conversion countdown set
@@ -429,8 +515,153 @@ mod tests {
             moves: vec![],
             converts: vec![],
             shaman_moves: vec![],
+            flyby_events: vec![],
         };
         // Should not panic
         dispatch_ai_commands(&cmds, &[], &mut coord, &mut ai, 1);
+    }
+
+    // ---- Flyby dispatch tests ----
+
+    #[test]
+    fn build_flyby_state_from_empty_events() {
+        let commands = build_flyby_state_from_events(&[], 0);
+        assert!(commands.is_empty());
+    }
+
+    #[test]
+    fn build_flyby_state_start_flyby_command() {
+        let events = vec![
+            FlybyEvent {
+                kind: FlybyEventKind::CreateNew,
+            },
+            FlybyEvent {
+                kind: FlybyEventKind::Start,
+            },
+        ];
+        let commands = build_flyby_state_from_events(&events, 100);
+        assert_eq!(commands.len(), 1);
+        match &commands[0] {
+            GameCommand::StartFlyby(state) => {
+                assert!(state.active);
+                assert_eq!(state.start_tick, 100);
+            }
+            other => panic!("expected StartFlyby, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn build_flyby_state_with_keyframes() {
+        let events = vec![
+            FlybyEvent {
+                kind: FlybyEventKind::CreateNew,
+            },
+            FlybyEvent {
+                kind: FlybyEventKind::SetEventPos {
+                    x: 8,
+                    y: 28,
+                    tick: 0,
+                },
+            },
+            FlybyEvent {
+                kind: FlybyEventKind::SetEventAngle {
+                    angle: 1072,
+                    tick: 0,
+                },
+            },
+            FlybyEvent {
+                kind: FlybyEventKind::SetEventZoom {
+                    zoom: -500,
+                    tick: 0,
+                },
+            },
+            FlybyEvent {
+                kind: FlybyEventKind::AllowInterrupt,
+            },
+            FlybyEvent {
+                kind: FlybyEventKind::Start,
+            },
+        ];
+        let commands = build_flyby_state_from_events(&events, 200);
+        assert_eq!(commands.len(), 1);
+        match &commands[0] {
+            GameCommand::StartFlyby(state) => {
+                assert!(state.active);
+                assert!(state.allow_interrupt);
+                assert_eq!(state.pos_x_keyframes.len(), 1);
+                assert_eq!(state.pos_x_keyframes[0].value, 8);
+                assert_eq!(state.angle_keyframes[0].value, 1072);
+                assert_eq!(state.zoom_keyframes[0].value, -500);
+            }
+            other => panic!("expected StartFlyby, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn build_flyby_state_stop_command() {
+        let events = vec![FlybyEvent {
+            kind: FlybyEventKind::Stop,
+        }];
+        let commands = build_flyby_state_from_events(&events, 0);
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(&commands[0], GameCommand::StopFlyby));
+    }
+
+    #[test]
+    fn build_flyby_state_start_then_stop() {
+        let events = vec![
+            FlybyEvent {
+                kind: FlybyEventKind::CreateNew,
+            },
+            FlybyEvent {
+                kind: FlybyEventKind::Start,
+            },
+            FlybyEvent {
+                kind: FlybyEventKind::Stop,
+            },
+        ];
+        let commands = build_flyby_state_from_events(&events, 0);
+        assert_eq!(commands.len(), 2);
+        assert!(matches!(&commands[0], GameCommand::StartFlyby(_)));
+        assert!(matches!(&commands[1], GameCommand::StopFlyby));
+    }
+
+    #[test]
+    fn build_flyby_state_set_end_target() {
+        let events = vec![
+            FlybyEvent {
+                kind: FlybyEventKind::CreateNew,
+            },
+            FlybyEvent {
+                kind: FlybyEventKind::SetEndTarget {
+                    world_x: 28,
+                    world_y: 8,
+                    angle_z: 1438,
+                },
+            },
+            FlybyEvent {
+                kind: FlybyEventKind::Start,
+            },
+        ];
+        let commands = build_flyby_state_from_events(&events, 0);
+        assert_eq!(commands.len(), 1);
+        match &commands[0] {
+            GameCommand::StartFlyby(state) => {
+                assert!(state.end_target.is_some());
+                let et = state.end_target.as_ref().unwrap();
+                assert_eq!(et.world_x, 28);
+                assert_eq!(et.angle_z, 1438);
+            }
+            other => panic!("expected StartFlyby, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn build_flyby_start_without_create_is_ignored() {
+        let events = vec![FlybyEvent {
+            kind: FlybyEventKind::Start,
+        }];
+        let commands = build_flyby_state_from_events(&events, 0);
+        assert!(commands.is_empty());
     }
 }
