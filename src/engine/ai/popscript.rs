@@ -507,6 +507,9 @@ pub fn register_popscript_functions(
         "FLYBY_START",
         "FLYBY_STOP",
         "FLYBY_ALLOW_INTERRUPT",
+        "CREATE_MSG_NARRATIVE",
+        "CREATE_MSG_OBJECTIVE",
+        "CREATE_MSG_INFORMATION",
         "OPEN_DIALOG",
         "SET_MSG_AUTO_OPEN_DLG",
         "SET_MSG_DELETE_ON_OK",
@@ -916,5 +919,1146 @@ mod tests {
         assert_eq!(b.pending_cleanup.len(), 1);
         assert_eq!(b.pending_cleanup[0].x, 10);
         assert_eq!(b.pending_cleanup[0].y, 20);
+    }
+
+    // ---- Task 2: Additional PopScript function tests ----
+
+    #[test]
+    fn set_marker_entry_stores_marker() {
+        let (lua, bridge) = setup();
+        lua.load("SET_MARKER_ENTRY(3, 100, 200)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.marker_entries.len(), 1);
+        assert_eq!(b.marker_entries[0].marker, 3);
+        assert_eq!(b.marker_entries[0].x, 100);
+        assert_eq!(b.marker_entries[0].y, 200);
+    }
+
+    #[test]
+    fn convert_at_marker_pushes_command() {
+        let (lua, bridge) = setup();
+        lua.load("CONVERT_AT_MARKER(5)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_convert.len(), 1);
+        assert_eq!(b.pending_convert[0].marker, 5);
+    }
+
+    #[test]
+    fn max_building_type_stores_config() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 2;
+        lua.load("MAX_BUILDING_TYPE(1, 4)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.max_building_type[2][1], 4);
+    }
+
+    #[test]
+    fn max_building_type_multiple_types() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 0;
+        lua.load(
+            "MAX_BUILDING_TYPE(0, 2); MAX_BUILDING_TYPE(1, 3); MAX_BUILDING_TYPE(2, 5)",
+        )
+        .exec()
+        .unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.max_building_type[0][0], 2);
+        assert_eq!(b.max_building_type[0][1], 3);
+        assert_eq!(b.max_building_type[0][2], 5);
+    }
+
+    #[test]
+    fn stub_function_count_people_in_houses_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("COUNT_PEOPLE_IN_HOUSES")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_is_shaman_available_for_attack_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("IS_SHAMAN_AVAILABLE_FOR_ATTACK")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_send_all_people_to_marker_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("SEND_ALL_PEOPLE_TO_MARKER")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_flyby_create_new_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("FLYBY_CREATE_NEW")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_flyby_start_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("FLYBY_START")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_flyby_stop_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("FLYBY_STOP")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_open_dialog_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("OPEN_DIALOG")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_create_msg_information_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("CREATE_MSG_INFORMATION")
+            .unwrap()
+            .call((100,))
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_target_shaman_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("TARGET_SHAMAN")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_get_height_at_pos_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("GET_HEIGHT_AT_POS")
+            .unwrap()
+            .call((10, 20))
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_remove_head_at_pos_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("REMOVE_HEAD_AT_POS")
+            .unwrap()
+            .call((2,))
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_trigger_thing_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("TRIGGER_THING")
+            .unwrap()
+            .call((41,))
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_partial_building_count_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("PARTIAL_BUILDING_COUNT")
+            .unwrap()
+            .call((1,))
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_get_head_trigger_count_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("GET_HEAD_TRIGGER_COUNT")
+            .unwrap()
+            .call((18,))
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_thing_count_in_area_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("THING_COUNT_IN_AREA")
+            .unwrap()
+            .call((0, 0, 10))
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_camera_rotation_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("CAMERA_ROTATION")
+            .unwrap()
+            .call((0,))
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_flash_button_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("FLASH_BUTTON")
+            .unwrap()
+            .call((1,))
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_marvellous_house_death_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("MARVELLOUS_HOUSE_DEATH")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_boat_patrol_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("BOAT_PATROL")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_random_100_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("RANDOM_100")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_wild_people_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("WILD_PEOPLE")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_my_attack_army_count_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("MY_ATTACK_ARMY_COUNT")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_my_defend_army_count_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("MY_DEFEND_ARMY_COUNT")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_is_prisoner_left_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("IS_PRISONER_LEFT")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_nav_check_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("NAV_CHECK")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_spell_at_thing_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("SPELL_AT_THING")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_give_mana_to_player_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("GIVE_MANA_TO_PLAYER")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_state_set_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("STATE_SET")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_set_timer_going_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("SET_TIMER_GOING")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_has_timer_reached_zero_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("HAS_TIMER_REACHED_ZERO")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_remove_timer_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("REMOVE_TIMER")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_do_trigger_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("DO_TRIGGER")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_trigger_level_won_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("TRIGGER_LEVEL_WON")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_trigger_level_lost_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("TRIGGER_LEVEL_LOST")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_turn_push_on_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("TURN_PUSH_ON")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_turn_push_off_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("TURN_PUSH_OFF")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_dont_target_shaman_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("DONT_TARGET_SHAMAN")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_is_shaman_in_area_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("IS_SHAMAN_IN_AREA")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_i_kill_convertable_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("I_KILL_CONVERTABLE")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_clear_house_info_flag_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("CLEAR_HOUSE_INFO_FLAG")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_fix_wild_in_area_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("FIX_WILD_IN_AREA")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_remove_player_thing_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("REMOVE_PLAYER_THING")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_set_no_blue_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("SET_NO_BLUE")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_set_no_red_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("SET_NO_RED")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_set_no_green_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("SET_NO_GREEN")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn stub_function_set_no_yellow_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("SET_NO_YELLOW")
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    // ---- Task 3: Error handling and edge case tests ----
+
+    #[test]
+    fn lua_syntax_error_returns_error() {
+        let (lua, _bridge) = setup();
+        let result = lua.load("if GAME_TURN() > 0 then").exec();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("'end'"));
+    }
+
+    #[test]
+    fn every_with_zero_interval_does_not_crash() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().game_tick = 5;
+        lua.load("_every_reset_ids()").exec().unwrap();
+        let result = lua.load("EVERY(0, function() end)").exec();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn attack_with_negative_count() {
+        let (lua, bridge) = setup();
+        lua.load("ATTACK(1, -5, 0)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_attacks.len(), 1);
+    }
+
+    #[test]
+    fn build_at_with_large_coordinates() {
+        let (lua, bridge) = setup();
+        lua.load("BUILD_AT(1, 99999, -99999)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_builds.len(), 1);
+        assert_eq!(b.pending_builds[0].marker_x, 99999);
+        assert_eq!(b.pending_builds[0].marker_y, -99999);
+    }
+
+    #[test]
+    fn set_marker_entry_multiple_entries() {
+        let (lua, bridge) = setup();
+        lua.load(
+            "SET_MARKER_ENTRY(0, 0, 0); SET_MARKER_ENTRY(1, 10, 10); SET_MARKER_ENTRY(2, 20, 20)",
+        )
+        .exec()
+        .unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.marker_entries.len(), 3);
+        assert_eq!(b.marker_entries[0].marker, 0);
+        assert_eq!(b.marker_entries[1].marker, 1);
+        assert_eq!(b.marker_entries[2].marker, 2);
+    }
+
+    #[test]
+    fn set_spell_entry_bounds_check() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 0;
+        lua.load("SET_SPELL_ENTRY(25, 1)").exec().unwrap();
+        let b = bridge.borrow();
+        assert!(!b.spell_entry[0].iter().any(|&x| x));
+    }
+
+    #[test]
+    fn max_building_type_bounds_check() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 0;
+        lua.load("MAX_BUILDING_TYPE(20, 5)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.max_building_type[0].iter().sum::<u32>(), 0);
+    }
+
+    #[test]
+    fn tribe_population_all_zeros() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().tribe_populations = [0, 0, 0, 0];
+        bridge.borrow_mut().current_tribe = 0;
+        let val: i32 = lua.load("return MY_NUM_PEOPLE()").eval().unwrap();
+        assert_eq!(val, 0);
+    }
+
+    #[test]
+    fn tribe_mana_zero() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().tribe_mana = [0, 0, 0, 0];
+        bridge.borrow_mut().current_tribe = 1;
+        let val: i32 = lua.load("return MY_MANA()").eval().unwrap();
+        assert_eq!(val, 0);
+    }
+
+    #[test]
+    fn game_tick_zero() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().game_tick = 0;
+        let val: i32 = lua.load("return GAME_TURN()").eval().unwrap();
+        assert_eq!(val, 0);
+    }
+
+    #[test]
+    fn game_tick_large_value() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().game_tick = 999999;
+        let val: i32 = lua.load("return GAME_TURN()").eval().unwrap();
+        assert_eq!(val, 999999);
+    }
+
+    #[test]
+    fn every_multiple_calls_same_tick() {
+        let (lua, bridge) = setup();
+        lua.load("_count = 0").exec().unwrap();
+        bridge.borrow_mut().game_tick = 10;
+
+        let script = r#"
+            _every_reset_ids()
+            EVERY(5, function() _count = _count + 1 end)
+            EVERY(5, function() _count = _count + 1 end)
+        "#;
+
+        lua.load(script).exec().unwrap();
+        lua.load(script).exec().unwrap();
+
+        let count: i32 = lua.load("return _count").eval().unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn stub_function_with_many_args_returns_zero() {
+        let (lua, _bridge) = setup();
+        let result: i32 = lua
+            .globals()
+            .get::<LuaFunction>("THING_COUNT_IN_AREA")
+            .unwrap()
+            .call((1, 2, 3, 4, 5))
+            .unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn send_people_to_marker_negative_marker() {
+        let (lua, bridge) = setup();
+        lua.load("SEND_PEOPLE_TO_MARKER(-1, 10)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_moves.len(), 1);
+        assert_eq!(b.pending_moves[0].marker, -1);
+    }
+
+    #[test]
+    fn pray_at_head_negative_head() {
+        let (lua, bridge) = setup();
+        lua.load("PRAY_AT_HEAD(-5)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_pray.len(), 1);
+        assert_eq!(b.pending_pray[0].head_num, -5);
+    }
+
+    #[test]
+    fn delete_smoke_stuff_large_coordinates() {
+        let (lua, bridge) = setup();
+        lua.load("DELETE_SMOKE_STUFF(999999, -999999)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_cleanup.len(), 1);
+        assert_eq!(b.pending_cleanup[0].x, 999999);
+        assert_eq!(b.pending_cleanup[0].y, -999999);
+    }
+
+    #[test]
+    fn set_reincarnation_off() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 0;
+        lua.load("SET_REINCARNATION(0)").exec().unwrap();
+        assert!(!bridge.borrow().reincarnation[0]);
+    }
+
+    #[test]
+    fn set_bucket_usage_off() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 0;
+        lua.load("SET_BUCKET_USAGE(0)").exec().unwrap();
+        assert!(!bridge.borrow().bucket_usage[0]);
+    }
+
+    #[test]
+    fn spell_at_marker_negative_spell() {
+        let (lua, bridge) = setup();
+        lua.load("SPELL_AT_MARKER(-1, 5)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_spells.len(), 1);
+        assert_eq!(b.pending_spells[0].spell_type, 255);
+    }
+
+    #[test]
+    fn train_people_now_zero_count() {
+        let (lua, bridge) = setup();
+        lua.load("TRAIN_PEOPLE_NOW(1, 0)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_trains.len(), 1);
+        assert_eq!(b.pending_trains[0].count, 0);
+    }
+
+    #[test]
+    fn convert_at_marker_negative_marker() {
+        let (lua, bridge) = setup();
+        lua.load("CONVERT_AT_MARKER(-3)").exec().unwrap();
+        let b = bridge.borrow();
+        assert_eq!(b.pending_convert.len(), 1);
+        assert_eq!(b.pending_convert[0].marker, -3);
+    }
+
+    #[test]
+    fn lua_runtime_error_in_function() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().game_tick = 100;
+        let result = lua
+            .load(
+                r#"
+            local x = GAME_TURN()
+            if x > 50 then
+                error("test error")
+            end
+        "#,
+            )
+            .exec();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("test error"));
+    }
+
+    #[test]
+    fn every_interval_larger_than_tick() {
+        let (lua, bridge) = setup();
+        lua.load("_count = 0").exec().unwrap();
+        bridge.borrow_mut().game_tick = 5;
+
+        let script = r#"
+            _every_reset_ids()
+            EVERY(100, function() _count = _count + 1 end)
+        "#;
+
+        lua.load(script).exec().unwrap();
+        let count: i32 = lua.load("return _count").eval().unwrap();
+        assert_eq!(count, 0);
+    }
+
+    // ---- Task 4: Integration tests for full script execution ----
+
+    #[test]
+    fn integration_simple_script_loop() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 0;
+        bridge.borrow_mut().tribe_populations[0] = 50;
+
+        // Simulate a simple AI script that trains people when population is low
+        let script = r#"
+            _every_reset_ids()
+            EVERY(64, function()
+                if MY_NUM_PEOPLE() < 80 then
+                    TRAIN_PEOPLE_NOW(1, 1)
+                end
+            end)
+        "#;
+
+        // Tick 0: script loads but doesn't fire
+        bridge.borrow_mut().game_tick = 0;
+        lua.load(script).exec().unwrap();
+        assert_eq!(bridge.borrow().pending_trains.len(), 0);
+
+        // Tick 64: EVERY should fire
+        bridge.borrow_mut().game_tick = 64;
+        lua.load(script).exec().unwrap();
+        assert_eq!(bridge.borrow().pending_trains.len(), 1);
+
+        // Tick 128: EVERY should fire again
+        bridge.borrow_mut().game_tick = 128;
+        lua.load(script).exec().unwrap();
+        assert_eq!(bridge.borrow().pending_trains.len(), 2);
+    }
+
+    #[test]
+    fn integration_multiple_every_blocks() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 0;
+
+        // Script with multiple EVERY blocks at different intervals
+        let script = r#"
+            _every_reset_ids()
+            EVERY(32, function()
+                SET_ATTACK_VARIABLE(1)
+            end)
+            EVERY(64, function()
+                SET_ATTACK_VARIABLE(2)
+            end)
+            EVERY(128, function()
+                SET_ATTACK_VARIABLE(3)
+            end)
+        "#;
+
+        // Run through ticks
+        for tick in [32, 64, 96, 128] {
+            bridge.borrow_mut().game_tick = tick;
+            lua.load(script).exec().unwrap();
+        }
+
+        // All commands should be queued
+        let b = bridge.borrow();
+        assert_eq!(b.attack_variable[0], 3); // Last value set
+    }
+
+    #[test]
+    fn integration_condition_based_attack() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 0;
+        bridge.borrow_mut().tribe_populations[0] = 100;
+
+        // Script that attacks when population exceeds threshold
+        let script = r#"
+            _every_reset_ids()
+            EVERY(256, function()
+                if MY_NUM_PEOPLE() > 50 then
+                    ATTACK(1, 10, 0)
+                end
+            end)
+        "#;
+
+        bridge.borrow_mut().game_tick = 256;
+        lua.load(script).exec().unwrap();
+        assert_eq!(bridge.borrow().pending_attacks.len(), 1);
+        assert_eq!(bridge.borrow().pending_attacks[0].target_tribe, 1);
+        assert_eq!(bridge.borrow().pending_attacks[0].num_people, 10);
+    }
+
+    #[test]
+    fn integration_spell_bucket_management() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 0;
+
+        // Script that configures spell buckets based on population
+        let script = r#"
+            _every_reset_ids()
+            EVERY(256, function()
+                if MY_NUM_PEOPLE() < 80 then
+                    SET_BUCKET_USAGE(1)
+                else
+                    SET_BUCKET_USAGE(0)
+                end
+            end)
+        "#;
+
+        // Low population - bucket on
+        bridge.borrow_mut().game_tick = 256;
+        bridge.borrow_mut().tribe_populations[0] = 50;
+        lua.load(script).exec().unwrap();
+        assert!(bridge.borrow().bucket_usage[0]);
+
+        // High population - bucket off
+        bridge.borrow_mut().game_tick = 512;
+        bridge.borrow_mut().tribe_populations[0] = 100;
+        lua.load(script).exec().unwrap();
+        assert!(!bridge.borrow().bucket_usage[0]);
+    }
+
+    #[test]
+    fn integration_marker_based_movement() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 0;
+
+        // Script that sets up markers and moves people
+        let script = r#"
+            _every_reset_ids()
+            EVERY(64, function()
+                SET_MARKER_ENTRY(0, 100, 100)
+                SET_MARKER_ENTRY(1, 200, 200)
+                SEND_PEOPLE_TO_MARKER(0, 5)
+            end)
+        "#;
+
+        bridge.borrow_mut().game_tick = 64;
+        lua.load(script).exec().unwrap();
+
+        let b = bridge.borrow();
+        assert_eq!(b.marker_entries.len(), 2);
+        assert_eq!(b.marker_entries[0].x, 100);
+        assert_eq!(b.marker_entries[0].y, 100);
+        assert_eq!(b.pending_moves.len(), 1);
+        assert_eq!(b.pending_moves[0].marker, 0);
+    }
+
+    #[test]
+    fn integration_building_and_training() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 0;
+
+        // Script that builds and trains in sequence
+        let script = r#"
+            _every_reset_ids()
+            EVERY(128, function()
+                BUILD_AT(0, 50, 50)
+                TRAIN_PEOPLE_NOW(1, 2)
+                MAX_BUILDING_TYPE(0, 3)
+            end)
+        "#;
+
+        bridge.borrow_mut().game_tick = 128;
+        lua.load(script).exec().unwrap();
+
+        let b = bridge.borrow();
+        assert_eq!(b.pending_builds.len(), 1);
+        assert_eq!(b.pending_builds[0].building_type, 0);
+        assert_eq!(b.pending_trains.len(), 1);
+        assert_eq!(b.pending_trains[0].unit_type, 1);
+        assert_eq!(b.max_building_type[0][0], 3);
+    }
+
+    #[test]
+    fn integration_defensive_setup() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 0;
+
+        // Script that sets up defensive configuration
+        let script = r#"
+            _every_reset_ids()
+            EVERY(64, function()
+                SET_DEFENSE_RADIUS(512)
+                SET_BASE_RADIUS(256)
+                SET_SPELL_ENTRY(0, 1)
+                SET_SPELL_ENTRY(1, 1)
+            end)
+        "#;
+
+        bridge.borrow_mut().game_tick = 64;
+        lua.load(script).exec().unwrap();
+
+        let b = bridge.borrow();
+        assert_eq!(b.defence_radius[0], 512);
+        assert_eq!(b.base_radius[0], 256);
+        assert!(b.spell_entry[0][0]);
+        assert!(b.spell_entry[0][1]);
+    }
+
+    #[test]
+    fn integration_reincarnation_and_mana() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 0;
+        bridge.borrow_mut().tribe_mana[0] = 100000;
+
+        // Script that enables reincarnation based on mana
+        let script = r#"
+            _every_reset_ids()
+            EVERY(256, function()
+                if MY_MANA() > 50000 then
+                    SET_REINCARNATION(1)
+                else
+                    SET_REINCARNATION(0)
+                end
+            end)
+        "#;
+
+        bridge.borrow_mut().game_tick = 256;
+        lua.load(script).exec().unwrap();
+        assert!(bridge.borrow().reincarnation[0]);
+
+        // Low mana - reincarnation off
+        bridge.borrow_mut().game_tick = 512;
+        bridge.borrow_mut().tribe_mana[0] = 10000;
+        lua.load(script).exec().unwrap();
+        assert!(!bridge.borrow().reincarnation[0]);
+    }
+
+    #[test]
+    fn integration_full_tick_cycle() {
+        let (lua, bridge) = setup();
+        bridge.borrow_mut().current_tribe = 0;
+        bridge.borrow_mut().tribe_populations[0] = 75;
+
+        // Complex script mimicking real AI behavior
+        let script = r#"
+            _every_reset_ids()
+            EVERY(64, function()
+                if MY_NUM_PEOPLE() < 80 then
+                    TRAIN_PEOPLE_NOW(1, 1)
+                    BUILD_AT(0, 0, 0)
+                end
+            end)
+            EVERY(128, function()
+                SET_DEFENSE_RADIUS(256)
+            end)
+            EVERY(256, function()
+                if MY_NUM_PEOPLE() > 50 then
+                    ATTACK(1, MY_NUM_PEOPLE() / 2, 0)
+                end
+            end)
+        "#;
+
+        // Tick 64: train and build
+        bridge.borrow_mut().game_tick = 64;
+        lua.load(script).exec().unwrap();
+        assert_eq!(bridge.borrow().pending_trains.len(), 1);
+        assert_eq!(bridge.borrow().pending_builds.len(), 1);
+
+        // Tick 128: defense radius
+        bridge.borrow_mut().game_tick = 128;
+        lua.load(script).exec().unwrap();
+        assert_eq!(bridge.borrow().defence_radius[0], 256);
+
+        // Tick 256: attack trigger
+        bridge.borrow_mut().game_tick = 256;
+        lua.load(script).exec().unwrap();
+        assert_eq!(bridge.borrow().pending_attacks.len(), 1);
+        assert_eq!(bridge.borrow().pending_attacks[0].num_people, 37); // 75 / 2
+    }
+
+    #[test]
+    fn integration_tribe_state_isolation() {
+        let (lua, bridge) = setup();
+
+        // Test that different tribes have isolated state
+        bridge.borrow_mut().current_tribe = 0;
+        bridge.borrow_mut().tribe_populations[0] = 100;
+        bridge.borrow_mut().tribe_populations[1] = 50;
+
+        let script = r#"
+            _every_reset_ids()
+            EVERY(64, function()
+                if MY_NUM_PEOPLE() > 75 then
+                    SET_ATTACK_VARIABLE(100)
+                else
+                    SET_ATTACK_VARIABLE(50)
+                end
+            end)
+        "#;
+
+        // Tribe 0 (100 people) - should set to 100
+        bridge.borrow_mut().game_tick = 64;
+        bridge.borrow_mut().current_tribe = 0;
+        lua.load(script).exec().unwrap();
+        assert_eq!(bridge.borrow().attack_variable[0], 100);
+
+        // Tribe 1 (50 people) - should set to 50
+        bridge.borrow_mut().current_tribe = 1;
+        bridge.borrow_mut().game_tick = 128;
+        lua.load(script).exec().unwrap();
+        assert_eq!(bridge.borrow().attack_variable[1], 50);
+
+        // Tribe 0 should still have its value
+        assert_eq!(bridge.borrow().attack_variable[0], 100);
     }
 }

@@ -28,12 +28,13 @@ const FIELD_CONSTANT: u32 = 0;
 const FIELD_USER: u32 = 1;
 const FIELD_INTERNAL: u32 = 2;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Field {
     field_type: u32,
     value: i32,
 }
 
+#[derive(Debug)]
 struct Script {
     codes: Vec<u16>,
     fields: Vec<Field>,
@@ -683,9 +684,9 @@ impl Decompiler {
         };
         self.advance();
 
-        // Check for optional offset
-        let has_offset = !self.is_token("BEGIN");
-        let offset = if has_offset {
+        // Check for optional offset (parsed but not used in output)
+        let _has_offset = !self.is_token("BEGIN");
+        let _offset = if _has_offset {
             let f = self.script.fields.get(self.code() as usize);
             let v = f.map(|f| f.value + 1).unwrap_or(0);
             self.advance();
@@ -841,4 +842,1240 @@ fn main() {
     }
 
     println!("\nDone: {} succeeded, {} failed", success, failed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ========================================================================
+    // Test Helpers
+    // ========================================================================
+
+    /// Build a valid .dat file bytes from codes and fields.
+    /// Format: 4096 x u16 LE codes + 512 x (u32 LE + i32 LE) fields + padding
+    fn build_script_bytes(codes: &[u16], fields: &[(u32, i32)]) -> Vec<u8> {
+        let mut data = Vec::with_capacity(12552);
+
+        // Write codes (pad to 4096)
+        for (i, &code) in codes.iter().enumerate() {
+            if i >= MAX_CODES {
+                break;
+            }
+            data.extend_from_slice(&code.to_le_bytes());
+        }
+        // Pad remaining codes with zeros
+        for _ in codes.len()..MAX_CODES {
+            data.extend_from_slice(&0u16.to_le_bytes());
+        }
+
+        // Write fields (pad to 512)
+        for (i, &(ft, val)) in fields.iter().enumerate() {
+            if i >= MAX_FIELDS {
+                break;
+            }
+            data.extend_from_slice(&ft.to_le_bytes());
+            data.extend_from_slice(&val.to_le_bytes());
+        }
+        // Pad remaining fields with zeros
+        for _ in fields.len()..MAX_FIELDS {
+            data.extend_from_slice(&0u32.to_le_bytes());
+            data.extend_from_slice(&0i32.to_le_bytes());
+        }
+
+        // Add padding (264 bytes of zeros)
+        data.resize(data.len() + 264, 0);
+        data
+    }
+
+    /// Create a field entry helper
+    fn field(field_type: u32, value: i32) -> (u32, i32) {
+        (field_type, value)
+    }
+
+    // ========================================================================
+    // Script::read() Tests
+    // ========================================================================
+
+    #[test]
+    fn script_read_valid_file() {
+        let codes = vec![12u16, 1000u16, 2000u16];
+        let fields = vec![field(FIELD_CONSTANT, 42), field(FIELD_USER, 5)];
+        let data = build_script_bytes(&codes, &fields);
+
+        let script = Script::read(&data).unwrap();
+
+        assert_eq!(script.codes.len(), MAX_CODES);
+        assert_eq!(script.codes[0], 12);
+        assert_eq!(script.codes[1], 1000);
+        assert_eq!(script.codes[2], 2000);
+
+        assert_eq!(script.fields.len(), MAX_FIELDS);
+        assert_eq!(script.fields[0].field_type, FIELD_CONSTANT);
+        assert_eq!(script.fields[0].value, 42);
+        assert_eq!(script.fields[1].field_type, FIELD_USER);
+        assert_eq!(script.fields[1].value, 5);
+    }
+
+    #[test]
+    fn script_read_file_too_small() {
+        // File smaller than code_bytes (4096 * 2 = 8192)
+        let data = vec![0u8; 100];
+        let result = Script::read(&data);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("File too small"));
+    }
+
+    #[test]
+    fn script_read_truncates_fields() {
+        // More than MAX_FIELDS should be truncated
+        let codes = vec![12u16];
+        let mut fields = Vec::new();
+        for i in 0..600 {
+            fields.push(field(FIELD_CONSTANT, i as i32));
+        }
+        let data = build_script_bytes(&codes, &fields);
+
+        let script = Script::read(&data).unwrap();
+        assert_eq!(script.fields.len(), MAX_FIELDS);
+        assert_eq!(script.fields[511].value, 511);
+    }
+
+    // ========================================================================
+    // build_token_map() Tests
+    // ========================================================================
+
+    #[test]
+    fn build_token_map_control_flow_tokens() {
+        let map = build_token_map();
+
+        // Control flow at TOKEN_OFFSET + index
+        assert_eq!(map.get(&(TOKEN_OFFSET + 0)), Some(&"IF"));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 1)), Some(&"ELSE"));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 2)), Some(&"ENDIF"));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 3)), Some(&"BEGIN"));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 4)), Some(&"END"));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 5)), Some(&"EVERY"));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 6)), Some(&"DO"));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 7)), Some(&"SET"));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 8)), Some(&"INCREMENT"));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 9)), Some(&"DECREMENT"));
+    }
+
+    #[test]
+    fn build_token_map_comparison_operators() {
+        let map = build_token_map();
+
+        assert_eq!(map.get(&(TOKEN_OFFSET + 12)), Some(&">"));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 13)), Some(&"<"));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 14)), Some(&"=="));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 15)), Some(&"!="));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 16)), Some(&">="));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 17)), Some(&"<="));
+    }
+
+    #[test]
+    fn build_token_map_expression_tokens() {
+        let map = build_token_map();
+
+        assert_eq!(map.get(&(TOKEN_OFFSET + 10)), Some(&"EXP_START"));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 11)), Some(&"EXP_END"));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 19)), Some(&"SCRIPT_END"));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 20)), Some(&"AND"));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 21)), Some(&"OR"));
+    }
+
+    #[test]
+    fn build_token_map_arithmetic_tokens() {
+        let map = build_token_map();
+
+        assert_eq!(map.get(&(TOKEN_OFFSET + 25)), Some(&"MULTIPLY"));
+        assert_eq!(map.get(&(TOKEN_OFFSET + 26)), Some(&"DIVIDE"));
+    }
+
+    #[test]
+    fn build_token_map_command_tokens() {
+        let map = build_token_map();
+
+        // Commands at TOKEN_OFFSET + NO_COMMANDS + index
+        assert_eq!(
+            map.get(&(TOKEN_OFFSET + NO_COMMANDS + 1)),
+            Some(&"CONSTRUCT_BUILDING")
+        );
+        assert_eq!(
+            map.get(&(TOKEN_OFFSET + NO_COMMANDS + 32)),
+            Some(&"ATTACK")
+        );
+        assert_eq!(
+            map.get(&(TOKEN_OFFSET + NO_COMMANDS + 55)),
+            Some(&"BUILD_DRUM_TOWER")
+        );
+        assert_eq!(
+            map.get(&(TOKEN_OFFSET + NO_COMMANDS + 84)),
+            Some(&"ZOOM_TO")
+        );
+        assert_eq!(
+            map.get(&(TOKEN_OFFSET + NO_COMMANDS + 178)),
+            Some(&"FLYBY_CREATE_NEW")
+        );
+    }
+
+    #[test]
+    fn build_token_map_color_tokens() {
+        let map = build_token_map();
+
+        assert_eq!(map.get(&(TOKEN_OFFSET + NO_COMMANDS + 91)), Some(&"BLUE"));
+        assert_eq!(map.get(&(TOKEN_OFFSET + NO_COMMANDS + 92)), Some(&"RED"));
+        assert_eq!(
+            map.get(&(TOKEN_OFFSET + NO_COMMANDS + 93)),
+            Some(&"YELLOW")
+        );
+        assert_eq!(
+            map.get(&(TOKEN_OFFSET + NO_COMMANDS + 94)),
+            Some(&"GREEN")
+        );
+    }
+
+    #[test]
+    fn build_token_map_message_functions() {
+        let map = build_token_map();
+
+        assert_eq!(
+            map.get(&(TOKEN_OFFSET + NO_COMMANDS + 147)),
+            Some(&"CREATE_MSG_NARRATIVE")
+        );
+        assert_eq!(
+            map.get(&(TOKEN_OFFSET + NO_COMMANDS + 148)),
+            Some(&"CREATE_MSG_OBJECTIVE")
+        );
+        assert_eq!(
+            map.get(&(TOKEN_OFFSET + NO_COMMANDS + 149)),
+            Some(&"CREATE_MSG_INFORMATION")
+        );
+    }
+
+    // ========================================================================
+    // build_internal_map() Tests
+    // ========================================================================
+
+    #[test]
+    fn build_internal_map_no_offset_internals() {
+        let map = build_internal_map();
+
+        // Non-offset internals (raw index)
+        assert_eq!(map.get(&0), Some(&"GAME_TURN"));
+        assert_eq!(map.get(&1), Some(&"MY_NUM_PEOPLE"));
+        assert_eq!(map.get(&2), Some(&"BLUE_PEOPLE"));
+        assert_eq!(map.get(&3), Some(&"RED_PEOPLE"));
+        assert_eq!(map.get(&4), Some(&"YELLOW_PEOPLE"));
+        assert_eq!(map.get(&5), Some(&"GREEN_PEOPLE"));
+        assert_eq!(map.get(&10), Some(&"WILD_PEOPLE"));
+        assert_eq!(map.get(&11), Some(&"BLUE_MANA"));
+        assert_eq!(map.get(&14), Some(&"GREEN_MANA"));
+    }
+
+    #[test]
+    fn build_internal_map_attribute_internals() {
+        let map = build_internal_map();
+
+        // Offset internals (INT_OFFSET + index)
+        assert_eq!(
+            map.get(&(INT_OFFSET + 0)),
+            Some(&"ATTR_EXPANSION")
+        );
+        assert_eq!(
+            map.get(&(INT_OFFSET + 14)),
+            Some(&"ATTR_DEFENSE_RAD_INCR")
+        );
+        assert_eq!(
+            map.get(&(INT_OFFSET + 47)),
+            Some(&"ATTR_SPARE_6")
+        );
+    }
+
+    #[test]
+    fn build_internal_map_mana_internals() {
+        let map = build_internal_map();
+
+        assert_eq!(map.get(&(INT_OFFSET + 48)), Some(&"MY_MANA"));
+        assert_eq!(
+            map.get(&(INT_OFFSET + 49)),
+            Some(&"M_SPELL_BURN_COST")
+        );
+        assert_eq!(
+            map.get(&(INT_OFFSET + 65)),
+            Some(&"M_SPELL_WRATH_OF_GOD_COST")
+        );
+    }
+
+    #[test]
+    fn build_internal_map_building_types() {
+        let map = build_internal_map();
+
+        // My buildings
+        assert_eq!(
+            map.get(&(INT_OFFSET + 66)),
+            Some(&"M_BUILDING_SMALL_HUT")
+        );
+        assert_eq!(
+            map.get(&(INT_OFFSET + 69)),
+            Some(&"M_BUILDING_DRUM_TOWER")
+        );
+        // Blue buildings
+        assert_eq!(
+            map.get(&(INT_OFFSET + 82)),
+            Some(&"B_BUILDING_SMALL_HUT")
+        );
+        // Red buildings
+        assert_eq!(
+            map.get(&(INT_OFFSET + 98)),
+            Some(&"R_BUILDING_SMALL_HUT")
+        );
+    }
+
+    #[test]
+    fn build_internal_map_person_types() {
+        let map = build_internal_map();
+
+        assert_eq!(map.get(&(INT_OFFSET + 146)), Some(&"M_PERSON_BRAVE"));
+        assert_eq!(map.get(&(INT_OFFSET + 151)), Some(&"M_PERSON_SHAMAN"));
+        assert_eq!(map.get(&(INT_OFFSET + 201)), Some(&"BRAVE"));
+        assert_eq!(map.get(&(INT_OFFSET + 206)), Some(&"SHAMAN"));
+    }
+
+    #[test]
+    fn build_internal_map_spell_types() {
+        let map = build_internal_map();
+
+        assert_eq!(map.get(&(INT_OFFSET + 184)), Some(&"BURN"));
+        assert_eq!(map.get(&(INT_OFFSET + 185)), Some(&"BLAST"));
+        assert_eq!(map.get(&(INT_OFFSET + 199)), Some(&"VOLCANO"));
+    }
+
+    #[test]
+    fn build_internal_map_vehicle_types() {
+        let map = build_internal_map();
+
+        assert_eq!(
+            map.get(&(INT_OFFSET + 226)),
+            Some(&"M_VEHICLE_BOAT_1")
+        );
+        assert_eq!(
+            map.get(&(INT_OFFSET + 227)),
+            Some(&"M_VEHICLE_AIRSHIP_1")
+        );
+    }
+
+    #[test]
+    fn build_internal_map_special_values() {
+        let map = build_internal_map();
+
+        assert_eq!(
+            map.get(&(INT_OFFSET + 222)),
+            Some(&"NO_SPECIFIC_PERSON")
+        );
+        assert_eq!(
+            map.get(&(INT_OFFSET + 223)),
+            Some(&"NO_SPECIFIC_BUILDING")
+        );
+        assert_eq!(map.get(&(INT_OFFSET + 224)), Some(&"NO_SPECIFIC_SPELL"));
+        assert_eq!(map.get(&(INT_OFFSET + 225)), Some(&"TARGET_SHAMAN"));
+    }
+
+    // ========================================================================
+    // command_param_count() Tests
+    // ========================================================================
+
+    #[test]
+    fn command_param_count_zero_params() {
+        assert_eq!(command_param_count("RESET_BASE_MARKER"), 0);
+        assert_eq!(command_param_count("SPELL_TYPE"), 0);
+        assert_eq!(command_param_count("BUILDING_TYPE"), 0);
+        assert_eq!(command_param_count("DISABLE_USER_INPUTS"), 0);
+        assert_eq!(command_param_count("ENABLE_USER_INPUTS"), 0);
+        assert_eq!(command_param_count("CLEAR_STANDING_PEOPLE"), 0);
+        assert_eq!(command_param_count("MARVELLOUS_HOUSE_DEATH"), 0);
+        assert_eq!(command_param_count("UNKNOWN_COMMAND"), 0);
+    }
+
+    #[test]
+    fn command_param_count_one_param() {
+        assert_eq!(command_param_count("CONSTRUCT_BUILDING"), 1);
+        assert_eq!(command_param_count("TRAIN_PEOPLE_NOW"), 1);
+        assert_eq!(command_param_count("BUILD_DRUM_TOWER"), 1);
+        assert_eq!(command_param_count("OPEN_DIALOG"), 1);
+        assert_eq!(command_param_count("SET_REINCARNATION"), 1);
+        assert_eq!(command_param_count("SET_DEFENCE_RADIUS"), 1);
+    }
+
+    #[test]
+    fn command_param_count_two_params() {
+        assert_eq!(command_param_count("SPELL_DEFENSE"), 2);
+        assert_eq!(command_param_count("GUARD_AT_MARKER"), 2);
+        assert_eq!(command_param_count("BUILD_AT"), 2);
+        assert_eq!(command_param_count("PRAY_AT_HEAD"), 2);
+        assert_eq!(command_param_count("ZOOM_TO"), 3); // Actually 3
+    }
+
+    #[test]
+    fn command_param_count_thirteen_params() {
+        assert_eq!(command_param_count("ATTACK"), 13);
+        assert_eq!(command_param_count("ATTACK_BLUE"), 13);
+        assert_eq!(command_param_count("ATTACK_RED"), 13);
+        assert_eq!(command_param_count("ATTACK_YELLOW"), 13);
+        assert_eq!(command_param_count("ATTACK_GREEN"), 13);
+    }
+
+    #[test]
+    fn command_param_count_six_params() {
+        assert_eq!(command_param_count("SPELL_ATTACK"), 6);
+    }
+
+    #[test]
+    fn command_param_count_four_params() {
+        assert_eq!(command_param_count("SET_MARKER_ENTRY"), 4);
+        assert_eq!(command_param_count("SET_SPELL_ENTRY"), 4);
+        assert_eq!(command_param_count("BOAT_PATROL"), 4);
+    }
+
+    // ========================================================================
+    // Decompiler::field_str() Tests
+    // ========================================================================
+
+    #[test]
+    fn field_str_constant() {
+        let codes = vec![SCRIPT_VERSION];
+        let fields = vec![field(FIELD_CONSTANT, 42), field(FIELD_CONSTANT, 99)];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let decompiler = Decompiler::new(script);
+
+        assert_eq!(decompiler.field_str(0), "42");
+        assert_eq!(decompiler.field_str(1), "99");
+    }
+
+    #[test]
+    fn field_str_user_variable() {
+        let codes = vec![SCRIPT_VERSION];
+        let fields = vec![field(FIELD_USER, 0), field(FIELD_USER, 5), field(FIELD_USER, 63)];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let decompiler = Decompiler::new(script);
+
+        assert_eq!(decompiler.field_str(0), "_var0");
+        assert_eq!(decompiler.field_str(1), "_var5");
+        assert_eq!(decompiler.field_str(2), "_var63");
+    }
+
+    #[test]
+    fn field_str_internal_attribute() {
+        let codes = vec![SCRIPT_VERSION];
+        let fields = vec![
+            field(FIELD_INTERNAL, (INT_OFFSET + 0) as i32), // ATTR_EXPANSION
+            field(FIELD_INTERNAL, (INT_OFFSET + 48) as i32), // MY_MANA
+            field(FIELD_INTERNAL, (INT_OFFSET + 14) as i32), // ATTR_DEFENSE_RAD_INCR
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let decompiler = Decompiler::new(script);
+
+        assert_eq!(decompiler.field_str(0), "ATTR_EXPANSION");
+        assert_eq!(decompiler.field_str(1), "MY_MANA");
+        assert_eq!(decompiler.field_str(2), "ATTR_DEFENSE_RAD_INCR");
+    }
+
+    #[test]
+    fn field_str_internal_game_state() {
+        let codes = vec![SCRIPT_VERSION];
+        let fields = vec![
+            field(FIELD_INTERNAL, 0), // GAME_TURN (no offset)
+            field(FIELD_INTERNAL, 1), // MY_NUM_PEOPLE
+            field(FIELD_INTERNAL, 11), // BLUE_MANA
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let decompiler = Decompiler::new(script);
+
+        assert_eq!(decompiler.field_str(0), "GAME_TURN");
+        assert_eq!(decompiler.field_str(1), "MY_NUM_PEOPLE");
+        assert_eq!(decompiler.field_str(2), "BLUE_MANA");
+    }
+
+    #[test]
+    fn field_str_out_of_bounds() {
+        let codes = vec![SCRIPT_VERSION];
+        // Only define 10 fields
+        let mut fields = Vec::new();
+        for i in 0..10 {
+            fields.push(field(FIELD_CONSTANT, i as i32));
+        }
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let decompiler = Decompiler::new(script);
+
+        // Index 500 is beyond our 10 fields (but within 512 max)
+        // Since fields are zero-padded, index 500 will be a zero field (FIELD_CONSTANT, 0)
+        // Test with index beyond actual defined data
+        assert_eq!(decompiler.field_str(5), "5"); // Last defined field
+        assert_eq!(decompiler.field_str(100), "0"); // Zero-padded
+    }
+
+    #[test]
+    fn field_str_unknown_type() {
+        let codes = vec![SCRIPT_VERSION];
+        // Field type 99 is unknown
+        let fields = vec![(99, 42)];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let decompiler = Decompiler::new(script);
+
+        assert_eq!(decompiler.field_str(0), "?unknown_0");
+    }
+
+    // ========================================================================
+    // Decompiler::decompile() - Full Script Tests
+    // ========================================================================
+
+    #[test]
+    fn decompile_minimal_script() {
+        // BEGIN, END
+        let codes = vec![SCRIPT_VERSION, TOKEN_OFFSET + 3, TOKEN_OFFSET + 4];
+        let fields = vec![];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.is_empty()); // No content between BEGIN/END
+    }
+
+    #[test]
+    fn decompile_version_mismatch() {
+        // Wrong version (11 instead of 12)
+        let codes = vec![11, TOKEN_OFFSET + 3, TOKEN_OFFSET + 4];
+        let fields = vec![];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let _result = decompiler.decompile().unwrap();
+        assert!(decompiler.errors.iter().any(|e| e.contains("Unexpected version")));
+    }
+
+    #[test]
+    fn decompile_missing_begin() {
+        // No BEGIN token
+        let codes = vec![SCRIPT_VERSION, TOKEN_OFFSET + 4]; // Just END
+        let fields = vec![];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile_body();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Expected BEGIN"));
+    }
+
+    // ========================================================================
+    // Decompiler::decompile_set_inc_dec() Tests
+    // ========================================================================
+
+    #[test]
+    fn decompile_set_assignment() {
+        // BEGIN, SET, field0 (target), field1 (value), END
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN
+            TOKEN_OFFSET + 7, // SET
+            0,                // target field
+            1,                // value field
+            TOKEN_OFFSET + 4, // END
+        ];
+        let fields = vec![
+            field(FIELD_INTERNAL, (INT_OFFSET + 0) as i32), // ATTR_EXPANSION
+            field(FIELD_CONSTANT, 100),
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("ATTR_EXPANSION = 100"), "Got: {}", result);
+    }
+
+    #[test]
+    fn decompile_increment() {
+        // BEGIN, INCREMENT, field0, field1, END
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN
+            TOKEN_OFFSET + 8, // INCREMENT
+            0,                // target
+            1,                // value
+            TOKEN_OFFSET + 4, // END
+        ];
+        let fields = vec![
+            field(FIELD_USER, 5), // _var5
+            field(FIELD_CONSTANT, 1),
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("_var5 = _var5 + 1"));
+    }
+
+    #[test]
+    fn decompile_decrement() {
+        // BEGIN, DECREMENT, field0, field1, END
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN
+            TOKEN_OFFSET + 9, // DECREMENT
+            0,                // target
+            1,                // value
+            TOKEN_OFFSET + 4, // END
+        ];
+        let fields = vec![
+            field(FIELD_USER, 10), // _var10
+            field(FIELD_CONSTANT, 5),
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("_var10 = _var10 - 5"));
+    }
+
+    // ========================================================================
+    // Decompiler::decompile_mul_div() Tests
+    // ========================================================================
+
+    #[test]
+    fn decompile_multiply() {
+        // BEGIN, MULTIPLY, target, lhs, rhs, END
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN
+            TOKEN_OFFSET + 25, // MULTIPLY
+            0,                // target
+            1,                // lhs
+            2,                // rhs
+            TOKEN_OFFSET + 4, // END
+        ];
+        let fields = vec![
+            field(FIELD_USER, 0),  // _var0
+            field(FIELD_CONSTANT, 2),
+            field(FIELD_CONSTANT, 3),
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("_var0 = 2 * 3"));
+    }
+
+    #[test]
+    fn decompile_divide() {
+        // BEGIN, DIVIDE, target, lhs, rhs, END
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN
+            TOKEN_OFFSET + 26, // DIVIDE
+            0,                // target
+            1,                // lhs
+            2,                // rhs
+            TOKEN_OFFSET + 4, // END
+        ];
+        let fields = vec![
+            field(FIELD_USER, 5),  // _var5
+            field(FIELD_CONSTANT, 100),
+            field(FIELD_CONSTANT, 4),
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("_var5 = 100 / 4"));
+    }
+
+    // ========================================================================
+    // Decompiler::decompile_do() Tests
+    // ========================================================================
+
+    #[test]
+    fn decompile_do_zero_params() {
+        // BEGIN, DO, RESET_BASE_MARKER, END
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN
+            TOKEN_OFFSET + 6, // DO
+            TOKEN_OFFSET + NO_COMMANDS + 38, // RESET_BASE_MARKER
+            TOKEN_OFFSET + 4, // END
+        ];
+        let fields = vec![];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("RESET_BASE_MARKER()"));
+    }
+
+    #[test]
+    fn decompile_do_one_param_constant() {
+        // BEGIN, DO, BUILD_DRUM_TOWER, field0, END
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN
+            TOKEN_OFFSET + 6, // DO
+            TOKEN_OFFSET + NO_COMMANDS + 55, // BUILD_DRUM_TOWER
+            0,                // field
+            TOKEN_OFFSET + 4, // END
+        ];
+        let fields = vec![field(FIELD_CONSTANT, 1)];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("BUILD_DRUM_TOWER(1)"));
+    }
+
+    #[test]
+    fn decompile_do_one_param_token() {
+        // BEGIN, DO, CONSTRUCT_BUILDING, ON, END
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN
+            TOKEN_OFFSET + 6, // DO
+            TOKEN_OFFSET + NO_COMMANDS + 1, // CONSTRUCT_BUILDING
+            TOKEN_OFFSET + 22, // ON
+            TOKEN_OFFSET + 4, // END
+        ];
+        let fields = vec![];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("CONSTRUCT_BUILDING(ON)"));
+    }
+
+    #[test]
+    fn decompile_do_two_params() {
+        // BEGIN, DO, BUILD_AT, field0, field1, END
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN
+            TOKEN_OFFSET + 6, // DO
+            TOKEN_OFFSET + NO_COMMANDS + 80, // BUILD_AT
+            0,                // field (marker x)
+            1,                // field (marker y)
+            TOKEN_OFFSET + 4, // END
+        ];
+        let fields = vec![
+            field(FIELD_CONSTANT, 100),
+            field(FIELD_CONSTANT, 200),
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("BUILD_AT(100, 200)"));
+    }
+
+    #[test]
+    fn decompile_do_thirteen_params_attack() {
+        // BEGIN, DO, ATTACK, [13 params], END
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN
+            TOKEN_OFFSET + 6, // DO
+            TOKEN_OFFSET + NO_COMMANDS + 32, // ATTACK
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, // 13 param fields
+            TOKEN_OFFSET + 4, // END
+        ];
+        let fields = vec![
+            field(FIELD_CONSTANT, 0), // tribe index
+            field(FIELD_CONSTANT, 3), // num_people
+            field(FIELD_CONSTANT, 3), // attack type (ATTACK_MARKER = 3 is token value offset)
+            field(FIELD_CONSTANT, 3),
+            field(FIELD_CONSTANT, 999),
+            field(FIELD_CONSTANT, 224), // NO_SPECIFIC_SPELL
+            field(FIELD_CONSTANT, 224),
+            field(FIELD_CONSTANT, 224),
+            field(FIELD_CONSTANT, 0), // ATTACK_NORMAL
+            field(FIELD_CONSTANT, 0),
+            field(FIELD_CONSTANT, -1),
+            field(FIELD_CONSTANT, -1),
+            field(FIELD_CONSTANT, 0),
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("ATTACK("), "Got: {}", result);
+        // The params are field values, not token names for this test
+        assert!(result.contains("ATTACK(0, 3, 3"), "Got: {}", result);
+    }
+
+    // ========================================================================
+    // Decompiler::decompile_if() Tests
+    // ========================================================================
+
+    #[test]
+    fn decompile_if_simple_condition() {
+        // BEGIN, IF, >, field0, field1, BEGIN, body, END, ENDIF, END
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN (script)
+            TOKEN_OFFSET + 0, // IF
+            TOKEN_OFFSET + 12, // >
+            0,                // lhs (GAME_TURN)
+            1,                // rhs (constant 70)
+            TOKEN_OFFSET + 3, // BEGIN (body)
+            TOKEN_OFFSET + 6, // DO
+            TOKEN_OFFSET + NO_COMMANDS + 1, // CONSTRUCT_BUILDING
+            TOKEN_OFFSET + 22, // ON
+            TOKEN_OFFSET + 4, // END (body)
+            TOKEN_OFFSET + 2, // ENDIF
+            TOKEN_OFFSET + 4, // END (script)
+        ];
+        let fields = vec![
+            field(FIELD_INTERNAL, 0), // GAME_TURN
+            field(FIELD_CONSTANT, 70),
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("if (GAME_TURN > 70) then"), "Got: {}", result);
+        assert!(result.contains("CONSTRUCT_BUILDING(ON)"), "Got: {}", result);
+        assert!(result.contains("end"), "Got: {}", result);
+    }
+
+    #[test]
+    fn decompile_if_else() {
+        // BEGIN, IF, >, f0, f1, BEGIN, body1, END, ELSE, BEGIN, body2, END, ENDIF, END
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN (script)
+            TOKEN_OFFSET + 0, // IF
+            TOKEN_OFFSET + 12, // >
+            0,                // lhs
+            1,                // rhs
+            TOKEN_OFFSET + 3, // BEGIN (if body)
+            TOKEN_OFFSET + 6, // DO
+            TOKEN_OFFSET + NO_COMMANDS + 1, // CONSTRUCT_BUILDING
+            TOKEN_OFFSET + 22, // ON
+            TOKEN_OFFSET + 4, // END (if body)
+            TOKEN_OFFSET + 1, // ELSE
+            TOKEN_OFFSET + 3, // BEGIN (else body)
+            TOKEN_OFFSET + 6, // DO
+            TOKEN_OFFSET + NO_COMMANDS + 1, // CONSTRUCT_BUILDING
+            TOKEN_OFFSET + 23, // OFF
+            TOKEN_OFFSET + 4, // END (else body)
+            TOKEN_OFFSET + 2, // ENDIF
+            TOKEN_OFFSET + 4, // END (script)
+        ];
+        let fields = vec![
+            field(FIELD_INTERNAL, 0), // GAME_TURN
+            field(FIELD_CONSTANT, 100),
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("if (GAME_TURN > 100) then"), "Got: {}", result);
+        assert!(result.contains("CONSTRUCT_BUILDING(ON)"), "Got: {}", result);
+        assert!(result.contains("else"), "Got: {}", result);
+        assert!(result.contains("CONSTRUCT_BUILDING(OFF)"), "Got: {}", result);
+    }
+
+    #[test]
+    fn decompile_if_and_condition() {
+        // BEGIN, IF, AND, >, f0, f1, >, f2, f3, BEGIN, body, END, ENDIF, END
+        // AND/OR recursively call decompile_condition() which expects token-offset codes
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN (script)
+            TOKEN_OFFSET + 0, // IF
+            TOKEN_OFFSET + 20, // AND
+            TOKEN_OFFSET + 12, // > (token-offset)
+            0,                // lhs1
+            1,                // rhs1
+            TOKEN_OFFSET + 12, // > (token-offset)
+            2,                // lhs2
+            3,                // rhs2
+            TOKEN_OFFSET + 3, // BEGIN (body)
+            TOKEN_OFFSET + 6, // DO
+            TOKEN_OFFSET + NO_COMMANDS + 1, // CONSTRUCT_BUILDING
+            TOKEN_OFFSET + 22, // ON
+            TOKEN_OFFSET + 4, // END (body)
+            TOKEN_OFFSET + 2, // ENDIF
+            TOKEN_OFFSET + 4, // END (script)
+        ];
+        let fields = vec![
+            field(FIELD_USER, 0),
+            field(FIELD_CONSTANT, 1),
+            field(FIELD_USER, 1),
+            field(FIELD_CONSTANT, 2),
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("if ((_var0 > 1"), "Got: {}", result);
+        assert!(result.contains("and _var1 > 2)"), "Got: {}", result);
+    }
+
+    #[test]
+    fn decompile_if_or_condition() {
+        // BEGIN, IF, OR, ==, f0, f1, ==, f2, f3, BEGIN, body, END, ENDIF, END
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN (script)
+            TOKEN_OFFSET + 0, // IF
+            TOKEN_OFFSET + 21, // OR
+            TOKEN_OFFSET + 14, // == (token-offset)
+            0,                // lhs1
+            1,                // rhs1
+            TOKEN_OFFSET + 14, // == (token-offset)
+            2,                // lhs2
+            3,                // rhs2
+            TOKEN_OFFSET + 3, // BEGIN (body)
+            TOKEN_OFFSET + 6, // DO
+            TOKEN_OFFSET + NO_COMMANDS + 1, // CONSTRUCT_BUILDING
+            TOKEN_OFFSET + 22, // ON
+            TOKEN_OFFSET + 4, // END (body)
+            TOKEN_OFFSET + 2, // ENDIF
+            TOKEN_OFFSET + 4, // END (script)
+        ];
+        let fields = vec![
+            field(FIELD_USER, 5),
+            field(FIELD_CONSTANT, 0),
+            field(FIELD_USER, 6),
+            field(FIELD_CONSTANT, 1),
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("if ((_var5 == 0"), "Got: {}", result);
+        assert!(result.contains("or _var6 == 1)"), "Got: {}", result);
+    }
+
+    #[test]
+    fn decompile_if_not_equals() {
+        // BEGIN, IF, !=, f0, f1, BEGIN, body, END, ENDIF, END
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN (script)
+            TOKEN_OFFSET + 0, // IF
+            TOKEN_OFFSET + 15, // != (token-offset)
+            0,                // lhs
+            1,                // rhs
+            TOKEN_OFFSET + 3, // BEGIN (body)
+            TOKEN_OFFSET + 6, // DO
+            TOKEN_OFFSET + NO_COMMANDS + 1, // CONSTRUCT_BUILDING
+            TOKEN_OFFSET + 22, // ON
+            TOKEN_OFFSET + 4, // END (body)
+            TOKEN_OFFSET + 2, // ENDIF
+            TOKEN_OFFSET + 4, // END (script)
+        ];
+        let fields = vec![
+            field(FIELD_USER, 0),
+            field(FIELD_CONSTANT, 0),
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        // Lua uses ~= for not equals
+        assert!(result.contains("_var0 ~= 0"), "Got: {}", result);
+    }
+
+    // ========================================================================
+    // Decompiler::decompile_every() Tests
+    // ========================================================================
+
+    #[test]
+    fn decompile_every_basic() {
+        // BEGIN, EVERY, field0 (interval), BEGIN, END, END
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN
+            TOKEN_OFFSET + 5, // EVERY
+            0,                // interval field (value 255 -> interval 256)
+            TOKEN_OFFSET + 3, // BEGIN (body)
+            TOKEN_OFFSET + 4, // END (body)
+            TOKEN_OFFSET + 4, // END (script)
+        ];
+        let fields = vec![field(FIELD_CONSTANT, 255)]; // +1 = 256
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("EVERY(256, function()"));
+    }
+
+    #[test]
+    fn decompile_every_with_offset() {
+        // BEGIN, EVERY, interval, offset, BEGIN, END, END
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN
+            TOKEN_OFFSET + 5, // EVERY
+            0,                // interval field
+            1,                // offset field
+            TOKEN_OFFSET + 3, // BEGIN (body)
+            TOKEN_OFFSET + 4, // END (body)
+            TOKEN_OFFSET + 4, // END (script)
+        ];
+        let fields = vec![
+            field(FIELD_CONSTANT, 63), // 64
+            field(FIELD_CONSTANT, 0),  // offset 1
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("EVERY(64, function()"));
+    }
+
+    #[test]
+    fn decompile_every_nested_if() {
+        // BEGIN, EVERY, interval, BEGIN (body), IF, >, f1, f2, BEGIN, DO, cmd, END, ENDIF, END, END
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN (script)
+            TOKEN_OFFSET + 5, // EVERY
+            0,                // interval
+            TOKEN_OFFSET + 3, // BEGIN (body)
+            TOKEN_OFFSET + 0, // IF
+            TOKEN_OFFSET + 12, // >
+            1,                // lhs (_var2)
+            2,                // rhs (0)
+            TOKEN_OFFSET + 3, // BEGIN (if body)
+            TOKEN_OFFSET + 6, // DO
+            TOKEN_OFFSET + NO_COMMANDS + 68, // TRAIN_PEOPLE_NOW
+            3,                // param
+            TOKEN_OFFSET + 4, // END (if body)
+            TOKEN_OFFSET + 2, // ENDIF
+            TOKEN_OFFSET + 4, // END (body)
+            TOKEN_OFFSET + 4, // END (script)
+        ];
+        let fields = vec![
+            field(FIELD_CONSTANT, 127), // interval 128
+            field(FIELD_USER, 2),
+            field(FIELD_CONSTANT, 0),
+            field(FIELD_CONSTANT, 1),
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("EVERY(128, function()"), "Got: {}", result);
+        assert!(result.contains("if (_var2 > 0) then"), "Got: {}", result);
+        assert!(result.contains("TRAIN_PEOPLE_NOW(1)"), "Got: {}", result);
+    }
+
+    #[test]
+    fn decompile_multiple_every_different_intervals() {
+        // Multiple EVERY blocks with different intervals
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN
+            TOKEN_OFFSET + 5, // EVERY (256)
+            0,
+            TOKEN_OFFSET + 3, // BEGIN
+            TOKEN_OFFSET + 6, // DO
+            TOKEN_OFFSET + NO_COMMANDS + 1,
+            TOKEN_OFFSET + 22,
+            TOKEN_OFFSET + 4, // END
+            TOKEN_OFFSET + 5, // EVERY (64)
+            1,
+            TOKEN_OFFSET + 3, // BEGIN
+            TOKEN_OFFSET + 6, // DO
+            TOKEN_OFFSET + NO_COMMANDS + 2,
+            TOKEN_OFFSET + 23,
+            TOKEN_OFFSET + 4, // END
+            TOKEN_OFFSET + 4, // END (script)
+        ];
+        let fields = vec![
+            field(FIELD_CONSTANT, 255), // 256
+            field(FIELD_CONSTANT, 63),  // 64
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("EVERY(256, function()"));
+        assert!(result.contains("EVERY(64, function()"));
+        assert!(result.contains("CONSTRUCT_BUILDING(ON)"));
+        assert!(result.contains("FETCH_WOOD(OFF)"));
+    }
+
+    // ========================================================================
+    // Integration-style Tests with Real Bytecode Patterns
+    // ========================================================================
+
+    #[test]
+    fn decompile_real_script_pattern_level_01() {
+        // Simulate key parts of cpscr010.dat (level 1 tribe 1)
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN
+            TOKEN_OFFSET + 0, // IF (GAME_TURN == 0)
+            TOKEN_OFFSET + 14, // ==
+            0,                // GAME_TURN
+            1,                // constant 0
+            TOKEN_OFFSET + 3, // BEGIN (if body)
+            TOKEN_OFFSET + 6, // DO
+            TOKEN_OFFSET + NO_COMMANDS + 137, // SET_REINCARNATION
+            TOKEN_OFFSET + 23, // OFF
+            TOKEN_OFFSET + 6, // DO
+            TOKEN_OFFSET + NO_COMMANDS + 82, // DELAY_MAIN_DRUM_TOWER
+            TOKEN_OFFSET + 22, // ON
+            TOKEN_OFFSET + 4, // END (if body)
+            TOKEN_OFFSET + 2, // ENDIF
+            TOKEN_OFFSET + 1, // ELSE
+            TOKEN_OFFSET + 3, // BEGIN (else body)
+            TOKEN_OFFSET + 5, // EVERY(256, ...)
+            3,                // 255 -> 256
+            TOKEN_OFFSET + 3, // BEGIN (every body)
+            TOKEN_OFFSET + 0, // IF
+            TOKEN_OFFSET + 13, // <
+            4,                // MY_NUM_PEOPLE
+            5,                // 80
+            TOKEN_OFFSET + 3, // BEGIN (if body)
+            TOKEN_OFFSET + 6, // DO
+            TOKEN_OFFSET + NO_COMMANDS + 1, // CONSTRUCT_BUILDING
+            TOKEN_OFFSET + 22, // ON
+            TOKEN_OFFSET + 4, // END (if body)
+            TOKEN_OFFSET + 2, // ENDIF
+            TOKEN_OFFSET + 4, // END (every body)
+            TOKEN_OFFSET + 4, // END (else body)
+            TOKEN_OFFSET + 4, // END (script)
+        ];
+        let fields = vec![
+            field(FIELD_INTERNAL, 0), // GAME_TURN
+            field(FIELD_CONSTANT, 0),
+            field(FIELD_USER, 0),     // _var0
+            field(FIELD_CONSTANT, 255),
+            field(FIELD_INTERNAL, 1), // MY_NUM_PEOPLE
+            field(FIELD_CONSTANT, 79), // 80
+        ];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let result = decompiler.decompile().unwrap();
+        assert!(result.contains("if (GAME_TURN == 0) then"), "Got: {}", result);
+        assert!(result.contains("SET_REINCARNATION(OFF)"), "Got: {}", result);
+        assert!(result.contains("DELAY_MAIN_DRUM_TOWER(ON)"), "Got: {}", result);
+        assert!(result.contains("EVERY(256, function()"), "Got: {}", result);
+        assert!(result.contains("if (MY_NUM_PEOPLE < 79) then"), "Got: {}", result);
+    }
+
+    #[test]
+    fn decompile_comparison_operators_all() {
+        // Test all comparison operators: >, <, ==, !=, >=, <=
+        // Operators are at TOKEN_OFFSET + index in the token map
+        let operators = [
+            (12, ">", ">"),
+            (13, "<", "<"),
+            (14, "==", "=="),
+            (15, "!=", "~="),
+            (16, ">=", ">="),
+            (17, "<=", "<="),
+        ];
+
+        for (idx, _lua_op, expected_op) in operators {
+            let codes = vec![
+                SCRIPT_VERSION,
+                TOKEN_OFFSET + 3, // BEGIN (script)
+                TOKEN_OFFSET + 0, // IF
+                TOKEN_OFFSET + idx, // comparison operator (token-offset)
+                0,                // lhs
+                1,                // rhs
+                TOKEN_OFFSET + 3, // BEGIN (body - required after condition)
+                TOKEN_OFFSET + 6, // DO (dummy command)
+                TOKEN_OFFSET + NO_COMMANDS + 1, // CONSTRUCT_BUILDING
+                TOKEN_OFFSET + 22, // ON
+                TOKEN_OFFSET + 4, // END (body)
+                TOKEN_OFFSET + 2, // ENDIF
+                TOKEN_OFFSET + 4, // END (script)
+            ];
+            let fields = vec![
+                field(FIELD_USER, 0),
+                field(FIELD_CONSTANT, 10),
+            ];
+            let data = build_script_bytes(&codes, &fields);
+            let script = Script::read(&data).unwrap();
+            let mut decompiler = Decompiler::new(script);
+
+            let result = decompiler.decompile().unwrap();
+            assert!(
+                result.contains(&format!("_var0 {} 10", expected_op)),
+                "Failed for operator {}: {}",
+                _lua_op,
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn decompile_unknown_code_handling() {
+        // Include an unknown code value
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN
+            9999,             // Unknown code
+            TOKEN_OFFSET + 4, // END
+        ];
+        let fields = vec![];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let _result = decompiler.decompile().unwrap();
+        assert!(decompiler.errors.iter().any(|e| e.contains("Unknown code 9999")));
+    }
+
+    #[test]
+    fn decompile_unexpected_token_handling() {
+        // Include a token that's not valid in body context
+        let codes = vec![
+            SCRIPT_VERSION,
+            TOKEN_OFFSET + 3, // BEGIN
+            TOKEN_OFFSET + 12, // > (comparison, not valid standalone)
+            0,
+            1,
+            TOKEN_OFFSET + 4, // END
+        ];
+        let fields = vec![];
+        let data = build_script_bytes(&codes, &fields);
+        let script = Script::read(&data).unwrap();
+        let mut decompiler = Decompiler::new(script);
+
+        let _result = decompiler.decompile().unwrap();
+        assert!(decompiler.errors.iter().any(|e| e.contains("Unexpected token")));
+    }
 }
