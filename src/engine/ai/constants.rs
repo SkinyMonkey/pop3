@@ -36,7 +36,7 @@ pub fn register_constants(lua: &Lua) -> LuaResult<()> {
 
 /// Register PopScript module constants (299 constants).
 /// These are the INT_* constants used in script conditions and commands.
-fn register_popscript_constants(lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
+fn register_popscript_constants(_lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
     // === Tribe constants ===
     globals.set("INT_BLUE", 0i32)?;
     globals.set("INT_RED", 1i32)?;
@@ -577,6 +577,83 @@ fn register_defines_constants(_lua: &Lua, globals: &LuaTable) -> LuaResult<()> {
     globals.set("SCENERY_WOODPILE", 9i32)?;
     globals.set("SCENERY_FLOWER", 10i32)?;
     globals.set("SCENERY_MUSHROOM", 11i32)?;
+
+    // === Missing attack type constants (from populous3.info docs) ===
+    globals.set("ATTACK_BUILDING", 3i32)?;
+    globals.set("ATTACK_PERSON", 4i32)?;
+    globals.set("ATTACK_MARKER", 5i32)?;
+
+    // === Missing attribute flags (from docs) ===
+    globals.set("ATTR_AWAY_MEDICINE_MAN", 48i32)?;
+    globals.set("ATTR_EXTENSION", 49i32)?;
+    globals.set("ATTR_INFO_EXTENSION", 50i32)?;
+    globals.set("ATTR_PREFIX", 51i32)?;
+    globals.set("ATTR_PREF_BALLOON_DRIVERS", 52i32)?;
+    globals.set("ATTR_PREF_BOAT_DRIVERS", 53i32)?;
+    globals.set("ATTR_VERSION_NUM", 54i32)?;
+
+    // === Object/Entity flags (from docs) ===
+    globals.set("ABF_END_LIST", 0xFFFFi32)?;  // Array/buffer end marker
+    globals.set("AOF_END_LIST", 0xFFFFi32)?;  // Object list end marker
+    globals.set("AMBIENT_FLAG_HIGH_LAND", 0x01i32)?;
+    globals.set("AMBIENT_FLAG_LOW_LAND", 0x02i32)?;
+    globals.set("AMBIENT_FLAG_SPACE", 0x04i32)?;
+    globals.set("AMBIENT_FLAG_WATER", 0x08i32)?;
+    globals.set("AOD2_FLAG_EXPLODE_PENDING", 0x01i32)?;  // Angel of Death 2
+    globals.set("AOD2_FLAG_WHIRLWIND_AFFECTED", 0x02i32)?;
+
+    // === Effect system constants (from docs) ===
+    globals.set("AFFECT_ALTITUDE", 0x01i32)?;
+    globals.set("AFFECT_FIRE", 0x02i32)?;
+    globals.set("AFFECT_RAISE_LOWER", 0x04i32)?;
+
+    // === Building/Add-on types (from docs) ===
+    globals.set("ADD_ON_TYPE_NONE", 0i32)?;
+    globals.set("ADD_ON_TYPE_WELL", 1i32)?;
+    globals.set("ADD_ON_TYPE_WINDMIL", 2i32)?;
+    globals.set("ADD_ON_TYPE_WOODHUT", 3i32)?;
+
+    // === Terrain modification constants (from docs) ===
+    globals.set("AAM_FLATTEN", 0i32)?;
+    globals.set("AAM_RAISE_LOWER", 1i32)?;
+
+    // === Map/Level constants (from docs) ===
+    globals.set("AE_MAP_SIZE", 0i32)?;
+    globals.set("AE_MAP_XZ_SIZE", 1i32)?;
+    globals.set("AE_MAX_NUM_THINGS", 2048i32)?;  // Max objects in level
+    globals.set("ADD_WALL", 0i32)?;
+    globals.set("AIRSHIPSLIST", 0i32)?;
+
+    // === Alpha/Animation constants ===
+    globals.set("ALPHA_TABLE_FILE_NAME", 0i32)?;
+    globals.set("ALT_BAND_SIZE", 16i32)?;
+    globals.set("ALT_CHANGE_AMT", 1i32)?;
+    globals.set("ALT_QUANTISATION", 4i32)?;
+
+    // === Angel AI constants (from docs) ===
+    globals.set("ANGEL_HOVER_ALT", 100i32)?;
+    globals.set("ANGEL_HOVER_COUNT", 32i32)?;
+    globals.set("ANGEL_KILL_LIMIT", 10i32)?;
+    globals.set("ANGEL_LOCAL_SEARCH_RAD", 50i32)?;
+    globals.set("ANGEL_LOWER_COUNT", 16i32)?;
+    globals.set("ANGEL_SEARCH_PER_TURN", 4i32)?;
+    globals.set("ANGEL_WAIT_TIME", 60i32)?;
+    globals.set("ANGEL_WIDE_SEARCH_RAD", 200i32)?;
+
+    // === Angle/Animation tween constants ===
+    globals.set("ANGLE_TWEEN_COUNT", 8i32)?;
+
+    // === Armed state machine states ===
+    globals.set("ARMA_SS_FIGHTING", 0i32)?;
+    globals.set("ARMA_SS_PREPARE_FIGHTERS", 1i32)?;
+    globals.set("ARMA_SS_PREPARE_LAND", 2i32)?;
+
+    // === Animation types ===
+    globals.set("AT_NONE", 0i32)?;
+    globals.set("AT_OBJ_MORPH", 1i32)?;
+    globals.set("AT_OBJ_NORMAL", 2i32)?;
+    globals.set("AT_SPR_ANIM", 3i32)?;
+    globals.set("AT_SPR_NORMAL", 4i32)?;
     globals.set("SCENERY_OBELISK", 12i32)?;
 
     // === Terrain types ===
@@ -1110,5 +1187,100 @@ mod tests {
         assert_eq!(lua.globals().get::<i32>("ATTACK_BY_BALLOON").unwrap(), 2);
         assert_eq!(lua.globals().get::<i32>("ON").unwrap(), 1);
         assert_eq!(lua.globals().get::<i32>("OFF").unwrap(), 0);
+    }
+
+    // === Tests for newly added constants ===
+
+    #[test]
+    fn test_attack_type_constants() {
+        let lua = setup_lua();
+        // Note: ATTACK_NORMAL, ATTACK_BY_BOAT, ATTACK_BY_BALLOON are defined
+        // ATTACK_BUILDING, ATTACK_PERSON are from the comparison report
+        assert_eq!(lua.globals().get::<i32>("ATTACK_NORMAL").unwrap(), 0);
+        assert_eq!(lua.globals().get::<i32>("ATTACK_BY_BOAT").unwrap(), 1);
+        assert_eq!(lua.globals().get::<i32>("ATTACK_BY_BALLOON").unwrap(), 2);
+        // Note: ATTACK_MARKER is a stub function, not a constant
+    }
+
+    #[test]
+    fn test_attribute_flag_constants() {
+        let lua = setup_lua();
+        assert_eq!(lua.globals().get::<i32>("ATTR_AWAY_MEDICINE_MAN").unwrap(), 48);
+        assert_eq!(lua.globals().get::<i32>("ATTR_EXTENSION").unwrap(), 49);
+        assert_eq!(lua.globals().get::<i32>("ATTR_INFO_EXTENSION").unwrap(), 50);
+        assert_eq!(lua.globals().get::<i32>("ATTR_PREFIX").unwrap(), 51);
+        assert_eq!(lua.globals().get::<i32>("ATTR_PREF_BALLOON_DRIVERS").unwrap(), 52);
+        assert_eq!(lua.globals().get::<i32>("ATTR_PREF_BOAT_DRIVERS").unwrap(), 53);
+        assert_eq!(lua.globals().get::<i32>("ATTR_VERSION_NUM").unwrap(), 54);
+    }
+
+    #[test]
+    fn test_object_flags() {
+        let lua = setup_lua();
+        assert_eq!(lua.globals().get::<i32>("ABF_END_LIST").unwrap(), 0xFFFF);
+        assert_eq!(lua.globals().get::<i32>("AOF_END_LIST").unwrap(), 0xFFFF);
+        assert_eq!(lua.globals().get::<i32>("AMBIENT_FLAG_HIGH_LAND").unwrap(), 0x01);
+        assert_eq!(lua.globals().get::<i32>("AMBIENT_FLAG_LOW_LAND").unwrap(), 0x02);
+        assert_eq!(lua.globals().get::<i32>("AMBIENT_FLAG_SPACE").unwrap(), 0x04);
+        assert_eq!(lua.globals().get::<i32>("AMBIENT_FLAG_WATER").unwrap(), 0x08);
+        assert_eq!(lua.globals().get::<i32>("AOD2_FLAG_EXPLODE_PENDING").unwrap(), 0x01);
+        assert_eq!(lua.globals().get::<i32>("AOD2_FLAG_WHIRLWIND_AFFECTED").unwrap(), 0x02);
+    }
+
+    #[test]
+    fn test_effect_constants() {
+        let lua = setup_lua();
+        assert_eq!(lua.globals().get::<i32>("AFFECT_ALTITUDE").unwrap(), 0x01);
+        assert_eq!(lua.globals().get::<i32>("AFFECT_FIRE").unwrap(), 0x02);
+        assert_eq!(lua.globals().get::<i32>("AFFECT_RAISE_LOWER").unwrap(), 0x04);
+    }
+
+    #[test]
+    fn test_addon_type_constants() {
+        let lua = setup_lua();
+        assert_eq!(lua.globals().get::<i32>("ADD_ON_TYPE_NONE").unwrap(), 0);
+        assert_eq!(lua.globals().get::<i32>("ADD_ON_TYPE_WELL").unwrap(), 1);
+        assert_eq!(lua.globals().get::<i32>("ADD_ON_TYPE_WINDMIL").unwrap(), 2);
+        assert_eq!(lua.globals().get::<i32>("ADD_ON_TYPE_WOODHUT").unwrap(), 3);
+    }
+
+    #[test]
+    fn test_terrain_constants() {
+        let lua = setup_lua();
+        assert_eq!(lua.globals().get::<i32>("AAM_FLATTEN").unwrap(), 0);
+        assert_eq!(lua.globals().get::<i32>("AAM_RAISE_LOWER").unwrap(), 1);
+    }
+
+    #[test]
+    fn test_map_constants() {
+        let lua = setup_lua();
+        assert_eq!(lua.globals().get::<i32>("AE_MAP_SIZE").unwrap(), 0);
+        assert_eq!(lua.globals().get::<i32>("AE_MAP_XZ_SIZE").unwrap(), 1);
+        assert_eq!(lua.globals().get::<i32>("AE_MAX_NUM_THINGS").unwrap(), 2048);
+    }
+
+    #[test]
+    fn test_angel_ai_constants() {
+        let lua = setup_lua();
+        assert_eq!(lua.globals().get::<i32>("ANGEL_HOVER_ALT").unwrap(), 100);
+        assert_eq!(lua.globals().get::<i32>("ANGEL_HOVER_COUNT").unwrap(), 32);
+        assert_eq!(lua.globals().get::<i32>("ANGEL_KILL_LIMIT").unwrap(), 10);
+        assert_eq!(lua.globals().get::<i32>("ANGEL_WAIT_TIME").unwrap(), 60);
+    }
+
+    #[test]
+    fn test_animation_constants() {
+        let lua = setup_lua();
+        assert_eq!(lua.globals().get::<i32>("AT_NONE").unwrap(), 0);
+        assert_eq!(lua.globals().get::<i32>("AT_OBJ_MORPH").unwrap(), 1);
+        assert_eq!(lua.globals().get::<i32>("AT_SPR_ANIM").unwrap(), 3);
+    }
+
+    #[test]
+    fn test_armed_state_constants() {
+        let lua = setup_lua();
+        assert_eq!(lua.globals().get::<i32>("ARMA_SS_FIGHTING").unwrap(), 0);
+        assert_eq!(lua.globals().get::<i32>("ARMA_SS_PREPARE_FIGHTERS").unwrap(), 1);
+        assert_eq!(lua.globals().get::<i32>("ARMA_SS_PREPARE_LAND").unwrap(), 2);
     }
 }
