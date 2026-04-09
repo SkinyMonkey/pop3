@@ -903,12 +903,6 @@ impl GameEngine {
                 log::info!("Flyby stopped");
                 true
             }
-            GameCommand::StopFlyby => {
-                log::info!(
-                    "StopFlyby command received (flyby not yet integrated into render loop)"
-                );
-                true
-            }
             // Menu navigation
             GameCommand::MenuUp => {
                 self.menu_system.move_cursor(-1);
@@ -1382,36 +1376,96 @@ impl App {
     /// by the interpolated flyby keyframes each tick.
     fn tick_flyby_camera(&mut self) {
         let game_tick = self.engine.game_world.game_tick;
-        if let Some(ref mut flyby) = self.engine.flyby {
+        // Extract engine values before borrowing flyby to avoid borrow conflicts.
+        let camera_angle_z = self.engine.camera.angle_z;
+        let camera_angle_x = self.engine.camera.angle_x;
+        let focus_vertex = self.engine.camera_focus_vertex() as i32;
+        let map_width = self.engine.landscape_mesh.width() as i32;
+        let old_shift = self.engine.landscape_mesh.get_shift_vector();
+
+        // Take the flyby out of self.engine to avoid borrow conflicts.
+        let mut flyby_opt = self.engine.flyby.take();
+        let result = if let Some(ref mut flyby) = flyby_opt {
             if !flyby.active {
-                self.engine.flyby = None;
-                return;
+                None
+            } else {
+                let scale = crate::engine::ai::flyby::FLYBY_ANGLE_SCALE;
+                let defaults = crate::engine::ai::flyby::FlybyCameraOutput {
+                    angle_z: (camera_angle_z as f32 * scale).round() as i16,
+                    angle_x: (camera_angle_x as f32 * scale).round() as i16,
+                    zoom: 0,
+                    world_x: 0,
+                    world_y: 0,
+                };
+                let start_tick = flyby.start_tick;
+                let max_tick = flyby
+                    .angle_keyframes
+                    .iter()
+                    .chain(flyby.zoom_keyframes.iter())
+                    .chain(flyby.pos_x_keyframes.iter())
+                    .chain(flyby.pos_y_keyframes.iter())
+                    .map(|kf| kf.tick)
+                    .max()
+                    .unwrap_or(start_tick);
+                let output = flyby.update(game_tick, &defaults);
+                Some((output, start_tick, max_tick))
             }
-            let defaults = crate::engine::ai::flyby::FlybyCameraOutput {
-                angle_z: self.engine.camera.angle_z,
-                angle_x: self.engine.camera.angle_x,
-                zoom: 0,
-                world_x: 0,
-                world_y: 0,
-            };
-            match flyby.update(game_tick, &defaults) {
-                Some(output) => {
-                    // Angle values are in 1/16th degree units from the original game.
-                    // Convert to whole degrees for our Camera struct.
-                    let scale = crate::engine::ai::flyby::FLYBY_ANGLE_SCALE;
-                    self.engine.camera.angle_z = (output.angle_z as f32 / scale).round() as i16;
-                    self.engine.camera.angle_x = (output.angle_x as f32 / scale).round() as i16;
-                    if output.world_x != 0 || output.world_y != 0 {
-                        self.engine
-                            .landscape_mesh
-                            .set_shift(output.world_x as usize, output.world_y as usize);
-                    }
-                    self.do_render = true;
+        } else {
+            // Put it back and return.
+            self.engine.flyby = flyby_opt;
+            return;
+        };
+
+        match result {
+            Some((Some(output), start_tick, max_tick)) => {
+                let scale = crate::engine::ai::flyby::FLYBY_ANGLE_SCALE;
+                self.engine.camera.angle_z = (output.angle_z as f32 / scale).round() as i16;
+                self.engine.camera.angle_x = (output.angle_x as f32 / scale).round() as i16;
+
+                // Flyby positions are in half-cell coordinates (0-255 for a
+                // 128x128 map). Convert to cell coords, then to landscape
+                // shift using the same formula as center_on_tribe0_shaman():
+                //   shift = (cell - camera_focus_vertex) mod N
+                let cell_x = output.world_x as i32 / 2;
+                let cell_y = output.world_y as i32 / 2;
+                let new_sx = (cell_x - focus_vertex).rem_euclid(map_width) as usize;
+                let new_sy = (cell_y - focus_vertex).rem_euclid(map_width) as usize;
+
+                self.engine.landscape_mesh.set_shift(new_sx, new_sy);
+
+                // Log every 10 ticks to trace the camera path
+                if (game_tick - start_tick) % 10 == 0 || game_tick == start_tick + 1 {
+                    let progress =
+                        (game_tick - start_tick) as f32 / (max_tick - start_tick).max(1) as f32;
+                    log::info!(
+                        "[flyby] tick={} progress={:.0}% pos=({},{}) cell=({},{}) \
+                         shift=({},{})→({},{}) angle_z={:.1}° angle_x={:.1}° zoom={}",
+                        game_tick,
+                        progress * 100.0,
+                        output.world_x,
+                        output.world_y,
+                        cell_x,
+                        cell_y,
+                        old_shift.x,
+                        old_shift.y,
+                        new_sx,
+                        new_sy,
+                        output.angle_z as f32 / scale,
+                        output.angle_x as f32 / scale,
+                        output.zoom,
+                    );
                 }
-                None => {
-                    log::info!("Flyby finished at tick {}", game_tick);
-                    self.engine.flyby = None;
-                }
+
+                // Put flyby back (still active)
+                self.engine.flyby = flyby_opt;
+                self.do_render = true;
+            }
+            Some((None, ..)) => {
+                log::info!("Flyby finished at tick {}", game_tick);
+                // Don't put flyby back — it's finished.
+            }
+            None => {
+                // Flyby was inactive, don't put it back.
             }
         }
     }

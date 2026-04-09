@@ -123,7 +123,10 @@ impl FlybyState {
 
         Some(FlybyCameraOutput {
             angle_z: interpolate_keyframes(&self.angle_keyframes, tick, defaults.angle_z),
-            angle_x: 0,
+            // angle_x (camera tilt) is not set by flyby keyframes — preserve
+            // the camera's current tilt throughout the flyby. The original game's
+            // FLYBY_SET_EVENT_ANGLE only controls Z-rotation (yaw).
+            angle_x: defaults.angle_x,
             zoom: interpolate_keyframes(&self.zoom_keyframes, tick, defaults.zoom),
             world_x: interpolate_keyframes(&self.pos_x_keyframes, tick, defaults.world_x),
             world_y: interpolate_keyframes(&self.pos_y_keyframes, tick, defaults.world_y),
@@ -642,5 +645,133 @@ mod tests {
         // After all keyframes (absolute 200 > 150): finished
         assert!(state.update(200, &defaults).is_none());
         assert!(state.finished);
+    }
+
+    // ---- Bug fix tests ----
+
+    #[test]
+    fn half_cell_to_cell_conversion() {
+        // Flyby positions are in half-cell coordinates (0-255 for 128x128 map).
+        // cell = half_cell / 2
+        assert_eq!(8i32 / 2, 4);
+        assert_eq!(28i32 / 2, 14);
+        assert_eq!(252i32 / 2, 126);
+        assert_eq!(254i32 / 2, 127);
+        assert_eq!(2i32 / 2, 1);
+        assert_eq!(12i32 / 2, 6);
+        assert_eq!(20i32 / 2, 10);
+        assert_eq!(216i32 / 2, 108);
+        assert_eq!(238i32 / 2, 119);
+        assert_eq!(0i32 / 2, 0);
+    }
+
+    #[test]
+    fn cell_to_shift_conversion_for_128_map() {
+        // For a 128x128 map, camera_focus_vertex ≈ 63.5, truncate to 63.
+        // shift = (cell - focus_vertex) mod 128
+        let n = 128i32;
+        let v = 63i32; // (127 * step / 2) / step = 63.5, truncated to 63
+
+        // Example from level 1: half-cell (8, 28) → cell (4, 14)
+        let cell_x = 8i32 / 2;
+        let cell_y = 28i32 / 2;
+        let sx = (cell_x - v).rem_euclid(n);
+        let sy = (cell_y - v).rem_euclid(n);
+        assert_eq!(sx, 69); // (4 - 63) % 128 = -59 % 128 = 69
+        assert_eq!(sy, 79); // (14 - 63) % 128 = -49 % 128 = 79
+
+        // Near map edge: half-cell (252, 254) → cell (126, 127)
+        let cell_x = 252i32 / 2;
+        let cell_y = 254i32 / 2;
+        let sx = (cell_x - v).rem_euclid(n);
+        let sy = (cell_y - v).rem_euclid(n);
+        assert_eq!(sx, 63); // (126 - 63) % 128 = 63
+        assert_eq!(sy, 64); // (127 - 63) % 128 = 64
+
+        // Center of map: half-cell (0, 0) → cell (0, 0)
+        let cell_x = 0i32 / 2;
+        let cell_y = 0i32 / 2;
+        let sx = (cell_x - v).rem_euclid(n);
+        let sy = (cell_y - v).rem_euclid(n);
+        assert_eq!(sx, 65); // (0 - 63) % 128 = -63 % 128 = 65
+        assert_eq!(sy, 65);
+    }
+
+    #[test]
+    fn angle_x_preserves_default_during_flyby() {
+        // angle_x (camera tilt) should preserve the current camera tilt
+        // throughout the flyby, not track angle_z keyframes.
+        let mut state = FlybyState::new();
+        state.angle_keyframes = vec![kf(0, 1072), kf(100, 0)];
+        state.start(0);
+
+        let defaults = FlybyCameraOutput {
+            angle_z: 0,
+            angle_x: -880, // -55° * 16 = -880 in 1/16th degree units
+            zoom: 0,
+            world_x: 0,
+            world_y: 0,
+        };
+
+        // At tick 50, angle_z interpolates to 536 (halfway), but angle_x
+        // should preserve the default tilt of -880, not follow angle_z.
+        let out = state.update(50, &defaults).unwrap();
+        assert_eq!(out.angle_z, 536); // interpolated from keyframes
+        assert_eq!(out.angle_x, -880); // preserved from defaults
+    }
+
+    #[test]
+    fn position_zero_zero_is_valid() {
+        // Bug fix: position (0, 0) should not be skipped.
+        // Half-cell (0, 0) → cell (0, 0) → shift (65, 65) on 128x128 map.
+        // Verify that the interpolation can produce world_x=0, world_y=0.
+        let mut state = FlybyState::new();
+        state.pos_x_keyframes = vec![kf(0, 0), kf(100, 50)];
+        state.pos_y_keyframes = vec![kf(0, 0), kf(100, 50)];
+        state.start(0);
+
+        let defaults = FlybyCameraOutput {
+            angle_z: 0,
+            angle_x: 0,
+            zoom: 0,
+            world_x: 99,
+            world_y: 99,
+        };
+
+        // At tick 0, position should be (0, 0) from first keyframe
+        let out = state.update(0, &defaults).unwrap();
+        assert_eq!(out.world_x, 0);
+        assert_eq!(out.world_y, 0);
+
+        // This should NOT be treated as "no position" — cell conversion:
+        // cell = 0/2 = 0, shift = (0 - 63) % 128 = 65
+    }
+
+    #[test]
+    fn flyby_start_with_tick_offset_applies_to_position_keyframes() {
+        // Level 1 flyby starts at game_tick 73. Relative tick 4 becomes 77.
+        let mut state = FlybyState::new();
+        state.pos_x_keyframes = vec![kf(4, 8), kf(81, 2)];
+        state.pos_y_keyframes = vec![kf(4, 28), kf(81, 28)];
+        state.angle_keyframes = vec![kf(5, 0)];
+        state.start(73);
+
+        let defaults = FlybyCameraOutput {
+            angle_z: 0,
+            angle_x: 0,
+            zoom: 0,
+            world_x: 0,
+            world_y: 0,
+        };
+
+        // At game_tick 77 (= 73 + 4), position should be (8, 28)
+        let out = state.update(77, &defaults).unwrap();
+        assert_eq!(out.world_x, 8);
+        assert_eq!(out.world_y, 28);
+
+        // At game_tick 154 (= 73 + 81), position should be (2, 28)
+        let out = state.update(154, &defaults).unwrap();
+        assert_eq!(out.world_x, 2);
+        assert_eq!(out.world_y, 28);
     }
 }
