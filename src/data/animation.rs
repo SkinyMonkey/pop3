@@ -868,6 +868,41 @@ pub fn build_direct_sprite_atlas(
     Some((atlas_w, atlas_h, rgba, fw, fh, frames_per_dir as u32, below_foot))
 }
 
+/// Build a palette-index sideband texture (R8Uint) from an RGBA atlas and its source palette.
+///
+/// For each pixel in the RGBA atlas, finds the nearest palette index that matches
+/// the RGBA colour. Transparent pixels (alpha < 128) are mapped to index 255
+/// (the PSFB transparent marker). This produces a parallel texture that fragment
+/// shaders can use for LUT-based blending effects (ghost, fade, remap).
+pub fn rgba_atlas_to_index_atlas(rgba: &[u8], atlas_w: u32, atlas_h: u32, palette: &[[u8; 4]]) -> Vec<u8> {
+    let pixel_count = (atlas_w * atlas_h) as usize;
+    let mut indices = vec![255u8; pixel_count];
+    for i in 0..pixel_count {
+        let off = i * 4;
+        if off + 3 >= rgba.len() { continue; }
+        let a = rgba[off + 3];
+        if a < 128 {
+            continue; // already 255 (transparent)
+        }
+        let r = rgba[off];
+        let g = rgba[off + 1];
+        let b = rgba[off + 2];
+        let mut found = false;
+        for (idx, entry) in palette.iter().enumerate() {
+            if idx >= 255 { break; }
+            if entry[0] == r && entry[1] == g && entry[2] == b {
+                indices[i] = idx as u8;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            indices[i] = 0;
+        }
+    }
+    indices
+}
+
 /// Build a combined atlas for multiple direct-sprite animations.
 /// Each entry is (anim_id, per-tribe starts, frames_per_dir).
 /// Returns the same format as `build_multi_anim_atlas`:
