@@ -18,8 +18,8 @@ use crate::render::model::{MeshModel, VertexModel};
 use crate::render::tex_model::TexModel;
 
 use crate::data::animation::{
-    build_direct_multi_anim_atlas, build_multi_anim_atlas, AnimationSequence, AnimationsData,
-    SHAMAN_ANIMS, UNIT_MULTI_ANIMS,
+    build_direct_multi_anim_atlas, build_multi_anim_atlas, rgba_atlas_to_index_atlas,
+    AnimationSequence, AnimationsData, SHAMAN_ANIMS, UNIT_MULTI_ANIMS,
 };
 use crate::data::psfb::ContainerPSFB;
 use crate::data::types::BinDeserializer;
@@ -48,6 +48,7 @@ use crate::render::sprites::{
     convert_palette, extract_level_objects, obj_colors, pack_palette_rgba, rgb_to_rgba,
     LevelObject, UnitTypeRender,
 };
+use crate::render::palette_lut::PaletteLut;
 
 use crate::render::envelop::*;
 use crate::render::gpu::bind_groups::{
@@ -1063,6 +1064,8 @@ pub struct App {
     // Person unit sprites (per-type atlas + model)
     spawn_pipeline: Option<wgpu::RenderPipeline>,
     sprite_group1_layout: Option<wgpu::BindGroupLayout>,
+    // Indexed sprite group1 layout (RGBA + index textures + samplers)
+    indexed_sprite_group1_layout: Option<wgpu::BindGroupLayout>,
     unit_renders: Vec<UnitTypeRender>,
 
     // Level object markers
@@ -1117,6 +1120,24 @@ pub struct App {
     model_selection_outlines: Option<ModelEnvelop<ColorModel>>,
     model_walkability: Option<ModelEnvelop<ColorModel>>,
     walkability_pipeline: Option<wgpu::RenderPipeline>,
+
+    // Palette LUT resources (ghost/fade tables for indexed sprite blending)
+    palette_lut: Option<PaletteLut>,
+
+    // Sprite indexed pipeline (for ghost/fade/remap blend modes)
+    sprite_indexed_pipeline: Option<wgpu::RenderPipeline>,
+    // LUT bind group layout (group 3: ghost + fade textures)
+    lut_group3_layout: Option<wgpu::BindGroupLayout>,
+    // LUT bind group (group 3: ghost + fade textures)
+    lut_group3: Option<wgpu::BindGroup>,
+    // Blend params uniform buffer (in group 3 binding 4)
+    blend_params_buffer: Option<GpuBuffer>,
+
+    // Fade overlay (screen fade-in/fade-out)
+    fade_overlay_pipeline: Option<wgpu::RenderPipeline>,
+    fade_overlay_bind_group: Option<wgpu::BindGroup>,
+    fade_overlay_params_buffer: Option<GpuBuffer>,
+    fade_step: f32,
 
     // Render flag
     do_render: bool,
@@ -1255,6 +1276,7 @@ impl App {
             objects_group1_bind_group: None,
             spawn_pipeline: None,
             sprite_group1_layout: None,
+            indexed_sprite_group1_layout: None,
             unit_renders: Vec::new(),
             shadow_depth_view: None,
             shadow_depth_building_pipeline: None,
@@ -1289,6 +1311,15 @@ impl App {
             model_selection_outlines: None,
             model_walkability: None,
             walkability_pipeline: None,
+            palette_lut: None,
+            sprite_indexed_pipeline: None,
+            lut_group3_layout: None,
+            lut_group3: None,
+            blend_params_buffer: None,
+            fade_overlay_pipeline: None,
+            fade_overlay_bind_group: None,
+            fade_overlay_params_buffer: None,
+            fade_step: 1.0,
             do_render: true,
             debug_log,
             start_time: Instant::now(),
@@ -1947,6 +1978,10 @@ impl App {
             Some(l) => l,
             None => return,
         };
+        let indexed_layout = match self.indexed_sprite_group1_layout.as_ref() {
+            Some(l) => l,
+            None => return,
+        };
 
         let palette = convert_palette(raw_palette);
         let hspr_path = base.join("data").join("HSPR0-0.DAT");
@@ -2011,6 +2046,26 @@ impl App {
                     .iter()
                     .map(|(idx, off, fc)| (*idx as u16, *off, *fc))
                     .collect();
+                let (index_texture, indexed_bind_group) = {
+                    let index_data = rgba_atlas_to_index_atlas(&rgba, atlas_w, atlas_h, &palette);
+                    let index_tex = GpuTexture::new_2d(
+                        &gpu.device, &gpu.queue,
+                        atlas_w, atlas_h,
+                        wgpu::TextureFormat::R8Uint,
+                        &index_data,
+                        &format!("unit_index_atlas_st{}", subtype),
+                    );
+                    let indexed_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some(&format!("unit_indexed_bg1_st{}", subtype)),
+                        layout: indexed_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&tex.view) },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&index_tex.view) },
+                        ],
+                    });
+                    (Some(index_tex), Some(indexed_bg))
+                };
                 self.unit_renders.push(UnitTypeRender {
                     subtype,
                     cells: Vec::new(),
@@ -2022,6 +2077,9 @@ impl App {
                     frame_height: fh,
                     frames_per_dir: total_cols,
                     anim_offsets,
+
+                    index_texture,
+                    indexed_bind_group,
                 });
             }
         }
@@ -2059,6 +2117,26 @@ impl App {
                     .iter()
                     .map(|(idx, off, fc)| (*idx as u16, *off, *fc))
                     .collect();
+                let (index_texture, indexed_bind_group) = {
+                    let index_data = rgba_atlas_to_index_atlas(&rgba, atlas_w, atlas_h, &palette);
+                    let index_tex = GpuTexture::new_2d(
+                        &gpu.device, &gpu.queue,
+                        atlas_w, atlas_h,
+                        wgpu::TextureFormat::R8Uint,
+                        &index_data,
+                        &format!("unit_index_atlas_st{}", subtype),
+                    );
+                    let indexed_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some(&format!("unit_indexed_bg1_st{}", subtype)),
+                        layout: indexed_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&tex.view) },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&index_tex.view) },
+                        ],
+                    });
+                    (Some(index_tex), Some(indexed_bg))
+                };
                 self.unit_renders.push(UnitTypeRender {
                     subtype,
                     cells: Vec::new(),
@@ -2070,6 +2148,9 @@ impl App {
                     frame_height: fh,
                     frames_per_dir: total_cols,
                     anim_offsets,
+
+                    index_texture,
+                    indexed_bind_group,
                 });
             }
         }
@@ -2983,7 +3064,17 @@ impl App {
                     wgpu::BindGroupLayoutEntry {
                         binding: 3,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
                         count: None,
                     },
                 ],
@@ -3412,6 +3503,24 @@ impl App {
                 }
             }
 
+            // Draw person unit sprites with blend effects (ghost/fade/remap)
+            if let (Some(ref indexed_pipeline), Some(ref bg0), Some(ref lut_g3)) =
+                (&self.sprite_indexed_pipeline, &self.building_bind_group_0, &self.lut_group3)
+            {
+                render_pass.set_pipeline(indexed_pipeline);
+                render_pass.set_bind_group(0, bg0, &[]);
+                if let Some(ref shadow_g2) = self.shadow_recv_group2 {
+                    render_pass.set_bind_group(2, shadow_g2, &[]);
+                }
+                render_pass.set_bind_group(3, lut_g3, &[]);
+                for ur in &self.unit_renders {
+                    if let (Some(ref model), Some(ref indexed_bg)) = (&ur.model, &ur.indexed_bind_group) {
+                        render_pass.set_bind_group(1, indexed_bg, &[]);
+                        model.draw(&mut render_pass);
+                    }
+                }
+            }
+
             // Draw 3D building meshes
             if frame.show_objects {
                 if let (Some(ref pipeline), Some(ref bg0), Some(ref bg1), Some(ref ghost_bg)) = (
@@ -3535,6 +3644,41 @@ impl App {
                         model.draw(&mut render_pass);
                     }
                 }
+            }
+        }
+
+        // Fade overlay pass (screen fade-in/fade-out)
+        if self.fade_step < 0.999 {
+            if let (Some(ref fade_pipe), Some(ref fade_bg)) =
+                (&self.fade_overlay_pipeline, &self.fade_overlay_bind_group)
+            {
+                if let Some(ref buf) = self.fade_overlay_params_buffer {
+                    buf.update(&gpu.queue, 0, bytemuck::bytes_of(&[self.fade_step, 0.0f32, 0.0, 0.0]));
+                }
+                let mut fade_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("fade_overlay_pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &gpu.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    ..Default::default()
+                });
+                fade_pass.set_pipeline(fade_pipe);
+                fade_pass.set_bind_group(0, fade_bg, &[]);
+                fade_pass.draw(0..3, 0..1);
             }
         }
 
@@ -3794,6 +3938,39 @@ impl ApplicationHandler for App {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+
+        let indexed_sprite_group1_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("indexed_sprite_group1_layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Uint,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
                         count: None,
                     },
                 ],
@@ -4472,6 +4649,203 @@ impl ApplicationHandler for App {
             (None, None, None)
         };
 
+        // PaletteLut (ghost/fade blend tables for indexed sprite blending)
+        let palette_lut = PaletteLut::new(
+            device,
+            &gpu.queue,
+            &level_res.params.ghost0,
+            &level_res.params.fade0,
+            &level_res.params.palette,
+        );
+
+        // Blend params (lives in group 3 binding 4 alongside LUT textures)
+        #[repr(C)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+        struct BlendParamsRaw {
+            blend_mode: u32,
+            fade_step: f32,
+            tint_r: f32,
+            tint_g: f32,
+            tint_b: f32,
+            tint_a: f32,
+            _pad1: f32,
+            _pad2: f32,
+        }
+        let blend_params_init = BlendParamsRaw {
+            blend_mode: 0,
+            fade_step: 1.0,
+            tint_r: 1.0,
+            tint_g: 1.0,
+            tint_b: 1.0,
+            tint_a: 1.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+        };
+        let blend_params_buffer = GpuBuffer::new_uniform_init(
+            device,
+            bytemuck::bytes_of(&blend_params_init),
+            "blend_params_buffer",
+        );
+
+        // LUT group 3 layout: ghost texture + fade texture + blend params
+        let lut_group3_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("lut_group3_layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Uint,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Uint,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        let lut_group3 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("lut_group3"),
+            layout: &lut_group3_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&palette_lut.ghost_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&palette_lut.fade_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: blend_params_buffer.buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        // Sprite indexed pipeline (ghost/fade/remap blend via palette LUT)
+        let sprite_indexed_shader_source = include_str!("../../shaders/sprite_indexed.wgsl");
+        let sprite_indexed_pipeline = create_pipeline_blended(
+            device,
+            sprite_indexed_shader_source,
+            &TexModel::vertex_buffer_layouts(),
+            &[
+                &lit_group0_layout,
+                &indexed_sprite_group1_layout,
+                &shadow_recv_group2_layout,
+                &lut_group3_layout,
+            ],
+            gpu.surface_format(),
+            true,
+            wgpu::PrimitiveTopology::TriangleList,
+            "sprite_indexed_pipeline",
+            wgpu::BlendState::ALPHA_BLENDING,
+        );
+
+        // Fade overlay (screen fade-in/fade-out fullscreen triangle)
+        let fade_overlay_shader_source = include_str!("../../shaders/fade_overlay.wgsl");
+        let fade_overlay_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("fade_overlay_shader"),
+            source: wgpu::ShaderSource::Wgsl(fade_overlay_shader_source.into()),
+        });
+        let fade_overlay_bg_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("fade_overlay_bg_layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let fade_overlay_params_data: [f32; 4] = [1.0, 0.0, 0.0, 0.0]; // fade_step=1.0, padding
+        let fade_overlay_params_buffer = GpuBuffer::new_uniform_init(
+            device,
+            bytemuck::cast_slice(&fade_overlay_params_data),
+            "fade_overlay_params_buffer",
+        );
+        let fade_overlay_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fade_overlay_bind_group"),
+            layout: &fade_overlay_bg_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: fade_overlay_params_buffer.buffer.as_entire_binding(),
+                },
+            ],
+        });
+        let fade_overlay_pipe_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("fade_overlay_pipeline_layout"),
+            bind_group_layouts: &[&fade_overlay_bg_layout],
+            immediate_size: 0,
+        });
+        let fade_overlay_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("fade_overlay_pipeline"),
+            layout: Some(&fade_overlay_pipe_layout),
+            vertex: wgpu::VertexState {
+                module: &fade_overlay_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &fade_overlay_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: gpu.surface_format(),
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
         // HUD renderer (replaces old overlay text pipeline)
         let hud_renderer = HudRenderer::new(
             device,
@@ -4494,6 +4868,7 @@ impl ApplicationHandler for App {
         self.objects_group1_bind_group = Some(objects_group1_bind_group);
         self.spawn_pipeline = Some(spawn_pipeline);
         self.sprite_group1_layout = Some(sprite_group1_layout);
+        self.indexed_sprite_group1_layout = Some(indexed_sprite_group1_layout);
         self.shadow_depth_view = Some(shadow_depth_view);
         self.shadow_depth_building_pipeline = Some(shadow_depth_building_pipeline);
 
@@ -4505,6 +4880,15 @@ impl ApplicationHandler for App {
         self.lighting_buffer = Some(lighting_buffer);
         self.objects_marker_pipeline = Some(objects_marker_pipeline);
         self.walkability_pipeline = Some(walkability_pipeline);
+        self.palette_lut = Some(palette_lut);
+        self.sprite_indexed_pipeline = Some(sprite_indexed_pipeline);
+        self.lut_group3_layout = Some(lut_group3_layout);
+        self.lut_group3 = Some(lut_group3);
+        self.blend_params_buffer = Some(blend_params_buffer);
+        self.fade_overlay_pipeline = Some(fade_overlay_pipeline);
+        self.fade_overlay_bind_group = Some(fade_overlay_bind_group);
+        self.fade_overlay_params_buffer = Some(fade_overlay_params_buffer);
+        self.fade_step = 1.0;
         self.engine.building_objects = building_objects;
         self.engine.scenery_objects = scenery_objects;
         self.engine.shapes = shapes;

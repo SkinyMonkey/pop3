@@ -10,8 +10,16 @@ Original C++ behaviour (8bpp only):
   - Fade table: fade[(step<<8) + idx] → faded palette index
   - Remap table: remap[pixel] → remapped palette index
 
+Data files on disk (per level, indexed by hex digit):
+  - ghost0-X.dat: 65536 bytes (256×256) — transparency blend table
+  - fade0-X.dat:  16384 bytes (64×256)  — 64-step fade table
+  - fepalX.dat:   1024 bytes  (256×4)   — level palette
+
+In-game naming: X = level index 0–9 as '0'–'9', 10+ as 'W'+index.
+Frontend naming: X = tribe index 0–4.
+
 GPU approach:
-  - Ghost/fade/remap tables uploaded as R8Uint textures
+  - Ghost/fade tables uploaded as R8Uint textures
   - Palette as R8Uint texture or storage buffer
   - Fragment shader does the same LUT lookups but on the GPU
 */
@@ -168,23 +176,19 @@ pub fn generate_ghost_table(palette: &Palette, percent: u32) -> [u8; 65536] {
 // Fade table generation
 // ---------------------------------------------------------------------------
 
-/// Generate a 256-step fade table (256×256 bytes).
+/// Generate a 64-step fade table (64×256 bytes), matching the original
+/// game's `fade0-X.dat` file format (16384 bytes = 64 rows × 256 columns).
 ///
-/// Row `step` maps each palette index to its faded version at that step.
-/// Step 0 = fully faded (black), step 255 = original colours.
-///
-/// The original PopTB generates these tables at runtime; we generate a
-/// linear fade-to-black table which covers the common use case
-/// (screen fade-in / fade-out transitions). Custom fade tables can be
-/// loaded from game data if the format is discovered.
-pub fn generate_fade_table(palette: &Palette) -> [u8; 65536] {
-    let mut table = [0u8; 65536];
-    for step in 0..256u32 {
+/// Row `step` (0..64) maps each palette index to its faded version.
+/// Step 0 = black, step 63 = original colours.
+pub fn generate_fade_table(palette: &Palette) -> [u8; 16384] {
+    let mut table = [0u8; 16384];
+    for step in 0..64u32 {
         for idx in 0..256u32 {
             let e = &palette.entries[idx as usize];
-            let r = ((e.r as u32 * step) / 255) as u8;
-            let g = ((e.g as u32 * step) / 255) as u8;
-            let b = ((e.b as u32 * step) / 255) as u8;
+            let r = ((e.r as u32 * step) / 63) as u8;
+            let g = ((e.g as u32 * step) / 63) as u8;
+            let b = ((e.b as u32 * step) / 63) as u8;
             table[(step * 256 + idx) as usize] = find_colour(palette, r, g, b);
         }
     }
@@ -195,19 +199,45 @@ pub fn generate_fade_table(palette: &Palette) -> [u8; 65536] {
 // GPU LUT resources
 // ---------------------------------------------------------------------------
 
+pub const GHOST_TABLE_SIZE: u32 = 256;
+pub const FADE_TABLE_HEIGHT: u32 = 64;
+pub const FADE_TABLE_WIDTH: u32 = 256;
+
+fn nearest_sampler(device: &wgpu::Device, label: &str) -> wgpu::Sampler {
+    device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some(label),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Nearest,
+        min_filter: wgpu::FilterMode::Nearest,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        ..Default::default()
+    })
+}
+
 /// GPU resources for palette-based blend effects.
 ///
-/// Holds the ghost table, fade table, and palette as GPU textures
-/// that fragment shaders can sample to replicate the original 8-bit
-/// palette blending pipeline on the GPU.
+/// Holds the ghost table and fade table as GPU textures that fragment
+/// shaders sample to replicate the original 8-bit palette blending
+/// pipeline on the GPU.
+///
+/// Ghost table layout (from `ghost0-X.dat`, 65536 bytes):
+///   `table[256 * src_idx + dst_idx]` → blended palette index
+///   Uploaded as 256×256 R8Uint texture.
+///
+/// Fade table layout (from `fade0-X.dat`, 16384 bytes):
+///   `table[256 * step + idx]` → faded palette index
+///   64 steps (rows), 256 palette indices (columns).
+///   Uploaded as 256×64 R8Uint texture.
 pub struct PaletteLut {
     /// 256×256 R8Uint ghost/transparency table.
     /// Sample as: `ghost_tex[vec2(src_idx / 256.0, dst_idx / 256.0)]`
     pub ghost_texture: GpuTexture,
     pub ghost_sampler: wgpu::Sampler,
 
-    /// 256×256 R8Uint fade table.
-    /// Sample as: `fade_tex[vec2(palette_idx / 256.0, fade_step / 256.0)]`
+    /// 256×64 R8Uint fade table (64 steps, 256 palette entries per step).
+    /// Sample as: `fade_tex[vec2(palette_idx / 256.0, fade_step / 64.0)]`
     pub fade_texture: GpuTexture,
     pub fade_sampler: wgpu::Sampler,
 
@@ -217,59 +247,61 @@ pub struct PaletteLut {
 }
 
 impl PaletteLut {
-    /// Build all LUT textures from an RGBA palette (4 bytes per entry, 256 entries).
+    /// Build LUT textures by loading `ghost0-X.dat` and `fade0-X.dat` from
+    /// game data, as the original binary does (Palette_InitFromSystemAndFile).
     ///
-    /// `ghost_percent` controls the transparency blend ratio baked into the
-    /// ghost table (e.g. 50 = 50% opacity, as in the original game).
+    /// Falls back to procedural generation if files are missing.
+    ///
+    /// `ghost_data` = raw bytes from `ghost0-X.dat` (65536 bytes, or empty for fallback).
+    /// `fade_data`  = raw bytes from `fade0-X.dat`  (16384 bytes, or empty for fallback).
+    /// `palette_rgba` = RGBA palette (1024 bytes, 256 entries × 4 channels).
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        ghost_data: &[u8],
+        fade_data: &[u8],
         palette_rgba: &[u8],
-        ghost_percent: u32,
     ) -> Self {
         let palette = Palette::from_rgba_bytes(palette_rgba);
 
-        let ghost_data = generate_ghost_table(&palette, ghost_percent);
+        let ghost_bytes: Vec<u8> = if ghost_data.len() == 65536 {
+            ghost_data.to_vec()
+        } else {
+            log::warn!(
+                "ghost data is {} bytes (expected 65536), generating 50% ghost table",
+                ghost_data.len()
+            );
+            let generated = generate_ghost_table(&palette, 50);
+            generated.to_vec()
+        };
         let ghost_texture = GpuTexture::new_2d(
             device, queue,
-            256, 256,
+            GHOST_TABLE_SIZE, GHOST_TABLE_SIZE,
             wgpu::TextureFormat::R8Uint,
-            &ghost_data,
+            &ghost_bytes,
             "ghost_table",
         );
-        let ghost_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("ghost_sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
+        let ghost_sampler = nearest_sampler(device, "ghost_sampler");
 
-        let fade_data = generate_fade_table(&palette);
+        let fade_bytes: Vec<u8> = if fade_data.len() == 16384 {
+            fade_data.to_vec()
+        } else {
+            log::warn!(
+                "fade data is {} bytes (expected 16384), generating procedural fade table",
+                fade_data.len()
+            );
+            let generated = generate_fade_table(&palette);
+            generated.to_vec()
+        };
         let fade_texture = GpuTexture::new_2d(
             device, queue,
-            256, 256,
+            FADE_TABLE_WIDTH, FADE_TABLE_HEIGHT,
             wgpu::TextureFormat::R8Uint,
-            &fade_data,
+            &fade_bytes,
             "fade_table",
         );
-        let fade_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("fade_sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
+        let fade_sampler = nearest_sampler(device, "fade_sampler");
 
-        // Pack palette as R8Uint index = 0..255 (identity for now; real use is
-        // to provide palette indices from a sideband channel alongside the RGBA
-        // sprite texture). This texture stores the raw palette order.
         let palette_index_data: Vec<u8> = (0u8..=255).collect::<Vec<_>>();
         let palette_texture = GpuTexture::new_2d_height1(
             device, queue,
@@ -342,8 +374,6 @@ mod tests {
     fn ghost_table_glass_lookup() {
         let pal = greyscale_palette();
         let table = generate_ghost_table(&pal, 50);
-        // GLASS: table[256 * src + dst] — 50% blend of src=255 over dst=0
-        // (255 * 50 + 0 * 50) / 100 = 127 → closest grey index
         let blended = table[256 * 255 + 0];
         assert_eq!(blended, 127);
     }
@@ -352,21 +382,23 @@ mod tests {
     fn ghost_table_invert_glass_lookup() {
         let pal = greyscale_palette();
         let table = generate_ghost_table(&pal, 50);
-        // INVERT_GLASS: table[256 * dst + src] — 50% blend, dest dominates
-        // Same formula (symmetric at 50%): (255 * 50 + 0 * 50) / 100 = 127
         let blended = table[256 * 0 + 255];
         assert_eq!(blended, 127);
     }
 
     #[test]
-    fn fade_table_step_255_is_identity() {
+    fn fade_table_dimensions() {
         let pal = test_palette();
         let table = generate_fade_table(&pal);
-        // Step 255 should be close to original colours
+        assert_eq!(table.len(), 16384);
+    }
+
+    #[test]
+    fn fade_table_step_63_is_identity() {
+        let pal = test_palette();
+        let table = generate_fade_table(&pal);
         for idx in 0..4u32 {
-            let faded = table[255 * 256 + idx as usize];
-            // At step 255, the colour should map close to itself
-            // (may not be exact due to /255 integer division)
+            let faded = table[63 * 256 + idx as usize];
             let e_orig = &pal.entries[idx as usize];
             let e_faded = &pal.entries[faded as usize];
             assert!(

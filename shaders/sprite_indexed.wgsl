@@ -9,7 +9,9 @@
 //   0 = Solid (no blending, just texture sample)
 //   1 = Glass  (TRANSPAR4):  blended = ghost[vec2(src_idx, dst_idx)]
 //   2 = InvertGlass (TRANSPAR8): blended = ghost[vec2(dst_idx, src_idx)]
-//   3 = Fade: blended = fade[vec2(palette_idx, fade_step)]
+//   3 = Fade: blended = fade[vec2(palette_idx / 256.0, fade_step / 64.0)]
+//       fade_step is 0..63 mapping palette indices to faded versions.
+//       fade0-X.dat is 64 rows × 256 columns (16384 bytes).
 //   4 = Remap: remapped = remap[vec2(palette_idx, 0.5)]
 
 // Group 0: Transform matrices + lighting
@@ -37,32 +39,27 @@ struct LightParams {
 @group(1) @binding(0) var sprite_texture: texture_2d<f32>;
 @group(1) @binding(1) var sprite_sampler: sampler;
 @group(1) @binding(2) var index_texture: texture_2d<u32>;
-@group(1) @binding(3) var index_sampler: sampler;
 
 // Group 2: Shadow map
 @group(2) @binding(0) var shadow_map: texture_depth_2d;
 @group(2) @binding(1) var shadow_samp: sampler_comparison;
 @group(2) @binding(2) var<uniform> shadow_light_mvp: mat4x4<f32>;
 
-// Group 3: LUT textures
+// Group 3: LUT textures + blend params uniform
 @group(3) @binding(0) var ghost_table: texture_2d<u32>;
-@group(3) @binding(1) var ghost_sampler: sampler;
-@group(3) @binding(2) var fade_table: texture_2d<u32>;
-@group(3) @binding(3) var fade_sampler: sampler;
+@group(3) @binding(1) var fade_table: texture_2d<u32>;
+@group(3) @binding(2) var<uniform> blend: BlendParams;
 
-// Group 4: Blend mode uniform
 struct BlendParams {
-    blend_mode: u32,      // 0=Solid, 1=Glass, 2=InvertGlass, 3=Fade, 4=Remap
-    fade_step: f32,       // 0..1 for fade mode (step / 255.0)
+    blend_mode: u32,
+    fade_step: f32,
     tint_r: f32,
     tint_g: f32,
     tint_b: f32,
     tint_a: f32,
     _pad1: f32,
     _pad2: f32,
-    _pad3: f32,
 };
-@group(4) @binding(0) var<uniform> blend: BlendParams;
 
 // Vertex input — same layout as shaman_sprite
 struct VertexInput {
@@ -108,8 +105,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
 
-    // Read the original palette index from the sideband texture
-    let index_vec = textureSample(index_texture, index_sampler, in.uv);
+    // Read the original palette index from the sideband texture (uint texure = textureLoad)
+    let index_size = textureDimensions(index_texture);
+    let index_coords = vec2<u32>(u32(in.uv.x * f32(index_size.x)), u32(in.uv.y * f32(index_size.y)));
+    let index_vec = textureLoad(index_texture, index_coords, 0);
     let src_idx = index_vec.r;
 
     // Shadow mapping
@@ -124,32 +123,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Apply blend mode
     if (in.blend_mode == 1u) {
         // GLASS (TRANSPAR4): ghost[vec2(src_idx, dst_idx)]
-        // We read dst_idx from the framebuffer — but since we can't read
-        // the framebuffer in a forward pass, we use alpha blending instead.
-        // The ghost table gives us a blended palette index. We look up the
-        // blended colour from the main sprite texture (which has already been
-        // palette-resolved), so we apply the ghost as a tint/alpha modifier.
-        //
-        // For a true glass effect, we need two passes or framebuffer readback.
-        // Here we approximate by dimming the sprite colour using the ghost table
-        // row as a brightness modifier.
-        let ghost_val = textureSample(ghost_table, ghost_sampler, vec2<f32>(f32(src_idx) / 256.0, 0.5)).r;
+        // ghost_table is 256×256 R8Uint — lookup by palette index coords
+        let ghost_coords = vec2<u32>(src_idx, 128u);
+        let ghost_val = textureLoad(ghost_table, ghost_coords, 0).r;
         let ghost_frac = f32(ghost_val) / 255.0;
         let final_color = color.rgb * brightness * shadow_factor * in.viewport_fade * ghost_frac;
         return vec4<f32>(final_color, color.a * in.viewport_fade);
     } else if (in.blend_mode == 2u) {
         // INVERT_GLASS (TRANSPAR8): ghost[vec2(dst_idx, src_idx)]
-        // Same approximation as Glass but with swapped table coords.
-        // Since we can't read the destination in a single pass, this
-        // produces a similar but not identical effect. A two-pass solution
-        // would capture the destination first.
-        let ghost_val = textureSample(ghost_table, ghost_sampler, vec2<f32>(0.5, f32(src_idx) / 256.0)).r;
-        let ghost_frac = f32(ghost_val) / 255.0;
-        let final_color = color.rgb * brightness * shadow_factor * in.viewport_fade * ghost_frac;
-        return vec4<f32>(final_color, color.a * in.viewport_fade);
+        let ghost_coords2 = vec2<u32>(128u, src_idx);
+        let ghost_val2 = textureLoad(ghost_table, ghost_coords2, 0).r;
+        let ghost_frac2 = f32(ghost_val2) / 255.0;
+        let final_color2 = color.rgb * brightness * shadow_factor * in.viewport_fade * ghost_frac2;
+        return vec4<f32>(final_color2, color.a * in.viewport_fade);
     } else if (in.blend_mode == 3u) {
         // FADE: fade[vec2(palette_idx, fade_step)]
-        let faded_idx = textureSample(fade_table, fade_sampler, vec2<f32>(f32(src_idx) / 256.0, blend.fade_step)).r;
+        // fade_table is 256×64 R8Uint, row = fade step (0..63), col = palette index
+        let fade_y = u32(blend.fade_step * 63.0);
+        let fade_coords = vec2<u32>(src_idx, fade_y);
+        let faded_idx = textureLoad(fade_table, fade_coords, 0).r;
         let faded_frac = f32(faded_idx) / 255.0;
         let final_color = color.rgb * brightness * shadow_factor * in.viewport_fade * faded_frac;
         return vec4<f32>(final_color, color.a * in.viewport_fade);

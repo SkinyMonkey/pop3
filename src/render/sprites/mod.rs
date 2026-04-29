@@ -239,6 +239,11 @@ pub struct UnitTypeRender {
     pub frames_per_dir: u32,  // total columns in atlas
     /// Maps animation_id → (column_offset, frame_count) within the atlas.
     pub anim_offsets: Vec<(u16, u32, u32)>,
+
+    // Palette-index sideband (R8Uint) for indexed sprite rendering
+    #[allow(dead_code)]
+    pub index_texture: Option<GpuTexture>,
+    pub indexed_bind_group: Option<wgpu::BindGroup>,
 }
 
 /******************************************************************************/
