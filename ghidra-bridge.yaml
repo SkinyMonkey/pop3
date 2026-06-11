@@ -1,0 +1,8 @@
+ghidra:
+  install_dir: /opt/homebrew/Cellar/ghidra/12.1.2/libexec
+  project_dir: /Users/adrien/Development/rust/pop3/data/RE
+  project_name: Pop3AutoRev
+  program_name: pop3.exe
+paths:
+  export_dir: .ghidra-exports
+  address_map: .ghidra-exports/address_map.json
