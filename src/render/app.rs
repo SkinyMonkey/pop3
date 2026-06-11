@@ -1743,7 +1743,7 @@ impl App {
         let panel_path = base.join("data").join("plspanel.spr");
         if let Some(panel_container) = ContainerPSFB::from_file(&panel_path) {
             self.engine.hud_panel_sprite_count = panel_container.len();
-            let hspr_container = ContainerPSFB::from_file(&base.join("data").join("HSPR0-0.DAT"));
+            let hspr_container = ContainerPSFB::from_file(&base.join("data").join("hfx0-0.dat"));
             let hspr_ids = crate::render::hud::layout::hspr::atlas_ids();
             if let Some(ref mut hud) = self.hud {
                 let gpu = self.gpu.as_ref().unwrap();
@@ -2788,10 +2788,10 @@ impl App {
             hud.draw_rect(rx + rw - border, ry, border, rh, vp_color); // right
         }
 
-        // === Tab row: 34x27 buttons at y=82, screen order spells/buildings/units ===
-        // HSPR nine-patch frames + the binary's tab icon sprites
+        // === Tab row: 34x27 buttons at y=82, screen order buildings/spells/units ===
+        // GUI nine-patch frames + the binary's tab icon sprites
         // (element param 676/678/680, +1 when active).
-        let tab_order = [HudTab::Spells, HudTab::Buildings, HudTab::Units];
+        let tab_order = [HudTab::Buildings, HudTab::Spells, HudTab::Units];
         for (i, tab_id) in tab_order.iter().enumerate() {
             let tx = layout.tab_xs[i];
             let is_active = hud_state.active_tab == *tab_id;
@@ -5161,7 +5161,7 @@ impl ApplicationHandler for App {
             if let Some(panel_container) = ContainerPSFB::from_file(&panel_path) {
                 self.engine.hud_panel_sprite_count = panel_container.len();
                 let hspr_container =
-                    ContainerPSFB::from_file(&base2.join("data").join("HSPR0-0.DAT"));
+                    ContainerPSFB::from_file(&base2.join("data").join("hfx0-0.dat"));
                 let hspr_ids = crate::render::hud::layout::hspr::atlas_ids();
                 if let Some(ref mut hud) = self.hud {
                     let gpu = self.gpu.as_ref().unwrap();

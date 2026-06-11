@@ -114,12 +114,14 @@ pub const SIDEBAR_ELEMENTS: [ElementDef; 25] = [
     el(0, Canvas, 0, 0, 100, 96, 0),    // minimap
 ];
 
-/// The three panel-opener tabs in binary order (buildings, spells, units):
-/// the 2px overlaps resolve first-match like the original element walk.
+/// The three panel-opener tabs in binary element order: the 2px overlaps
+/// resolve first-match like the original element walk. Screen order is
+/// buildings (x=0, hut icon 676), spells (x=32, burst 678), units (x=64,
+/// people 680) — matching the original's leftmost hut tab.
 pub const SIDEBAR_TABS: [(HudTab, &ElementDef); 3] = [
-    (HudTab::Buildings, &SIDEBAR_ELEMENTS[3]),
-    (HudTab::Spells, &SIDEBAR_ELEMENTS[4]),
-    (HudTab::Units, &SIDEBAR_ELEMENTS[5]),
+    (HudTab::Spells, &SIDEBAR_ELEMENTS[3]),    // x=32
+    (HudTab::Buildings, &SIDEBAR_ELEMENTS[4]), // x=0
+    (HudTab::Units, &SIDEBAR_ELEMENTS[5]),     // x=64
 ];
 
 pub fn minimap_element() -> ElementDef {
@@ -215,8 +217,9 @@ pub const BOTTOM_BAR: [ElementDef; 10] = [
     el(0, Static, 462, 0, 74, 32, 0),
 ];
 
-/// HSPR sprite ids used by the in-game HUD (extracted from popTB.exe .data;
-/// see hud_panel.md). Nine-patch frames are listed [tl, t, tr, l, c, r,
+/// GUI sprite ids used by the in-game HUD, indexing the interface sprite
+/// bank `data/hfx0-0.dat` (extracted from popTB.exe .data; see
+/// hud_panel.md). Nine-patch frames are listed [tl, t, tr, l, c, r,
 /// bl, b, br]; id 0 means "no tile".
 pub mod hspr {
     /// Tab frame tiles (FUN_00405b10 → 0x575328 / 0x575340).
@@ -228,8 +231,9 @@ pub mod hspr {
     pub const BUILDING_FRAME: [u16; 9] = [821, 825, 822, 827, 829, 828, 823, 826, 824];
     /// Minimap border (0x5752f8); center is open for the minimap canvas.
     pub const MINIMAP_FRAME: [u16; 9] = [690, 694, 691, 696, 0, 697, 692, 695, 693];
-    /// Tab icons in screen order spells/buildings/units (element param
-    /// field; +1 = active/pressed variant).
+    /// Tab icons in screen order buildings/spells/units (element param
+    /// field; +1 = active/pressed variant). hfx0-0.dat: 676 = hut,
+    /// 678 = spell burst, 680 = people group.
     pub const TAB_ICONS: [u16; 3] = [676, 678, 680];
     /// Sidebar big button (element e01 param) and quick-spell row params.
     pub const SHAMAN_BUTTON: u16 = 664;
@@ -429,17 +433,17 @@ mod tests {
 
     #[test]
     fn tab_hit_test_uses_interactive_rects() {
-        // Tabs (interactive): spells (0,86,34x27), buildings (32,86,34x27),
-        // units (64,86,34x27); binary table order buildings→spells→units,
-        // so the 2px overlap at x=32..34 resolves to buildings.
-        assert_eq!(tab_hit(16, 90, 640, 480), Some(HudTab::Spells));
-        assert_eq!(tab_hit(48, 90, 640, 480), Some(HudTab::Buildings));
+        // Tabs (interactive): buildings (0,86,34x27), spells (32,86,34x27),
+        // units (64,86,34x27); binary table order resolves the 2px overlap
+        // at x=32..34 to the spells tab (element e03 walks first).
+        assert_eq!(tab_hit(16, 90, 640, 480), Some(HudTab::Buildings));
+        assert_eq!(tab_hit(48, 90, 640, 480), Some(HudTab::Spells));
         assert_eq!(tab_hit(80, 90, 640, 480), Some(HudTab::Units));
-        assert_eq!(tab_hit(33, 90, 640, 480), Some(HudTab::Buildings));
+        assert_eq!(tab_hit(33, 90, 640, 480), Some(HudTab::Spells));
         assert_eq!(tab_hit(16, 70, 640, 480), None); // above tab row
         assert_eq!(tab_hit(120, 90, 640, 480), None); // in 3D viewport
         // Scaled: same panel positions at 1280x960.
-        assert_eq!(tab_hit(32, 180, 1280, 960), Some(HudTab::Spells));
+        assert_eq!(tab_hit(32, 180, 1280, 960), Some(HudTab::Buildings));
     }
 
     #[test]

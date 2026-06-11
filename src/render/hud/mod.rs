@@ -429,10 +429,11 @@ pub fn convert_indexed_to_rgba(indexed: &[u8], palette: &[u8], transparent_idx: 
         } else {
             let p = (idx as usize) * 4;
             if p + 2 < palette.len() {
-                // Palette is BGRA → output RGBA
-                rgba[j * 4] = palette[p + 2];     // R
+                // Palette entries are stored R,G,B,X (same order the unit
+                // sprite path uses) — no channel swap.
+                rgba[j * 4] = palette[p];         // R
                 rgba[j * 4 + 1] = palette[p + 1]; // G
-                rgba[j * 4 + 2] = palette[p];     // B
+                rgba[j * 4 + 2] = palette[p + 2]; // B
                 rgba[j * 4 + 3] = 255;            // A
             }
         }
@@ -501,10 +502,10 @@ pub fn compute_hud_layout(screen_w: f32, screen_h: f32) -> HudLayout {
     let mm = element_rect(&PANEL_SIDEBAR, &minimap_element(), sw, sh);
 
     // Tab row: sidebar elements e03-05 (34x27, draw y=82); screen order
-    // spells (x=0), buildings (x=32), units (x=64).
+    // buildings (x=0), spells (x=32), units (x=64).
     let tabs = &layout::SIDEBAR_TABS;
-    let spells_r = element_rect(&PANEL_SIDEBAR, tabs[1].1, sw, sh);
-    let buildings_r = element_rect(&PANEL_SIDEBAR, tabs[0].1, sw, sh);
+    let spells_r = element_rect(&PANEL_SIDEBAR, tabs[0].1, sw, sh);
+    let buildings_r = element_rect(&PANEL_SIDEBAR, tabs[1].1, sw, sh);
     let units_r = element_rect(&PANEL_SIDEBAR, tabs[2].1, sw, sh);
 
     // Mana display region (0,90,100,32) and info block A (0,110,100,64).
@@ -550,7 +551,7 @@ pub fn compute_hud_layout(screen_w: f32, screen_h: f32) -> HudLayout {
         tab_y: spells_r.y as f32,
         tab_h: spells_r.h as f32,
         tab_w: spells_r.w as f32,
-        tab_xs: [spells_r.x as f32, buildings_r.x as f32, units_r.x as f32],
+        tab_xs: [buildings_r.x as f32, spells_r.x as f32, units_r.x as f32],
         panel_y: page.y as f32,
         line_h,
     }
@@ -1382,21 +1383,20 @@ mod tests {
 
     #[test]
     fn convert_indexed_opaque_pixel() {
-        // Arrange: palette entry 5 = BGRA (10, 20, 30, 255)
+        // Palette entries are R,G,B,X like the unit sprite path — copied
+        // straight through (a previous BGRA swap turned the gold HUD blue).
         let mut palette = vec![0u8; 256 * 4];
-        palette[5 * 4] = 10;     // B
+        palette[5 * 4] = 10;     // R
         palette[5 * 4 + 1] = 20; // G
-        palette[5 * 4 + 2] = 30; // R
+        palette[5 * 4 + 2] = 30; // B
         palette[5 * 4 + 3] = 255;
         let indexed = [5u8];
 
-        // Act
         let rgba = convert_indexed_to_rgba(&indexed, &palette, 255);
 
-        // Assert: BGRA→RGBA swap
-        assert_eq!(rgba[0], 30);  // R (from palette B+2)
+        assert_eq!(rgba[0], 10);  // R
         assert_eq!(rgba[1], 20);  // G
-        assert_eq!(rgba[2], 10);  // B (from palette B+0)
+        assert_eq!(rgba[2], 30);  // B
         assert_eq!(rgba[3], 255); // A
     }
 
@@ -1414,21 +1414,20 @@ mod tests {
     }
 
     #[test]
-    fn convert_indexed_bgra_to_rgba_swap() {
-        // Arrange: palette entry 0 = B=0xFF, G=0x80, R=0x40, A=0
+    fn convert_indexed_no_channel_swap() {
+        // Palette entries are R,G,B,X — copied straight through (a former
+        // BGRA swap rendered the gold HUD blue).
         let mut palette = vec![0u8; 4];
-        palette[0] = 0xFF; // B
+        palette[0] = 0xFF; // R
         palette[1] = 0x80; // G
-        palette[2] = 0x40; // R
+        palette[2] = 0x40; // B
         let indexed = [0u8];
 
-        // Act
         let rgba = convert_indexed_to_rgba(&indexed, &palette, 255);
 
-        // Assert: R and B swapped
-        assert_eq!(rgba[0], 0x40); // R
+        assert_eq!(rgba[0], 0xFF); // R
         assert_eq!(rgba[1], 0x80); // G
-        assert_eq!(rgba[2], 0xFF); // B
+        assert_eq!(rgba[2], 0x40); // B
     }
 
     // -- generate_minimap_rgba --
@@ -1504,8 +1503,8 @@ mod tests {
         // values not divisible by 5/3 (table y=82 renders at 81, etc.).
         assert_eq!(l.tab_y, 81.0);
         assert_eq!(l.tab_h, 27.0);
-        assert_eq!(l.tab_w, 33.0);
-        assert_eq!(l.tab_xs, [0.0, 31.0, 63.0]); // spells, buildings, units
+        assert_eq!(l.tab_w, 34.0); // edge-fraction width of the x=32 tab
+        assert_eq!(l.tab_xs, [0.0, 31.0, 63.0]); // buildings, spells, units
         assert_eq!(l.panel_y, 203.0);
         assert_eq!(l.mana_bar_y, 90.0);
     }
@@ -1535,19 +1534,19 @@ mod tests {
     // -- detect_tab_click --
 
     #[test]
-    fn detect_tab_click_spells() {
-        // Original tab order: spells at x=0, interactive y=86..113.
+    fn detect_tab_click_buildings() {
+        // Original tab order: buildings (hut) at x=0, interactive y=86..113.
         let layout = compute_hud_layout(640.0, 480.0);
-        assert_eq!(detect_tab_click(16.0, 90.0, &layout), Some(HudTab::Spells));
+        assert_eq!(
+            detect_tab_click(16.0, 90.0, &layout),
+            Some(HudTab::Buildings)
+        );
     }
 
     #[test]
-    fn detect_tab_click_buildings() {
+    fn detect_tab_click_spells() {
         let layout = compute_hud_layout(640.0, 480.0);
-        assert_eq!(
-            detect_tab_click(48.0, 90.0, &layout),
-            Some(HudTab::Buildings)
-        );
+        assert_eq!(detect_tab_click(48.0, 90.0, &layout), Some(HudTab::Spells));
     }
 
     #[test]

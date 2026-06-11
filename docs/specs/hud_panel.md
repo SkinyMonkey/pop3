@@ -123,9 +123,16 @@ Element-type render dispatch: 0x4d1df0 (was mislabeled
 
 ## Icon sprites
 
-In-game HUD icons come from the in-game sprite bank `data/hspr0-0.dat`
-(`Sprite_Blit(x, y, bank + idx*8)`), NOT from `plspanel.spr`. The
-element-def `icon` field indexes per-callback icon arrays.
+In-game HUD icons come from the **interface sprite bank `data/hfx0-0.dat`**
+(`Sprite_Blit(x, y, bank + idx*8)`), NOT from `plspanel.spr` and NOT from
+`hspr0-0.dat` (ids there land in people animation frames). Verified by
+contact sheet (2026-06): spell glyphs at 0-35 (state*18 + icon), building
+line-art at 354+ (normal) / 390+ (highlight) via the building table at
+0x5a0ec0, quick-row people figures 666-674, shaman 664, tab icons 676
+(hut/buildings), 678 (burst/spells), 680 (people/units) (+1 active),
+minimap rock-arch frame 690-697 (50x49 quadrants), gold nine-patch tile
+sets 740-766 (tabs), 794-829 (spell/building buttons). Screen tab order is
+buildings (x=0), spells (x=32), units (x=64).
 
 ## Remaining unknowns (next discovery pass)
 
