@@ -323,7 +323,10 @@ pub fn build_spawn_model(device: &wgpu::Device, cells: &[UnitRenderData],
         let frame_idx = (unit_data.frame_index as u32).min(anim_frames.saturating_sub(1));
         let uv_off_x = (col_offset + frame_idx) as f32 / fpd;
 
-        let tribe_row = tribe_index as usize * STORED_DIRECTIONS + src_dir;
+        // tribe_index 255 (sentinel for neutral/wild persons) would map far past
+        // the atlas — fall back to row 0 (Blue) rather than sampling out-of-bounds.
+        let tribe_row_idx = if (tribe_index as usize) < NUM_TRIBES { tribe_index as usize } else { 0 };
+        let tribe_row = tribe_row_idx * STORED_DIRECTIONS + src_dir;
         let uv_off_y = tribe_row as f32 / total_rows;
         let (u_left, u_right) = if mirrored {
             (uv_off_x + uv_scale_x, uv_off_x)
@@ -383,7 +386,8 @@ pub fn build_object_markers(
 
     for obj in objects {
         // Skip objects that have 3D meshes
-        if object_3d_index(&obj.model_type, obj.subtype, obj.tribe_index).is_some() {
+        let owner = if obj.tribe_index < 4 { Some(obj.tribe_index) } else { None };
+        if object_3d_index(&obj.model_type, obj.subtype, owner).is_some() {
             continue;
         }
 

@@ -173,6 +173,11 @@ pub const MINIMAP_TRIBE_COLORS: [[u8; 3]; 4] = [
     [60, 255, 60],   // Green
 ];
 
+/// Color for unowned / neutral entities on the minimap (matches the
+/// "neutral" sprite tint elsewhere in the renderer). Used when
+/// `MinimapDot.tribe_index` is the 255 sentinel rather than a valid 0..3 slot.
+pub const MINIMAP_NEUTRAL_COLOR: [u8; 3] = [200, 200, 200];
+
 /// Tribe colors for HUD text overlay (RGBA, 0.0-1.0).
 pub const HUD_TRIBE_COLORS: [[f32; 4]; 4] = [
     [0.3, 0.5, 1.0, 0.9],  // Blue
@@ -446,7 +451,13 @@ pub fn generate_minimap_rgba(data: &MinimapData) -> Vec<u8> {
         let cx = (dot.cell_x as usize).min(127);
         let cy = (dot.cell_y as usize).min(127);
         let off = (cy * 128 + cx) * 4;
-        let tc = &MINIMAP_TRIBE_COLORS[(dot.tribe_index as usize).min(3)];
+        // Map sentinel 255 (neutral / unowned) to the neutral color rather
+        // than clamping into the Green slot. Anything outside 0..=3 is treated as neutral.
+        let tc = if dot.tribe_index < 4 {
+            &MINIMAP_TRIBE_COLORS[dot.tribe_index as usize]
+        } else {
+            &MINIMAP_NEUTRAL_COLOR
+        };
         rgba[off] = tc[0];
         rgba[off + 1] = tc[1];
         rgba[off + 2] = tc[2];

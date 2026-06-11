@@ -11,6 +11,10 @@ pub struct Unit {
     pub id: UnitId,
     pub model_type: ModelType,
     pub subtype: u8,
+    /// Tribe slot 0..=3 (Blue/Red/Yellow/Green), or **255 = neutral / wild**.
+    /// On-disk this is `SBYTE Owner` (-1 = neutral) per `pop.h:1120`; we keep the
+    /// u8 sentinel for compact storage. Use [`Unit::owner`] for an `Option<u8>`
+    /// view at sites that would otherwise risk a `.min(3)`-style mis-clamp.
     pub tribe_index: u8,
     pub movement: PersonMovement,
     // Rendering cache — cell-space position, updated from world coords each tick.
@@ -54,4 +58,65 @@ pub struct Unit {
     pub guard_position: Option<WorldCoord>,
     // Gather target — tree position for Gathering state navigation
     pub gather_target: Option<WorldCoord>,
+}
+
+impl Unit {
+    /// Decoded owner: `None` for neutral / wild units (sentinel 255 or any
+    /// value outside 0..=3), `Some(0..=3)` for a tribe slot. Use this instead
+    /// of indexing into tribe arrays with `tribe_index as usize` directly.
+    pub fn owner(&self) -> Option<u8> {
+        if self.tribe_index < 4 { Some(self.tribe_index) } else { None }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unit_with_tribe(t: u8) -> Unit {
+        Unit {
+            id: 0,
+            model_type: ModelType::Person,
+            subtype: 2,
+            tribe_index: t,
+            movement: PersonMovement::default(),
+            cell_x: 0.0,
+            cell_y: 0.0,
+            state: PersonState::Idle,
+            prev_state: PersonState::Idle,
+            state_timer: 0,
+            state_counter: 0,
+            health: 0,
+            max_health: 0,
+            target_unit: None,
+            attacker_unit: None,
+            alive: true,
+            home_pos: WorldCoord::new(0, 0),
+            behavior_flags: 0,
+            wander_duration: 0,
+            wander_range: 0,
+            linked_obj_id: None,
+            bloodlust: false,
+            shielded: false,
+            anim: AnimationState::default(),
+            building_handle: None,
+            wood_carried: 0,
+            guard_position: None,
+            gather_target: None,
+        }
+    }
+
+    #[test]
+    fn owner_returns_some_for_valid_tribes() {
+        for t in 0..=3u8 {
+            assert_eq!(unit_with_tribe(t).owner(), Some(t));
+        }
+    }
+
+    #[test]
+    fn owner_returns_none_for_neutral_sentinel() {
+        assert_eq!(unit_with_tribe(255).owner(), None);
+        assert_eq!(unit_with_tribe(4).owner(), None);
+        assert_eq!(unit_with_tribe(100).owner(), None);
+    }
 }

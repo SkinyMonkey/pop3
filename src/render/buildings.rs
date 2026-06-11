@@ -22,7 +22,9 @@ pub fn build_ghost_building_mesh(
     landscape: &LandscapeMesh<128>,
     curvature_scale: f32,
 ) -> Option<ModelEnvelop<TexModel>> {
-    let idx = building_obj_index(building_type, tribe_index)?;
+    // Internal repr uses u8 with 255 as the neutral sentinel; the parser API takes Option<u8>.
+    let owner = if tribe_index < 4 { Some(tribe_index) } else { None };
+    let idx = building_obj_index(building_type, owner)?;
     let obj3d = building_bank.get(idx)?.as_ref()?;
 
     let local_model = mk_pop_object(obj3d);
@@ -96,7 +98,10 @@ pub fn build_building_meshes(
     for obj in objects {
         // Look up model index and select the right bank based on model type
         let (idx, bank): (Option<usize>, &[Option<Object3D>]) = match obj.model_type {
-            ModelType::Building => (building_obj_index(obj.subtype, obj.tribe_index), building_bank),
+            ModelType::Building => {
+                let owner = if obj.tribe_index < 4 { Some(obj.tribe_index) } else { None };
+                (building_obj_index(obj.subtype, owner), building_bank)
+            }
             ModelType::Scenery => (scenery_obj_index(obj.subtype), scenery_bank),
             _ => (None, building_bank),
         };

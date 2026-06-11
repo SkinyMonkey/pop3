@@ -13,3 +13,4 @@ CLAUDE.md
 settings.local.json
 data/scripts/
 scripts/popscript_docs
+scripts/frida-inject.exe

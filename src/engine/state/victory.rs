@@ -16,6 +16,7 @@ pub fn check_victory_conditions(
     flags: &mut GameFlags,
     tribes: &mut TribeArray,
     player_tribe: u8,
+    no_reincarnate_timer: bool,
 ) {
     // Original: if ((DAT_00885720 & 0xf) != 0 || DAT_00885720 < 0x11) return;
     if (tick_counter & VICTORY_CHECK_MASK) != 0 {
@@ -33,12 +34,18 @@ pub fn check_victory_conditions(
     // Update reincarnation timers for all active tribes.
     // Original: loop at 0x004238eb through all 4 tribes
     //   if timer != 0 && tribe active && timer < 0x60: timer += 0x10
-    for tribe in &mut tribes.tribes {
-        if tribe.reincarnation_timer != 0
-            && tribe.active
-            && tribe.reincarnation_timer < REINCARNATION_TIMER_MAX
-        {
-            tribe.reincarnation_timer += REINCARNATION_TIMER_INCREMENT;
+    //
+    // The LEVEL_NO_REINCARNATE_TIME flag (`pop.h:950`) disables the timeout —
+    // the timer never advances, so a tribe with zero population is never
+    // eliminated by the timer.
+    if !no_reincarnate_timer {
+        for tribe in &mut tribes.tribes {
+            if tribe.reincarnation_timer != 0
+                && tribe.active
+                && tribe.reincarnation_timer < REINCARNATION_TIMER_MAX
+            {
+                tribe.reincarnation_timer += REINCARNATION_TIMER_INCREMENT;
+            }
         }
     }
 
@@ -171,7 +178,7 @@ mod tests {
         let mut flags = GameFlags::new();
         let mut tribes = setup_tribes([10, 10, 0, 0], [true, true, true, false]);
         // tick_counter = 0x10 (< 0x11), should not trigger
-        check_victory_conditions(0x10, &mut flags, &mut tribes, 0);
+        check_victory_conditions(0x10, &mut flags, &mut tribes, 0, false);
         assert!(!flags.has_won());
         assert!(!flags.has_lost());
     }
@@ -181,7 +188,7 @@ mod tests {
         let mut flags = GameFlags::new();
         let mut tribes = setup_tribes([10, 0, 0, 0], [true, true, false, false]);
         // tick_counter = 0x21 — (0x21 & 0xF) = 1, should not check
-        check_victory_conditions(0x21, &mut flags, &mut tribes, 0);
+        check_victory_conditions(0x21, &mut flags, &mut tribes, 0, false);
         assert!(!flags.has_won());
     }
 
@@ -189,7 +196,7 @@ mod tests {
     fn test_sp_victory_all_enemies_dead() {
         let mut flags = GameFlags::new();
         let mut tribes = setup_tribes([10, 0, 0, 0], [true, true, true, false]);
-        check_victory_conditions(0x20, &mut flags, &mut tribes, 0);
+        check_victory_conditions(0x20, &mut flags, &mut tribes, 0, false);
         assert!(flags.has_won());
         assert!(!flags.has_lost());
     }
@@ -198,7 +205,7 @@ mod tests {
     fn test_sp_no_victory_enemy_alive() {
         let mut flags = GameFlags::new();
         let mut tribes = setup_tribes([10, 5, 0, 0], [true, true, true, false]);
-        check_victory_conditions(0x20, &mut flags, &mut tribes, 0);
+        check_victory_conditions(0x20, &mut flags, &mut tribes, 0, false);
         assert!(!flags.has_won());
         assert!(!flags.has_lost());
     }
@@ -208,7 +215,7 @@ mod tests {
         let mut flags = GameFlags::new();
         let mut tribes = setup_tribes([0, 10, 0, 0], [true, true, false, false]);
         tribes.tribes[0].reincarnation_timer = REINCARNATION_TIMER_MAX;
-        check_victory_conditions(0x20, &mut flags, &mut tribes, 0);
+        check_victory_conditions(0x20, &mut flags, &mut tribes, 0, false);
         assert!(flags.has_lost());
         assert!(!flags.has_won());
     }
@@ -220,7 +227,7 @@ mod tests {
         tribes.tribes[1].reincarnation_timer = REINCARNATION_TIMER_MAX;
         tribes.tribes[2].reincarnation_timer = REINCARNATION_TIMER_MAX;
         tribes.tribes[3].reincarnation_timer = REINCARNATION_TIMER_MAX;
-        check_victory_conditions(0x20, &mut flags, &mut tribes, 0);
+        check_victory_conditions(0x20, &mut flags, &mut tribes, 0, false);
         assert!(flags.has_won());
     }
 
@@ -229,7 +236,7 @@ mod tests {
         let mut flags = GameFlags::new();
         // All enemies inactive — should NOT trigger victory (empty .all() guard)
         let mut tribes = setup_tribes([10, 0, 0, 0], [true, false, false, false]);
-        check_victory_conditions(0x20, &mut flags, &mut tribes, 0);
+        check_victory_conditions(0x20, &mut flags, &mut tribes, 0, false);
         assert!(!flags.has_won(), "Should not win when no enemies are active");
         assert!(!flags.has_lost());
     }
@@ -239,8 +246,30 @@ mod tests {
         let mut flags = GameFlags::new();
         let mut tribes = setup_tribes([10, 0, 0, 0], [true, true, false, false]);
         tribes.tribes[1].reincarnation_timer = 1; // Started but not maxed
-        check_victory_conditions(0x20, &mut flags, &mut tribes, 0);
+        check_victory_conditions(0x20, &mut flags, &mut tribes, 0, false);
         // Timer should have been incremented by 0x10
         assert_eq!(tribes.tribes[1].reincarnation_timer, 1 + REINCARNATION_TIMER_INCREMENT);
+    }
+
+    #[test]
+    fn test_no_reincarnate_timer_flag_freezes_timer() {
+        // LEVEL_NO_REINCARNATE_TIME flag: the timer must not advance even when
+        // a tribe has zero population. The tribe stays alive indefinitely.
+        let mut flags = GameFlags::new();
+        let mut tribes = setup_tribes([10, 0, 0, 0], [true, true, false, false]);
+        tribes.tribes[1].reincarnation_timer = 1;
+        check_victory_conditions(0x20, &mut flags, &mut tribes, 0, /*no_reincarnate_timer*/ true);
+        assert_eq!(tribes.tribes[1].reincarnation_timer, 1,
+            "timer must remain frozen at 1 when no_reincarnate_timer is set");
+    }
+
+    #[test]
+    fn test_no_reincarnate_timer_does_not_change_other_logic() {
+        // Even with the flag set, an enemy that's already maxed should still be
+        // counted as eliminated for the all-enemies-dead victory check.
+        let mut flags = GameFlags::new();
+        let mut tribes = setup_tribes([10, 0, 0, 0], [true, true, true, false]);
+        check_victory_conditions(0x20, &mut flags, &mut tribes, 0, true);
+        assert!(flags.has_won(), "victory check still triggers when enemies have 0 population");
     }
 }

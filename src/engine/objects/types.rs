@@ -12,6 +12,9 @@ use super::handle::ObjectHandle;
 pub struct ObjectHeader {
     pub model_type: ModelType,
     pub subtype: u8,
+    /// Tribe slot 0..=3 (Blue/Red/Yellow/Green), or **255 = neutral**.
+    /// Mirrors the on-disk `SBYTE Owner` sentinel from `pop.h:1120`. Use
+    /// [`ObjectHeader::owner`] for an `Option<u8>` view when indexing tribe arrays.
     pub tribe: u8,
     pub state: u8,
     pub state_phase: u8,
@@ -26,6 +29,14 @@ pub struct ObjectHeader {
     pub max_health: u16,
     pub next_in_cell: Option<u16>,
     pub prev_in_cell: Option<u16>,
+}
+
+impl ObjectHeader {
+    /// Decoded owner: `None` for neutral / unowned objects (255 sentinel or any
+    /// out-of-range value), `Some(0..=3)` for a tribe slot.
+    pub fn owner(&self) -> Option<u8> {
+        if self.tribe < 4 { Some(self.tribe) } else { None }
+    }
 }
 
 /// Type-specific data for each object kind.
