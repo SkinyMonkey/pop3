@@ -2743,26 +2743,25 @@ impl App {
             [0.08, 0.08, 0.12, 0.92],
         );
 
-        // === Minimap border ===
+        // === Minimap (sidebar canvas element (0,0,100,96)) ===
         hud.draw_rect(
-            layout.mm_x - 1.0,
-            layout.mm_y - 1.0,
-            layout.mm_size + 2.0,
-            layout.mm_size + 2.0,
+            layout.mm_x,
+            layout.mm_y,
+            layout.mm_w + 1.0,
+            layout.mm_h + 1.0,
             [0.3, 0.3, 0.4, 1.0],
         );
-        let minimap_rect = Some((layout.mm_x, layout.mm_y, layout.mm_size, layout.mm_size));
+        let minimap_rect = Some((layout.mm_x, layout.mm_y, layout.mm_w, layout.mm_h));
 
         // === Minimap Viewport Rectangle ===
         {
             let vp = &hud_state.camera_viewport;
-            let cell_to_px = layout.mm_size / 128.0;
-            let rx =
-                layout.mm_x + vp.cam_cell_x * cell_to_px - vp.view_width_cells * cell_to_px / 2.0;
-            let ry =
-                layout.mm_y + vp.cam_cell_y * cell_to_px - vp.view_height_cells * cell_to_px / 2.0;
-            let rw = vp.view_width_cells * cell_to_px;
-            let rh = vp.view_height_cells * cell_to_px;
+            let px_x = layout.mm_w / 128.0;
+            let px_y = layout.mm_h / 128.0;
+            let rx = layout.mm_x + vp.cam_cell_x * px_x - vp.view_width_cells * px_x / 2.0;
+            let ry = layout.mm_y + vp.cam_cell_y * px_y - vp.view_height_cells * px_y / 2.0;
+            let rw = vp.view_width_cells * px_x;
+            let rh = vp.view_height_cells * px_y;
             let border = 1.0;
             let vp_color = [1.0, 1.0, 1.0, 0.8];
             hud.draw_rect(rx, ry, rw, border, vp_color); // top
@@ -2771,31 +2770,29 @@ impl App {
             hud.draw_rect(rx + rw - border, ry, border, rh, vp_color); // right
         }
 
-        // === Tab Icons (sprites 7=Buildings, 8=Spells, 9=Units) ===
-        let tab_sprites = [
-            (7, HudTab::Buildings),
-            (8, HudTab::Spells),
-            (9, HudTab::Units),
-        ];
+        // === Tab row: 34x27 buttons at y=82, screen order spells/buildings/units ===
+        // (plspanel sprites are level-select art — used here only as
+        //  placeholders until HSPR icon ids are mapped, see hud_panel.md)
+        let tab_order = [HudTab::Spells, HudTab::Buildings, HudTab::Units];
+        let tab_sprites = [8usize, 7, 9];
         let has_sprites = self.engine.hud_panel_sprite_count > 9;
-        for (i, (sprite_idx, tab_id)) in tab_sprites.iter().enumerate() {
-            let tx = layout.mm_pad + i as f32 * layout.tab_w;
+        for (i, tab_id) in tab_order.iter().enumerate() {
+            let tx = layout.tab_xs[i];
             let is_active = hud_state.active_tab == *tab_id;
             let bg = if is_active {
                 [0.35, 0.30, 0.20, 1.0]
             } else {
                 [0.18, 0.15, 0.10, 1.0]
             };
-            hud.draw_rect(tx, layout.tab_y, layout.tab_w - 1.0, layout.tab_h, bg);
+            hud.draw_rect(tx, layout.tab_y, layout.tab_w, layout.tab_h, bg);
             if has_sprites {
-                let si = hud.panel_sprite_index(*sprite_idx);
-                let icon_scale = layout.tab_h / 29.0; // normalize to tab height
-                let icon_x = tx + (layout.tab_w - 1.0 - 31.0 * icon_scale) / 2.0; // center
+                let si = hud.panel_sprite_index(tab_sprites[i]);
+                let icon_scale = layout.tab_h / 29.0;
+                let icon_x = tx + (layout.tab_w - 31.0 * icon_scale) / 2.0;
                 let icon_y = layout.tab_y + (layout.tab_h - 29.0 * icon_scale) / 2.0;
                 hud.draw_sprite(si, icon_x, icon_y, icon_scale, icon_scale);
             } else {
-                // Fallback text if sprites not loaded
-                let labels = ["Build", "Spells", "Units"];
+                let labels = ["Spell", "Build", "Unit"];
                 let text_color = if is_active {
                     [1.0, 1.0, 1.0, 1.0]
                 } else {
@@ -2803,7 +2800,7 @@ impl App {
                 };
                 hud.draw_text(
                     labels[i],
-                    tx + 3.0,
+                    tx + 2.0,
                     layout.tab_y + 3.0 * layout.scale_y,
                     layout.small_font,
                     text_color,
@@ -2811,64 +2808,63 @@ impl App {
             }
         }
 
-        // === Panel Content ===
-        match hud_state.active_tab {
-            HudTab::Spells => {
-                // 4x4 grid of spell icons (sprites 13-28)
-                let grid_cols = 4;
-                let grid_pad = layout.mm_pad;
-                let available_w = layout.sidebar_w - grid_pad * 2.0;
-                let cell_size = available_w / grid_cols as f32;
-                let icon_size = cell_size * 0.7; // 70% of cell for icon, rest for dots
-                let dot_size = 3.0 * layout.scale_x;
-
-                for i in 0..16usize {
-                    let col = i % grid_cols;
-                    let row = i / grid_cols;
-                    let cx = grid_pad + col as f32 * cell_size;
-                    let cy = layout.panel_y + row as f32 * cell_size;
-
-                    // Cell background
-                    let cell_bg = [0.22, 0.18, 0.12, 0.8];
-                    hud.draw_rect(
-                        cx + 1.0,
-                        cy + 1.0,
-                        cell_size - 2.0,
-                        cell_size - 2.0,
-                        cell_bg,
-                    );
-
-                    // Spell icon sprite (indices 13-28 in plspanel.spr)
-                    if has_sprites && (13 + i) < self.engine.hud_panel_sprite_count {
-                        let si = hud.panel_sprite_index(13 + i);
-                        let icon_scale = icon_size / 16.0; // sprites are 16x16
-                        let ix = cx + (cell_size - 16.0 * icon_scale) / 2.0;
-                        let iy = cy + 2.0;
-                        hud.draw_sprite(si, ix, iy, icon_scale, icon_scale);
-                    }
-
-                    // Charge dots below icon
-                    let charges = hud_state.spell_charges[i];
-                    let dots_y = cy + icon_size + 4.0;
-                    let total_dots_w = charges as f32 * (dot_size + 1.0);
-                    let dots_x = cx + (cell_size - total_dots_w) / 2.0;
-                    for d in 0..charges {
-                        let dx = dots_x + d as f32 * (dot_size + 1.0);
-                        hud.draw_rect(dx, dots_y, dot_size, dot_size, [0.3, 0.5, 1.0, 0.9]);
+        // === Tab page (panels 2/3/4 anchored at (0,204)) ===
+        {
+            use crate::render::hud::layout::{
+                element_rect, BUILDINGS_PAGE, PANEL_TAB_PAGE, SPELLS_PAGE, UNITS_PAGE,
+            };
+            let sw = layout.screen_w as i32;
+            let sh = layout.screen_h as i32;
+            let cell_bg = [0.22, 0.18, 0.12, 0.8];
+            match hud_state.active_tab {
+                HudTab::Spells => {
+                    // 9 buttons, 2 columns of 46x52 — faithful grid.
+                    let dot_size = 3.0 * layout.scale_x;
+                    for (i, e) in SPELLS_PAGE.iter().enumerate() {
+                        let r = element_rect(&PANEL_TAB_PAGE, e, sw, sh);
+                        let (cx, cy) = (r.x as f32, r.y as f32);
+                        let (cw, ch) = (r.w as f32, r.h as f32);
+                        hud.draw_rect(cx, cy, cw, ch, cell_bg);
+                        if has_sprites && (13 + i) < self.engine.hud_panel_sprite_count {
+                            let si = hud.panel_sprite_index(13 + i);
+                            let icon_scale = (ch - 10.0 * layout.scale_y) / 16.0;
+                            let ix = cx + (cw - 16.0 * icon_scale) / 2.0;
+                            let iy = cy + 2.0;
+                            hud.draw_sprite(si, ix, iy, icon_scale, icon_scale);
+                        }
+                        // Charge dots along the cell bottom.
+                        let charges = hud_state.spell_charges[i.min(15)];
+                        let dots_y = cy + ch - dot_size - 2.0;
+                        let total_w = charges as f32 * (dot_size + 1.0);
+                        let dots_x = cx + (cw - total_w) / 2.0;
+                        for d in 0..charges {
+                            let dx = dots_x + d as f32 * (dot_size + 1.0);
+                            hud.draw_rect(dx, dots_y, dot_size, dot_size, [0.3, 0.5, 1.0, 0.9]);
+                        }
                     }
                 }
-            }
-            _ => {
-                // Buildings and Units tabs: text list (same as before)
-                for (i, entry) in hud_state.panel_entries.iter().enumerate() {
-                    let sy = layout.panel_y + i as f32 * layout.line_h;
-                    hud.draw_text(
-                        &entry.label,
-                        layout.mm_pad,
-                        sy,
-                        layout.small_font,
-                        entry.color,
-                    );
+                HudTab::Buildings => {
+                    // 18 buttons, 3 columns of 31x43 — faithful grid with
+                    // text labels overlaid until HSPR icons are mapped.
+                    for e in BUILDINGS_PAGE.iter() {
+                        let r = element_rect(&PANEL_TAB_PAGE, e, sw, sh);
+                        hud.draw_rect(r.x as f32, r.y as f32, r.w as f32, r.h as f32, cell_bg);
+                    }
+                    for (i, entry) in hud_state.panel_entries.iter().enumerate() {
+                        let sy = layout.panel_y + 2.0 + i as f32 * layout.line_h;
+                        hud.draw_text(&entry.label, 4.0, sy, layout.small_font, entry.color);
+                    }
+                }
+                HudTab::Units => {
+                    // 36 cells, 6 columns of 15x34 — faithful roster grid.
+                    for e in UNITS_PAGE.iter() {
+                        let r = element_rect(&PANEL_TAB_PAGE, e, sw, sh);
+                        hud.draw_rect(r.x as f32, r.y as f32, r.w as f32, r.h as f32, cell_bg);
+                    }
+                    for (i, entry) in hud_state.panel_entries.iter().enumerate() {
+                        let sy = layout.panel_y + 2.0 + i as f32 * layout.line_h;
+                        hud.draw_text(&entry.label, 4.0, sy, layout.small_font, entry.color);
+                    }
                 }
             }
         }
@@ -2895,48 +2891,51 @@ impl App {
             [1.0, 1.0, 0.5, 0.7],
         );
 
-        // === Vertical Mana Bar (left edge of sidebar, matching original) ===
+        // === Mana Bar (mana display region (0,90,100,32), drawn in the
+        //     strip visible below the tab row) ===
         let mana_frac = compute_mana_fraction(hud_state.player_mana, hud_state.player_max_mana);
-        let mana_bar_x = 1.0;
-        let mana_bar_w = 4.0 * layout.scale_x;
-        let mana_bar_top = layout.mana_bar_y;
-        let mana_bar_full_h = layout.tab_y - mana_bar_top - 2.0; // spans from below minimap to above tabs
-                                                                 // Background (dark red)
+        let mana_bar_x = 4.0 * layout.scale_x;
+        let mana_bar_w = layout.sidebar_w - 8.0 * layout.scale_x;
+        let mana_bar_top = layout.tab_y + layout.tab_h + 2.0 * layout.scale_y;
+        let mana_bar_h = 6.0 * layout.scale_y;
         hud.draw_rect(
             mana_bar_x,
             mana_bar_top,
             mana_bar_w,
-            mana_bar_full_h,
+            mana_bar_h,
             [0.15, 0.05, 0.05, 0.8],
         );
-        // Fill from bottom (red, grows upward)
-        let fill_h = mana_bar_full_h * mana_frac;
         hud.draw_rect(
             mana_bar_x,
-            mana_bar_top + mana_bar_full_h - fill_h,
-            mana_bar_w,
-            fill_h,
+            mana_bar_top,
+            mana_bar_w * mana_frac,
+            mana_bar_h,
             [0.8, 0.15, 0.15, 0.9],
         );
 
-        // === Population Display (compact, below minimap right of mana bar) ===
-        let pop_text = format!(
-            "{}/{}",
-            hud_state.player_population, hud_state.player_max_population
-        );
-        hud.draw_text(
-            &pop_text,
-            layout.mm_pad + mana_bar_w + 4.0,
-            layout.mana_bar_y + 1.0,
-            layout.small_font * 0.8,
-            [0.7, 1.0, 0.7, 0.9],
-        );
+        // === Population (status strip element (4,190,92,13)) ===
+        {
+            let strip_x = 4.0 * layout.scale_x;
+            let strip_y = 190.0 * layout.scale_y;
+            let strip_w = 92.0 * layout.scale_x;
+            let strip_h = 13.0 * layout.scale_y;
+            hud.draw_rect(strip_x, strip_y, strip_w, strip_h, [0.10, 0.10, 0.14, 0.9]);
+            let pop_text = format!(
+                "Pop {}/{}",
+                hud_state.player_population, hud_state.player_max_population
+            );
+            hud.draw_text(
+                &pop_text,
+                strip_x + 2.0,
+                strip_y + 2.0,
+                layout.small_font * 0.8,
+                [0.7, 1.0, 0.7, 0.9],
+            );
+        }
 
-        // === Selection Info Panel ===
+        // === Selection Info (info blocks (0,110)/(0,149)) ===
         if let Some(ref info) = hud_state.selected_info {
-            let info_y = layout.panel_y
-                + hud_state.panel_entries.len() as f32 * layout.line_h
-                + layout.line_h;
+            let info_y = layout.pop_y + 12.0 * layout.scale_y;
             // Separator line
             hud.draw_rect(
                 layout.mm_pad,
@@ -5216,20 +5215,24 @@ impl ApplicationHandler for App {
                 match (button, state) {
                     (MouseButton::Left, ElementState::Pressed) => {
                         if on_sidebar {
-                            // Check if click is on minimap for click-to-move
                             let mx = self.input.mouse_pos.x;
                             let my = self.input.mouse_pos.y;
-                            if mx >= layout.mm_x
-                                && mx <= layout.mm_x + layout.mm_size
+                            // Tabs come before the minimap in the original's
+                            // element list, so they win the y=86..96 overlap.
+                            if let Some(tab) = hud::detect_tab_click(mx, my, &layout) {
+                                self.engine.apply_command(&GameCommand::SetHudTab(tab));
+                            } else if mx >= layout.mm_x
+                                && mx <= layout.mm_x + layout.mm_w
                                 && my >= layout.mm_y
-                                && my <= layout.mm_y + layout.mm_size
+                                && my <= layout.mm_y + layout.mm_h
                             {
                                 let (click_cell_x, click_cell_y) = hud::minimap_click_to_cell(
                                     mx,
                                     my,
                                     layout.mm_x,
                                     layout.mm_y,
-                                    layout.mm_size,
+                                    layout.mm_w,
+                                    layout.mm_h,
                                 );
                                 let shift_vec = self.engine.landscape_mesh.get_shift_vector();
                                 let current_x = (shift_vec.x as f32).rem_euclid(128.0);
@@ -5239,12 +5242,6 @@ impl ApplicationHandler for App {
                                 self.engine.landscape_mesh.shift_x(dx.round() as i32);
                                 self.engine.landscape_mesh.shift_y(dy.round() as i32);
                                 self.rebuild_spawn_model();
-                            } else if let Some(tab) = hud::detect_tab_click(
-                                self.input.mouse_pos.x,
-                                self.input.mouse_pos.y,
-                                &layout,
-                            ) {
-                                self.engine.apply_command(&GameCommand::SetHudTab(tab));
                             }
                             self.do_render = true;
                         } else {

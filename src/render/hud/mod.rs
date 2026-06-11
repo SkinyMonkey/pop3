@@ -1,4 +1,5 @@
 // HUD data types, layout computation, rendering helpers, and GPU renderer.
+pub mod layout;
 pub mod menu;
 
 use crate::render::gpu::buffer::GpuBuffer;
@@ -49,19 +50,29 @@ pub struct HudLayout {
     pub screen_h: f32,
     pub scale_x: f32,
     pub scale_y: f32,
+    /// Sidebar width: 100/640 of screen width (Panel_GetSidebarWidth).
     pub sidebar_w: f32,
     pub font_scale: f32,
     pub small_font: f32,
+    /// Text inset used by placeholder text rendering.
     pub mm_pad: f32,
-    pub mm_size: f32,
+    /// Minimap canvas: sidebar element (0,0,100,96).
     pub mm_x: f32,
     pub mm_y: f32,
+    pub mm_w: f32,
+    pub mm_h: f32,
+    /// Mana display region top (sidebar element (0,90,100,32)).
     pub mana_bar_y: f32,
     pub mana_bar_h: f32,
+    /// Info block A top (sidebar element (0,110,100,64)).
     pub pop_y: f32,
+    /// Tab row: 34x27 tabs drawn at y=82 (interactive y=86).
     pub tab_y: f32,
     pub tab_h: f32,
     pub tab_w: f32,
+    /// Tab draw x positions in screen order: spells, buildings, units.
+    pub tab_xs: [f32; 3],
+    /// Tab page origin (panels 2/3/4 at y=204).
     pub panel_y: f32,
     pub line_h: f32,
 }
@@ -197,9 +208,16 @@ pub fn compute_mana_fraction(mana: u32, max_mana: u32) -> f32 {
 }
 
 /// Convert a minimap pixel click to cell coordinates (0-127).
-pub fn minimap_click_to_cell(click_x: f32, click_y: f32, mm_x: f32, mm_y: f32, mm_size: f32) -> (f32, f32) {
-    let cell_x = ((click_x - mm_x) / mm_size * 128.0).clamp(0.0, 127.0);
-    let cell_y = ((click_y - mm_y) / mm_size * 128.0).clamp(0.0, 127.0);
+pub fn minimap_click_to_cell(
+    click_x: f32,
+    click_y: f32,
+    mm_x: f32,
+    mm_y: f32,
+    mm_w: f32,
+    mm_h: f32,
+) -> (f32, f32) {
+    let cell_x = ((click_x - mm_x) / mm_w * 128.0).clamp(0.0, 127.0);
+    let cell_y = ((click_y - mm_y) / mm_h * 128.0).clamp(0.0, 127.0);
     (cell_x, cell_y)
 }
 
@@ -466,51 +484,88 @@ pub fn generate_minimap_rgba(data: &MinimapData) -> Vec<u8> {
     rgba
 }
 
-/// Compute HUD layout dimensions from screen size.
+/// Compute HUD layout dimensions from screen size, anchored to the
+/// original's data-driven sidebar (see docs/specs/hud_panel.md and
+/// `layout`). All rects replicate the binary's 16.16 truncating scaling.
 pub fn compute_hud_layout(screen_w: f32, screen_h: f32) -> HudLayout {
+    use layout::{element_rect, minimap_element, sidebar_width, PANEL_SIDEBAR, PANEL_TAB_PAGE};
+    let sw = screen_w as i32;
+    let sh = screen_h as i32;
     let scale_x = screen_w / 640.0;
     let scale_y = screen_h / 480.0;
-    let sidebar_w = (160.0 * scale_x).round();
+    let sidebar_w = sidebar_width(sw) as f32;
     let font_scale = (12.0 * scale_y).max(10.0).round();
     let small_font = (font_scale * 0.75).round();
     let mm_pad = 4.0 * scale_x;
-    let mm_size = sidebar_w - mm_pad * 2.0;
-    let mm_x = mm_pad;
-    let mm_y = mm_pad;
-    // Vertical order: minimap -> mana bar -> population -> tabs -> panel
-    let mana_bar_y = mm_y + mm_size + 4.0 * scale_y;
-    let mana_bar_h = (8.0 * scale_y).round();
-    let pop_y = mana_bar_y + mana_bar_h + 3.0 * scale_y;
-    let tab_y = pop_y + small_font + 4.0 * scale_y;
-    let tab_h = font_scale + 6.0 * scale_y;
-    let tab_w = (sidebar_w - mm_pad * 2.0) / 3.0;
-    let panel_y = tab_y + tab_h + 2.0 * scale_y;
+
+    let mm = element_rect(&PANEL_SIDEBAR, &minimap_element(), sw, sh);
+
+    // Tab row: sidebar elements e03-05 (34x27, draw y=82); screen order
+    // spells (x=0), buildings (x=32), units (x=64).
+    let tabs = &layout::SIDEBAR_TABS;
+    let spells_r = element_rect(&PANEL_SIDEBAR, tabs[1].1, sw, sh);
+    let buildings_r = element_rect(&PANEL_SIDEBAR, tabs[0].1, sw, sh);
+    let units_r = element_rect(&PANEL_SIDEBAR, tabs[2].1, sw, sh);
+
+    // Mana display region (0,90,100,32) and info block A (0,110,100,64).
+    let mana = element_rect(&PANEL_SIDEBAR, &layout::SIDEBAR_ELEMENTS[23], sw, sh);
+    let info_a = element_rect(&PANEL_SIDEBAR, &layout::SIDEBAR_ELEMENTS[22], sw, sh);
+
+    // Tab page origin (panels 2/3/4 at (0,204)).
+    let page = layout::element_rect(
+        &PANEL_TAB_PAGE,
+        &layout::ElementDef {
+            cmd: 0,
+            kind: layout::ElementKind::Static,
+            ix: 0,
+            iy: 0,
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 277,
+            icon: 0,
+            flags: 0,
+        },
+        sw,
+        sh,
+    );
+
     let line_h = font_scale + 2.0;
     HudLayout {
-        screen_w, screen_h, scale_x, scale_y,
-        sidebar_w, font_scale, small_font,
-        mm_pad, mm_size, mm_x, mm_y,
-        mana_bar_y, mana_bar_h, pop_y,
-        tab_y, tab_h, tab_w,
-        panel_y, line_h,
+        screen_w,
+        screen_h,
+        scale_x,
+        scale_y,
+        sidebar_w,
+        font_scale,
+        small_font,
+        mm_pad,
+        mm_x: mm.x as f32,
+        mm_y: mm.y as f32,
+        mm_w: mm.w as f32,
+        mm_h: mm.h as f32,
+        mana_bar_y: mana.y as f32,
+        mana_bar_h: mana.h as f32,
+        pop_y: info_a.y as f32,
+        tab_y: spells_r.y as f32,
+        tab_h: spells_r.h as f32,
+        tab_w: spells_r.w as f32,
+        tab_xs: [spells_r.x as f32, buildings_r.x as f32, units_r.x as f32],
+        panel_y: page.y as f32,
+        line_h,
     }
 }
 
 /// Detect which tab was clicked given mouse position and layout.
-/// Returns None if click is outside the tab bar.
-pub fn detect_tab_click(mouse_x: f32, mouse_y: f32, layout: &HudLayout) -> Option<HudTab> {
-    if mouse_y < layout.tab_y || mouse_y >= layout.tab_y + layout.tab_h {
-        return None;
-    }
-    if mouse_x < layout.mm_pad || mouse_x >= layout.sidebar_w - layout.mm_pad {
-        return None;
-    }
-    let tab_idx = ((mouse_x - layout.mm_pad) / layout.tab_w) as usize;
-    Some(match tab_idx {
-        0 => HudTab::Buildings,
-        1 => HudTab::Spells,
-        _ => HudTab::Units,
-    })
+/// Uses the original's interactive rects (y=86, first match in element
+/// table order resolves the 2px overlaps).
+pub fn detect_tab_click(mouse_x: f32, mouse_y: f32, layout_dims: &HudLayout) -> Option<HudTab> {
+    layout::tab_hit(
+        mouse_x as i32,
+        mouse_y as i32,
+        layout_dims.screen_w as i32,
+        layout_dims.screen_h as i32,
+    )
 }
 
 /// Get the sprite region index for a PSFB panel sprite.
@@ -1321,32 +1376,36 @@ mod tests {
 
     #[test]
     fn compute_hud_layout_base_resolution() {
-        // Arrange: 640x480 = 1x scale
-
-        // Act
+        // 640x480: faithful sidebar from the binary's panel tables
+        // (hud_panel.md): sidebar 100 wide, minimap (0,0,100,96),
+        // tabs 34x27 drawn at y=82, tab page at y=204.
         let l = compute_hud_layout(640.0, 480.0);
 
-        // Assert
-        assert_eq!(l.sidebar_w, 160.0);
+        assert_eq!(l.sidebar_w, 100.0);
         assert_eq!(l.scale_x, 1.0);
         assert_eq!(l.scale_y, 1.0);
-        assert_eq!(l.mm_pad, 4.0);
-        assert_eq!(l.mm_size, 152.0); // 160 - 4*2
+        assert_eq!((l.mm_x, l.mm_y), (0.0, 0.0));
+        assert_eq!((l.mm_w, l.mm_h), (100.0, 96.0));
+        // The original's truncating 16.16 round-trip loses a pixel on
+        // values not divisible by 5/3 (table y=82 renders at 81, etc.).
+        assert_eq!(l.tab_y, 81.0);
+        assert_eq!(l.tab_h, 27.0);
+        assert_eq!(l.tab_w, 33.0);
+        assert_eq!(l.tab_xs, [0.0, 31.0, 63.0]); // spells, buildings, units
+        assert_eq!(l.panel_y, 203.0);
+        assert_eq!(l.mana_bar_y, 90.0);
     }
 
     #[test]
     fn compute_hud_layout_double_resolution() {
-        // Arrange: 1280x960 = 2x scale
-
-        // Act
+        // 1280x960 = 2x: fractions are fixed, so pixel positions scale
+        // with the same truncating math.
         let l = compute_hud_layout(1280.0, 960.0);
 
-        // Assert
-        assert_eq!(l.sidebar_w, 320.0);
-        assert_eq!(l.scale_x, 2.0);
-        assert_eq!(l.scale_y, 2.0);
-        assert_eq!(l.mm_pad, 8.0);
-        assert_eq!(l.mm_size, 304.0); // 320 - 8*2
+        assert_eq!(l.sidebar_w, 200.0);
+        assert_eq!((l.mm_w, l.mm_h), (200.0, 192.0));
+        assert_eq!(l.tab_y, 163.0);
+        assert_eq!(l.panel_y, 407.0);
     }
 
     #[test]
@@ -1362,46 +1421,25 @@ mod tests {
     // -- detect_tab_click --
 
     #[test]
-    fn detect_tab_click_buildings() {
-        // Arrange
+    fn detect_tab_click_spells() {
+        // Original tab order: spells at x=0, interactive y=86..113.
         let layout = compute_hud_layout(640.0, 480.0);
-        // Click in the middle of the first tab
-        let x = layout.mm_pad + layout.tab_w * 0.5;
-        let y = layout.tab_y + layout.tab_h * 0.5;
-
-        // Act
-        let result = detect_tab_click(x, y, &layout);
-
-        // Assert
-        assert_eq!(result, Some(HudTab::Buildings));
+        assert_eq!(detect_tab_click(16.0, 90.0, &layout), Some(HudTab::Spells));
     }
 
     #[test]
-    fn detect_tab_click_spells() {
-        // Arrange
+    fn detect_tab_click_buildings() {
         let layout = compute_hud_layout(640.0, 480.0);
-        let x = layout.mm_pad + layout.tab_w * 1.5;
-        let y = layout.tab_y + layout.tab_h * 0.5;
-
-        // Act
-        let result = detect_tab_click(x, y, &layout);
-
-        // Assert
-        assert_eq!(result, Some(HudTab::Spells));
+        assert_eq!(
+            detect_tab_click(48.0, 90.0, &layout),
+            Some(HudTab::Buildings)
+        );
     }
 
     #[test]
     fn detect_tab_click_units() {
-        // Arrange
         let layout = compute_hud_layout(640.0, 480.0);
-        let x = layout.mm_pad + layout.tab_w * 2.5;
-        let y = layout.tab_y + layout.tab_h * 0.5;
-
-        // Act
-        let result = detect_tab_click(x, y, &layout);
-
-        // Assert
-        assert_eq!(result, Some(HudTab::Units));
+        assert_eq!(detect_tab_click(80.0, 90.0, &layout), Some(HudTab::Units));
     }
 
     #[test]
@@ -1409,17 +1447,15 @@ mod tests {
         // Arrange
         let layout = compute_hud_layout(640.0, 480.0);
 
-        // Act: click above tab bar
-        let above = detect_tab_click(layout.mm_pad + 10.0, layout.tab_y - 5.0, &layout);
-        // Click below tab bar
-        let below = detect_tab_click(layout.mm_pad + 10.0, layout.tab_y + layout.tab_h + 5.0, &layout);
-        // Click left of tabs
-        let left = detect_tab_click(0.0, layout.tab_y + 2.0, &layout);
+        // Interactive tab rects are y=86..113 at 640x480 (draw y is 82).
+        let above = detect_tab_click(10.0, 84.0, &layout);
+        let below = detect_tab_click(10.0, 115.0, &layout);
+        let right = detect_tab_click(120.0, 90.0, &layout); // in 3D viewport
 
         // Assert
         assert_eq!(above, None);
         assert_eq!(below, None);
-        assert_eq!(left, None);
+        assert_eq!(right, None);
     }
 
     // -- panel_sprite_index --
@@ -1475,21 +1511,22 @@ mod tests {
 
     #[test]
     fn click_to_cell_center() {
-        let (cx, cy) = minimap_click_to_cell(64.0, 64.0, 0.0, 0.0, 128.0);
+        // Rectangular minimap (100x96 faithful rect): center maps to cell 64.
+        let (cx, cy) = minimap_click_to_cell(50.0, 48.0, 0.0, 0.0, 100.0, 96.0);
         assert_eq!(cx, 64.0);
         assert_eq!(cy, 64.0);
     }
 
     #[test]
     fn click_to_cell_origin() {
-        let (cx, cy) = minimap_click_to_cell(10.0, 10.0, 10.0, 10.0, 128.0);
+        let (cx, cy) = minimap_click_to_cell(10.0, 10.0, 10.0, 10.0, 100.0, 96.0);
         assert_eq!(cx, 0.0);
         assert_eq!(cy, 0.0);
     }
 
     #[test]
     fn click_to_cell_clamped() {
-        let (cx, _) = minimap_click_to_cell(0.0, 0.0, 10.0, 10.0, 128.0);
+        let (cx, _) = minimap_click_to_cell(0.0, 0.0, 10.0, 10.0, 100.0, 96.0);
         assert_eq!(cx, 0.0); // clamped, not negative
     }
 

@@ -731,16 +731,15 @@ void SaveLoad_DrawSlots(void) {
 
 ### In-Game HUD
 
-**HUD_Render** @ 0x00421800
+See `hud_panel.md` for the verified subsystem. Summary: the HUD is a
+data-driven **left sidebar** (100×480 in 640×480 virtual coordinates) plus
+tab pages and a bottom bar, defined by static panel/element tables at
+0x577886 / 0x575668+ and rendered per frame by the panel manager
+(FUN_00459ee0) from UI_RenderGamePanel (0x492390). The minimap is the
+sidebar's (0,0,100,96) canvas element (Minimap_RenderTerrain 0x42ba10).
 
-| Element | Handler | Position |
-|---------|---------|----------|
-| Minimap | 0x0042ba10 | Bottom-left |
-| Spell bar | 0x00421a00 | Bottom-center |
-| Unit info | 0x00421c00 | Bottom-right |
-| Mana bar | 0x00421e00 | Top-left |
-| Population | 0x00422000 | Top-right |
-| Messages | 0x00422200 | Top-center |
+(A previous revision of this section listed an invented `HUD_Render @
+0x421800` table with round addresses — those functions do not exist.)
 
 ### Multiplayer Lobby
 

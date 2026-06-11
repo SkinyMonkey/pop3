@@ -383,7 +383,7 @@ tick; per-channel handler table at 0x5a7ba8, internal tick counter at
 | 00453a10 | Effect_SortQueue | 2 |
 | 00453cb0 | Effect_CalcLightIntensity | 1 |
 | 00453e50 | Effect_ComputeFaceColorTable | 5 |
-| 0045b930 | Effect_TriggerCinematic | 7 |
+| 0045b930 | Panel_Open | 7 | <!-- was mislabeled Effect_TriggerCinematic; opens a HUD panel def (see hud_panel.md) -->
 | 0047c150 | Effect_AllocateSlot | 24 |
 | 004a6f50 | Effect_Init | 1 |
 | 0049c290 | Effect_InitArmageddon | 1 |
@@ -1333,7 +1333,7 @@ tick; per-channel handler table at 0x5a7ba8, internal tick counter at
 | 00493560 | UI_RenderStatusText | 1 |
 | 004937f0 | UI_RenderBuildingInfo | 1 |
 | 00494280 | UI_ClearScreenBuffer | 2 |
-| 00494430 | UI_ProcessSpellButtons | 1 |
+| 00494430 | UI_RenderCursorIcon | 1 | <!-- was UI_ProcessSpellButtons; cursor-attached spell/building icon -->
 | 00494d90 | UI_RenderInfoPanel | 1 |
 | 004ae5b0 | UI_RenderNetworkState | 8 |
 | 004ae700 | UI_RenderMultiplayerStatus | 2 |
@@ -1343,6 +1343,29 @@ tick; per-channel handler table at 0x5a7ba8, internal tick counter at
 | 0048ef90 | UI_RenderVersionOverlay | 4 |
 | 004e3ca0 | UI_LockNetworkState | 1 |
 | 004e6210 | UI_SendMultiplayerPing | 1 |
+
+## HUD panel system (data-driven sidebar — see hud_panel.md)
+
+Discovered 2026-06; several were mislabeled (old names in parentheses;
+Ghidra DB rename pending). Static panel defs @ 0x577886, element lists @
+0x575668+ (640×480 virtual coords, 16.16 scaling).
+
+| Address | Name | Notes |
+|---------|------|-------|
+| 0045b930 | Panel_Open | copies panel def → runtime array 0x67c2f8, coords → 16.16 (was Effect_TriggerCinematic) |
+| 0045bd60 | Element_Instantiate | element def → runtime pool 0x67c604, stride 0x71 |
+| 0045ae60 | Panel_GetSidebarWidth | open panel width fraction → px; 0x80 fallback (was Frontend_UpdateLevelSelectPos) |
+| 00459ee0 | Panel_TickManager | per-frame: walks open panels, invokes element render callbacks |
+| 00422090 | Render_SetViewportInset | 3D viewport rect = f(sidebar width, border) |
+| 004d1df0 | UI_ElementRenderDispatch | generic per-element-type renderer, 7 types (was Compass_RenderPanel) |
+| 00401d10 | UI_RenderIconButton | generic building/spell icon button (was UI_RenderBuildingStatsPanel) |
+| 00494430 | UI_RenderCursorIcon | cursor-attached selected spell/building icon (was UI_ProcessSpellButtons) |
+| 00401280 | UI_RenderMinimapFrame | sidebar minimap canvas border (tile lists 0x5752f8/0x575310) |
+| 00405ec0 | UI_RenderManaDisplay | sidebar (0,90,100,32), string id 700 |
+| 00405e40 | UI_RenderInfoBlock | sidebar (0,110)/(0,149) 100×64 blocks |
+| 00405b10 | UI_RenderPanelTab | type-5 tab buttons at y=86 (spells/buildings/units) |
+| 00419bf0 | UI_LoadLevelSelectPanel | plspanel.spr loader — level select, NOT the HUD (see level_select.md) |
+| 00419e50 | UI_RenderLevelSelectScreen | 25 level buttons from widget table 0x57b978 |
 | 004e6640 | UI_RenderNetworkDebugInfo | 1 |
 | 004f04a0 | UI_RenderTimedLabel | 1 |
 
