@@ -492,7 +492,7 @@ impl HudRenderer {
         });
 
         // Pipeline
-        let shader_source = include_str!("../../../shaders/hud_sprite.wgsl");
+        let shader_source = include_str!("../../../../../shaders/hud_sprite.wgsl");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("hud_shader"),
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),

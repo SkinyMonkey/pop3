@@ -9,15 +9,6 @@ use crate::render::envelop::GpuModel;
 
 pub type DefaultModel = MeshModel<Vector3<f32>, u16>;
 
-impl FromUsize for u16 {
-    fn from_usize(v: usize) -> Self {
-        v as u16
-    }
-    fn to_usize(&self) -> usize {
-        *self as usize
-    }
-}
-
 /******************************************************************************/
 
 impl GpuModel for DefaultModel {

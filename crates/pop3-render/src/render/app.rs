@@ -3216,7 +3216,7 @@ impl App {
                 ],
             });
 
-            let shader_source = include_str!("../../shaders/landscape_cpu.wgsl");
+            let shader_source = include_str!("../../../../shaders/landscape_cpu.wgsl");
             let pipeline = create_pipeline(
                 device,
                 shader_source,
@@ -3310,7 +3310,7 @@ impl App {
                 ],
             });
 
-            let shader_source = include_str!("../../shaders/landscape_full.wgsl");
+            let shader_source = include_str!("../../../../shaders/landscape_full.wgsl");
             let pipeline = create_pipeline(
                 device,
                 shader_source,
@@ -3393,7 +3393,7 @@ impl App {
                 ],
             });
 
-            let shader_source = include_str!("../../shaders/landscape.wgsl");
+            let shader_source = include_str!("../../../../shaders/landscape.wgsl");
             let pipeline = create_pipeline(
                 device,
                 shader_source,
@@ -3435,7 +3435,7 @@ impl App {
                 ],
             });
 
-            let shader_source = include_str!("../../shaders/landscape_grad.wgsl");
+            let shader_source = include_str!("../../../../shaders/landscape_grad.wgsl");
             let pipeline = create_pipeline(
                 device,
                 shader_source,
@@ -4393,7 +4393,7 @@ impl ApplicationHandler for App {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("shadow_depth_building_shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("../../shaders/shadow_depth_building.wgsl").into(),
+                    include_str!("../../../../shaders/shadow_depth_building.wgsl").into(),
                 ),
             });
         let shadow_depth_building_layout =
@@ -4436,7 +4436,7 @@ impl ApplicationHandler for App {
             });
 
         // Shaman sprite pipeline (with lighting + shadow receiving)
-        let spawn_shader_source = include_str!("../../shaders/shaman_sprite.wgsl");
+        let spawn_shader_source = include_str!("../../../../shaders/shaman_sprite.wgsl");
         let spawn_vertex_layouts = TexModel::vertex_buffer_layouts();
         let spawn_pipeline = create_pipeline(
             device,
@@ -4454,7 +4454,7 @@ impl ApplicationHandler for App {
         );
 
         // Level objects marker pipeline (group 0 only, no group 1)
-        let objects_marker_shader = include_str!("../../shaders/level_objects.wgsl");
+        let objects_marker_shader = include_str!("../../../../shaders/level_objects.wgsl");
         let objects_marker_layouts = ColorModel::vertex_buffer_layouts();
         let objects_marker_pipeline = create_pipeline(
             device,
@@ -4468,7 +4468,7 @@ impl ApplicationHandler for App {
         );
 
         // Walkability overlay pipeline (alpha blended)
-        let walkability_shader = include_str!("../../shaders/walkability_overlay.wgsl");
+        let walkability_shader = include_str!("../../../../shaders/walkability_overlay.wgsl");
         let walkability_layouts = ColorModel::vertex_buffer_layouts();
         let walkability_pipeline = create_pipeline_blended(
             device,
@@ -4599,7 +4599,7 @@ impl ApplicationHandler for App {
         });
 
         // Building pipeline (objects_tex.wgsl with directional lighting)
-        let building_shader_source = include_str!("../../shaders/objects_tex.wgsl");
+        let building_shader_source = include_str!("../../../../shaders/objects_tex.wgsl");
         let building_vertex_layouts = TexModel::vertex_buffer_layouts();
         let building_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("building_shader"),
@@ -4804,7 +4804,7 @@ impl ApplicationHandler for App {
                 ],
             });
 
-            let sky_shader_source = include_str!("../../shaders/sky.wgsl");
+            let sky_shader_source = include_str!("../../../../shaders/sky.wgsl");
             let sky_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("sky_shader"),
                 source: wgpu::ShaderSource::Wgsl(sky_shader_source.into()),
@@ -4951,7 +4951,7 @@ impl ApplicationHandler for App {
         });
 
         // Sprite indexed pipeline (ghost/fade/remap blend via palette LUT)
-        let sprite_indexed_shader_source = include_str!("../../shaders/sprite_indexed.wgsl");
+        let sprite_indexed_shader_source = include_str!("../../../../shaders/sprite_indexed.wgsl");
         let sprite_indexed_pipeline = create_pipeline_blended(
             device,
             sprite_indexed_shader_source,
@@ -4970,7 +4970,7 @@ impl ApplicationHandler for App {
         );
 
         // Fade overlay (screen fade-in/fade-out fullscreen triangle)
-        let fade_overlay_shader_source = include_str!("../../shaders/fade_overlay.wgsl");
+        let fade_overlay_shader_source = include_str!("../../../../shaders/fade_overlay.wgsl");
         let fade_overlay_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("fade_overlay_shader"),
             source: wgpu::ShaderSource::Wgsl(fade_overlay_shader_source.into()),

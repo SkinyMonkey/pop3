@@ -1761,18 +1761,55 @@ checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
 name = "pop3"
 version = "0.1.0"
 dependencies = [
- "bincode",
  "bytemuck",
  "cgmath",
  "clap",
+ "env_logger",
+ "image",
+ "log",
+ "num-traits",
+ "pollster",
+ "pop3-data",
+ "pop3-engine",
+ "pop3-render",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
+name = "pop3-data"
+version = "0.1.0"
+dependencies = [
+ "cgmath",
+]
+
+[[package]]
+name = "pop3-engine"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "cgmath",
+ "log",
+ "mlua",
+ "pop3-data",
+ "serde",
+ "winit",
+]
+
+[[package]]
+name = "pop3-render"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "cgmath",
  "dirs",
  "env_logger",
  "image",
  "log",
- "mlua",
  "num-traits",
  "pollster",
- "serde",
+ "pop3-data",
+ "pop3-engine",
  "wgpu",
  "winit",
 ]

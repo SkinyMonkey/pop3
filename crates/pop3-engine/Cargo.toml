@@ -1,0 +1,13 @@
+[package]
+name = "pop3-engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pop3-data = { path = "../pop3-data" }
+cgmath = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+bincode = { workspace = true }
+mlua = { workspace = true }
+winit = { workspace = true }

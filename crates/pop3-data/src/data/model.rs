@@ -17,6 +17,15 @@ pub trait FromUsize {
     fn to_usize(&self) -> usize;
 }
 
+impl FromUsize for u16 {
+    fn from_usize(v: usize) -> Self {
+        v as u16
+    }
+    fn to_usize(&self) -> usize {
+        *self as usize
+    }
+}
+
 pub struct MeshModel<V, I> {
     pub vertices: Vec<V>,
     pub indices: Vec<I>,
