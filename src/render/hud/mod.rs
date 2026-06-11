@@ -596,6 +596,11 @@ pub struct HudRenderer {
     // Minimap texture (updated per-frame)
     minimap_bind_group: Option<wgpu::BindGroup>,
     minimap_texture: Option<GpuTexture>,
+    /// Atlas region index per HSPR sprite id (in-game GUI art, hspr0-0.dat).
+    hspr_regions: std::collections::HashMap<u16, usize>,
+    /// Vertex count at which the minimap layer splits the batch: vertices
+    /// before this draw under the minimap, the rest on top.
+    minimap_split: usize,
 }
 
 impl HudRenderer {
@@ -782,16 +787,20 @@ impl HudRenderer {
             vertices: Vec::with_capacity(4096),
             minimap_bind_group: None,
             minimap_texture: None,
+            hspr_regions: std::collections::HashMap::new(),
+            minimap_split: 0,
         }
     }
 
-    /// Build the HUD atlas from plspanel.spr sprites + font glyphs.
-    /// `panel_sprites` is the PSFB container, `palette` is 1024-byte BGRA palette.
+    /// Build the HUD atlas from plspanel.spr sprites + font glyphs, plus a
+    /// selected set of in-game GUI sprites (`hspr_ids`) from the HSPR bank.
+    /// `palette` is the 1024-byte BGRA palette.
     pub fn build_atlas(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         panel_sprites: &ContainerPSFB,
+        hspr: Option<(&ContainerPSFB, &[u16])>,
         palette: &[u8],
     ) {
         // Phase 1: Convert all sprites to RGBA
@@ -804,6 +813,22 @@ impl HudRenderer {
                 sprite_images.push((w, h, rgba));
             } else {
                 sprite_images.push((1, 1, vec![0, 0, 0, 0]));
+            }
+        }
+
+        // HSPR GUI sprites are appended after the panel sprites; remember
+        // which atlas slot each sprite id lands in.
+        let panel_count = sprite_images.len();
+        let mut hspr_slots: Vec<u16> = Vec::new();
+        if let Some((bank, ids)) = hspr {
+            for &id in ids {
+                if let Some(img) = bank.get_image(id as usize) {
+                    let w = img.width as u16;
+                    let h = img.height as u16;
+                    let rgba = convert_indexed_to_rgba(&img.data, palette, 255);
+                    sprite_images.push((w, h, rgba));
+                    hspr_slots.push(id);
+                }
             }
         }
 
@@ -931,12 +956,92 @@ impl HudRenderer {
         self.white_region_idx = 0;
         self.font_region_start = font_start;
 
-        log::info!("[hud] Atlas built: {}x{}, {} sprites, {} font glyphs, {} total regions",
-            atlas_w, atlas_h, sprite_images.len(), 96, self.sprite_regions.len());
+        // Map HSPR ids to their atlas regions (after white + font + panel).
+        self.hspr_regions.clear();
+        for (slot, &id) in hspr_slots.iter().enumerate() {
+            self.hspr_regions
+                .insert(id, font_start + 96 + panel_count + slot);
+        }
+
+        log::info!("[hud] Atlas built: {}x{}, {} sprites ({} hspr), {} font glyphs, {} total regions",
+            atlas_w, atlas_h, sprite_images.len(), hspr_slots.len(), 96, self.sprite_regions.len());
     }
 
     pub fn begin_frame(&mut self) {
         self.vertices.clear();
+        self.minimap_split = 0;
+    }
+
+    /// Everything drawn before this call renders *under* the minimap;
+    /// everything after renders on top (viewport rect, frame border).
+    pub fn mark_minimap_split(&mut self) {
+        self.minimap_split = self.vertices.len();
+    }
+
+    /// Native pixel size of a loaded HSPR GUI sprite.
+    pub fn hspr_size(&self, id: u16) -> Option<(f32, f32)> {
+        self.hspr_regions.get(&id).map(|&idx| {
+            let r = &self.sprite_regions[idx];
+            (r.width as f32, r.height as f32)
+        })
+    }
+
+    /// Draw an HSPR GUI sprite at native size * scale. Returns false when
+    /// the sprite isn't in the atlas (caller falls back to placeholders).
+    pub fn draw_hspr(&mut self, id: u16, x: f32, y: f32, scale: f32) -> bool {
+        match self.hspr_regions.get(&id) {
+            Some(&idx) => {
+                self.draw_sprite(idx, x, y, scale, scale);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Draw an HSPR GUI sprite stretched to an exact rect.
+    pub fn draw_hspr_stretched(&mut self, id: u16, x: f32, y: f32, w: f32, h: f32) -> bool {
+        match self.hspr_regions.get(&id) {
+            Some(&idx) => {
+                let r = self.sprite_regions[idx].clone();
+                self.push_quad(x, y, x + w, y + h, r.u0, r.v0, r.u1, r.v1, [1.0; 4]);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Draw a nine-patch frame [tl, t, tr, l, c, r, bl, b, br] (id 0 =
+    /// skip tile): corners at native size * scale, edges and center
+    /// stretched between them — like the original's tiled panel renderer.
+    /// Returns false if the corner tiles aren't loaded.
+    pub fn draw_nine_patch(&mut self, ids: &[u16; 9], x: f32, y: f32, w: f32, h: f32, scale: f32) -> bool {
+        let (cw, ch) = match self.hspr_size(ids[0]) {
+            Some((sw, sh)) => (sw * scale, sh * scale),
+            None => return false,
+        };
+        let cw = cw.min(w / 2.0);
+        let ch = ch.min(h / 2.0);
+        let (x1, y1) = (x + cw, y + ch);
+        let (x2, y2) = (x + w - cw, y + h - ch);
+        let mid_w = (x2 - x1).max(0.0);
+        let mid_h = (y2 - y1).max(0.0);
+        let cells = [
+            (ids[0], x, y, cw, ch),
+            (ids[1], x1, y, mid_w, ch),
+            (ids[2], x2, y, cw, ch),
+            (ids[3], x, y1, cw, mid_h),
+            (ids[4], x1, y1, mid_w, mid_h),
+            (ids[5], x2, y1, cw, mid_h),
+            (ids[6], x, y2, cw, ch),
+            (ids[7], x1, y2, mid_w, ch),
+            (ids[8], x2, y2, cw, ch),
+        ];
+        for (id, cx, cy, cw, ch) in cells {
+            if id != 0 && cw > 0.0 && ch > 0.0 {
+                self.draw_hspr_stretched(id, cx, cy, cw, ch);
+            }
+        }
+        true
     }
 
     pub fn push_quad(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, u0: f32, v0: f32, u1: f32, v1: f32, color: [f32; 4]) {
@@ -1059,9 +1164,18 @@ impl HudRenderer {
         });
         pass.set_pipeline(&self.pipeline);
 
-        // Draw minimap first (separate bind group)
+        let split = self.minimap_split.min(self.vertices.len()) as u32;
+        let total = self.vertices.len() as u32;
+
+        // 1. Background layer (sidebar fill etc.) under the minimap.
+        if split > 0 {
+            pass.set_bind_group(0, &self.atlas_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            pass.draw(0..split, 0..1);
+        }
+
+        // 2. Minimap canvas (separate texture bind group).
         if let (Some(ref mm_bg), Some((mx, my, mw, mh))) = (&self.minimap_bind_group, minimap_rect) {
-            // Build minimap quad inline (6 vertices at the very start)
             let mm_verts = [
                 HudVertex { position: [mx, my], uv: [0.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
                 HudVertex { position: [mx + mw, my], uv: [1.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
@@ -1077,14 +1191,14 @@ impl HudRenderer {
 
             pass.set_bind_group(0, mm_bg, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            pass.draw(self.vertices.len() as u32..self.vertices.len() as u32 + 6, 0..1);
+            pass.draw(total..total + 6, 0..1);
         }
 
-        // Draw all other HUD elements with atlas bind group
-        if !self.vertices.is_empty() {
+        // 3. Foreground layer (frames, icons, text) on top of the minimap.
+        if total > split {
             pass.set_bind_group(0, &self.atlas_bind_group, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            pass.draw(0..self.vertices.len() as u32, 0..1);
+            pass.draw(split..total, 0..1);
         }
     }
 }

@@ -215,6 +215,65 @@ pub const BOTTOM_BAR: [ElementDef; 10] = [
     el(0, Static, 462, 0, 74, 32, 0),
 ];
 
+/// HSPR sprite ids used by the in-game HUD (extracted from popTB.exe .data;
+/// see hud_panel.md). Nine-patch frames are listed [tl, t, tr, l, c, r,
+/// bl, b, br]; id 0 means "no tile".
+pub mod hspr {
+    /// Tab frame tiles (FUN_00405b10 → 0x575328 / 0x575340).
+    pub const TAB_FRAME: [u16; 9] = [740, 744, 741, 746, 748, 747, 742, 745, 743];
+    pub const TAB_FRAME_SELECTED: [u16; 9] = [758, 762, 759, 764, 766, 765, 760, 763, 761];
+    /// Spell button frame (FUN_004018a0 → 0x575448).
+    pub const SPELL_FRAME: [u16; 9] = [794, 798, 795, 800, 802, 801, 796, 799, 797];
+    /// Building button frame (0x401d10 → 0x575490).
+    pub const BUILDING_FRAME: [u16; 9] = [821, 825, 822, 827, 829, 828, 823, 826, 824];
+    /// Minimap border (0x5752f8); center is open for the minimap canvas.
+    pub const MINIMAP_FRAME: [u16; 9] = [690, 694, 691, 696, 0, 697, 692, 695, 693];
+    /// Tab icons in screen order spells/buildings/units (element param
+    /// field; +1 = active/pressed variant).
+    pub const TAB_ICONS: [u16; 3] = [676, 678, 680];
+    /// Sidebar big button (element e01 param) and quick-spell row params.
+    pub const SHAMAN_BUTTON: u16 = 664;
+    pub const QUICK_ROW: [u16; 5] = [666, 668, 670, 672, 674];
+
+    /// Spell button icon: sprite = state*18 + icon_index (FUN_004018a0).
+    pub fn spell_icon_sprite(icon_index: u16, highlighted: bool) -> u16 {
+        icon_index + if highlighted { 18 } else { 0 }
+    }
+
+    /// Building button icon: building table at 0x5a0ec0 maps icons to
+    /// sprites 354.. (normal) / 390.. (highlighted).
+    pub fn building_icon_sprite(icon_index: u16, highlighted: bool) -> u16 {
+        icon_index + if highlighted { 390 } else { 354 }
+    }
+
+    /// All HSPR sprite ids the HUD atlas needs.
+    pub fn atlas_ids() -> Vec<u16> {
+        let mut ids: Vec<u16> = Vec::new();
+        for set in [
+            TAB_FRAME,
+            TAB_FRAME_SELECTED,
+            SPELL_FRAME,
+            BUILDING_FRAME,
+            MINIMAP_FRAME,
+        ] {
+            ids.extend(set.iter().copied().filter(|&i| i != 0));
+        }
+        for t in TAB_ICONS {
+            ids.push(t);
+            ids.push(t + 1);
+        }
+        ids.push(SHAMAN_BUTTON);
+        ids.push(SHAMAN_BUTTON + 1);
+        ids.extend(QUICK_ROW);
+        ids.extend((0..36).map(|i| spell_icon_sprite(i, false))); // 0..17 + 18..35
+        ids.extend((0..18).map(|i| building_icon_sprite(i, false)));
+        ids.extend((0..18).map(|i| building_icon_sprite(i, true)));
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    }
+}
+
 /// `(v << 16) / 640`, truncating — Panel_Open / Element_Instantiate.
 pub fn frac_x(v: i32) -> i32 {
     (v << 16) / VIRTUAL_W
@@ -381,6 +440,30 @@ mod tests {
         assert_eq!(tab_hit(120, 90, 640, 480), None); // in 3D viewport
         // Scaled: same panel positions at 1280x960.
         assert_eq!(tab_hit(32, 180, 1280, 960), Some(HudTab::Spells));
+    }
+
+    #[test]
+    fn hspr_icon_mappings_match_binary_tables() {
+        // Spell icons: sprite = state*18 + icon (FUN_004018a0); level-1
+        // spells page icons are 1,4,7,5,6,8,13,15,17.
+        assert_eq!(hspr::spell_icon_sprite(1, false), 1);
+        assert_eq!(hspr::spell_icon_sprite(1, true), 19);
+        // Building icons: table 0x5a0ec0 → 354.. / 390.. blocks.
+        assert_eq!(hspr::building_icon_sprite(0, false), 354);
+        assert_eq!(hspr::building_icon_sprite(16, false), 370);
+        assert_eq!(hspr::building_icon_sprite(0, true), 390);
+    }
+
+    #[test]
+    fn hspr_atlas_ids_unique_and_complete() {
+        let ids = hspr::atlas_ids();
+        let mut sorted = ids.clone();
+        sorted.dedup();
+        assert_eq!(ids.len(), sorted.len(), "no duplicates");
+        // Must contain every frame tile, tab icon pair, and icon block.
+        for need in [740, 766, 794, 829, 690, 676, 677, 680, 681, 664, 0, 35, 354, 407] {
+            assert!(ids.contains(&need), "missing sprite id {need}");
+        }
     }
 
     #[test]

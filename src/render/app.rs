@@ -1743,12 +1743,15 @@ impl App {
         let panel_path = base.join("data").join("plspanel.spr");
         if let Some(panel_container) = ContainerPSFB::from_file(&panel_path) {
             self.engine.hud_panel_sprite_count = panel_container.len();
+            let hspr_container = ContainerPSFB::from_file(&base.join("data").join("HSPR0-0.DAT"));
+            let hspr_ids = crate::render::hud::layout::hspr::atlas_ids();
             if let Some(ref mut hud) = self.hud {
                 let gpu = self.gpu.as_ref().unwrap();
                 hud.build_atlas(
                     &gpu.device,
                     &gpu.queue,
                     &panel_container,
+                    hspr_container.as_ref().map(|c| (c, hspr_ids.as_slice())),
                     &level_res.params.palette,
                 );
             }
@@ -2713,6 +2716,7 @@ impl App {
     }
 
     fn draw_hud(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
+        use crate::render::hud::layout as hl;
         let gpu = match self.gpu.as_ref() {
             Some(g) => g,
             None => return,
@@ -2753,6 +2757,19 @@ impl App {
             [0.3, 0.3, 0.4, 1.0],
         );
         let minimap_rect = Some((layout.mm_x, layout.mm_y, layout.mm_w, layout.mm_h));
+        // The minimap canvas renders after this point; everything below is
+        // drawn on top of it (frame border, viewport rect, panels).
+        hud.mark_minimap_split();
+
+        // Rock frame around the minimap (HSPR nine-patch, open center).
+        hud.draw_nine_patch(
+            &hl::hspr::MINIMAP_FRAME,
+            layout.mm_x,
+            layout.mm_y,
+            layout.mm_w,
+            layout.mm_h,
+            layout.scale_x,
+        );
 
         // === Minimap Viewport Rectangle ===
         {
@@ -2772,66 +2789,65 @@ impl App {
         }
 
         // === Tab row: 34x27 buttons at y=82, screen order spells/buildings/units ===
-        // (plspanel sprites are level-select art — used here only as
-        //  placeholders until HSPR icon ids are mapped, see hud_panel.md)
+        // HSPR nine-patch frames + the binary's tab icon sprites
+        // (element param 676/678/680, +1 when active).
         let tab_order = [HudTab::Spells, HudTab::Buildings, HudTab::Units];
-        let tab_sprites = [8usize, 7, 9];
-        let has_sprites = self.engine.hud_panel_sprite_count > 9;
         for (i, tab_id) in tab_order.iter().enumerate() {
             let tx = layout.tab_xs[i];
             let is_active = hud_state.active_tab == *tab_id;
-            let bg = if is_active {
-                [0.35, 0.30, 0.20, 1.0]
+            let frame = if is_active {
+                &hl::hspr::TAB_FRAME_SELECTED
             } else {
-                [0.18, 0.15, 0.10, 1.0]
+                &hl::hspr::TAB_FRAME
             };
-            hud.draw_rect(tx, layout.tab_y, layout.tab_w, layout.tab_h, bg);
-            if has_sprites {
-                let si = hud.panel_sprite_index(tab_sprites[i]);
-                let icon_scale = layout.tab_h / 29.0;
-                let icon_x = tx + (layout.tab_w - 31.0 * icon_scale) / 2.0;
-                let icon_y = layout.tab_y + (layout.tab_h - 29.0 * icon_scale) / 2.0;
-                hud.draw_sprite(si, icon_x, icon_y, icon_scale, icon_scale);
+            if !hud.draw_nine_patch(frame, tx, layout.tab_y, layout.tab_w, layout.tab_h, layout.scale_x)
+            {
+                let bg = if is_active {
+                    [0.35, 0.30, 0.20, 1.0]
+                } else {
+                    [0.18, 0.15, 0.10, 1.0]
+                };
+                hud.draw_rect(tx, layout.tab_y, layout.tab_w, layout.tab_h, bg);
+            }
+            let icon_id = hl::hspr::TAB_ICONS[i] + if is_active { 1 } else { 0 };
+            if let Some((iw, ih)) = hud.hspr_size(icon_id) {
+                let icon_x = tx + (layout.tab_w - iw * layout.scale_x) / 2.0;
+                let icon_y = layout.tab_y + (layout.tab_h - ih * layout.scale_y) / 2.0;
+                hud.draw_hspr(icon_id, icon_x, icon_y, layout.scale_x);
             } else {
                 let labels = ["Spell", "Build", "Unit"];
-                let text_color = if is_active {
-                    [1.0, 1.0, 1.0, 1.0]
-                } else {
-                    [0.6, 0.6, 0.6, 1.0]
-                };
                 hud.draw_text(
                     labels[i],
                     tx + 2.0,
                     layout.tab_y + 3.0 * layout.scale_y,
                     layout.small_font,
-                    text_color,
+                    [0.9, 0.9, 0.9, 1.0],
                 );
             }
         }
 
         // === Tab page (panels 2/3/4 anchored at (0,204)) ===
         {
-            use crate::render::hud::layout::{
-                element_rect, BUILDINGS_PAGE, PANEL_TAB_PAGE, SPELLS_PAGE, UNITS_PAGE,
-            };
             let sw = layout.screen_w as i32;
             let sh = layout.screen_h as i32;
             let cell_bg = [0.22, 0.18, 0.12, 0.8];
             match hud_state.active_tab {
                 HudTab::Spells => {
-                    // 9 buttons, 2 columns of 46x52 — faithful grid.
+                    // 9 buttons, 2 columns of 46x52 — frame + spell icon
+                    // (sprite = state*18 + icon index).
                     let dot_size = 3.0 * layout.scale_x;
-                    for (i, e) in SPELLS_PAGE.iter().enumerate() {
-                        let r = element_rect(&PANEL_TAB_PAGE, e, sw, sh);
+                    for (i, e) in hl::SPELLS_PAGE.iter().enumerate() {
+                        let r = hl::element_rect(&hl::PANEL_TAB_PAGE, e, sw, sh);
                         let (cx, cy) = (r.x as f32, r.y as f32);
                         let (cw, ch) = (r.w as f32, r.h as f32);
-                        hud.draw_rect(cx, cy, cw, ch, cell_bg);
-                        if has_sprites && (13 + i) < self.engine.hud_panel_sprite_count {
-                            let si = hud.panel_sprite_index(13 + i);
-                            let icon_scale = (ch - 10.0 * layout.scale_y) / 16.0;
-                            let ix = cx + (cw - 16.0 * icon_scale) / 2.0;
-                            let iy = cy + 2.0;
-                            hud.draw_sprite(si, ix, iy, icon_scale, icon_scale);
+                        if !hud.draw_nine_patch(&hl::hspr::SPELL_FRAME, cx, cy, cw, ch, layout.scale_x) {
+                            hud.draw_rect(cx, cy, cw, ch, cell_bg);
+                        }
+                        let icon_id = hl::hspr::spell_icon_sprite(e.icon as u16, false);
+                        if let Some((iw, ih)) = hud.hspr_size(icon_id) {
+                            let ix = cx + (cw - iw * layout.scale_x) / 2.0;
+                            let iy = cy + (ch - ih * layout.scale_y) / 2.0;
+                            hud.draw_hspr(icon_id, ix, iy, layout.scale_x);
                         }
                         // Charge dots along the cell bottom.
                         let charges = hud_state.spell_charges[i.min(15)];
@@ -2845,21 +2861,28 @@ impl App {
                     }
                 }
                 HudTab::Buildings => {
-                    // 18 buttons, 3 columns of 31x43 — faithful grid with
-                    // text labels overlaid until HSPR icons are mapped.
-                    for e in BUILDINGS_PAGE.iter() {
-                        let r = element_rect(&PANEL_TAB_PAGE, e, sw, sh);
-                        hud.draw_rect(r.x as f32, r.y as f32, r.w as f32, r.h as f32, cell_bg);
-                    }
-                    for (i, entry) in hud_state.panel_entries.iter().enumerate() {
-                        let sy = layout.panel_y + 2.0 + i as f32 * layout.line_h;
-                        hud.draw_text(&entry.label, 4.0, sy, layout.small_font, entry.color);
+                    // 18 buttons, 3 columns of 31x43 — frame + building icon
+                    // (building table 0x5a0ec0: sprites 354.. / 390..).
+                    for e in hl::BUILDINGS_PAGE.iter() {
+                        let r = hl::element_rect(&hl::PANEL_TAB_PAGE, e, sw, sh);
+                        let (cx, cy) = (r.x as f32, r.y as f32);
+                        let (cw, ch) = (r.w as f32, r.h as f32);
+                        if !hud.draw_nine_patch(&hl::hspr::BUILDING_FRAME, cx, cy, cw, ch, layout.scale_x) {
+                            hud.draw_rect(cx, cy, cw, ch, cell_bg);
+                        }
+                        let icon_id = hl::hspr::building_icon_sprite(e.icon as u16, false);
+                        if let Some((iw, ih)) = hud.hspr_size(icon_id) {
+                            let ix = cx + (cw - iw * layout.scale_x) / 2.0;
+                            let iy = cy + (ch - ih * layout.scale_y) / 2.0;
+                            hud.draw_hspr(icon_id, ix, iy, layout.scale_x);
+                        }
                     }
                 }
                 HudTab::Units => {
-                    // 36 cells, 6 columns of 15x34 — faithful roster grid.
-                    for e in UNITS_PAGE.iter() {
-                        let r = element_rect(&PANEL_TAB_PAGE, e, sw, sh);
+                    // Roster cells (6 columns of 15x34) with the unit count
+                    // list; per-cell unit icons are a follow-up.
+                    for e in hl::UNITS_PAGE.iter() {
+                        let r = hl::element_rect(&hl::PANEL_TAB_PAGE, e, sw, sh);
                         hud.draw_rect(r.x as f32, r.y as f32, r.w as f32, r.h as f32, cell_bg);
                     }
                     for (i, entry) in hud_state.panel_entries.iter().enumerate() {
@@ -2892,27 +2915,39 @@ impl App {
             [1.0, 1.0, 0.5, 0.7],
         );
 
-        // === Mana Bar (mana display region (0,90,100,32), drawn in the
-        //     strip visible below the tab row) ===
-        let mana_frac = compute_mana_fraction(hud_state.player_mana, hud_state.player_max_mana);
-        let mana_bar_x = 4.0 * layout.scale_x;
-        let mana_bar_w = layout.sidebar_w - 8.0 * layout.scale_x;
-        let mana_bar_top = layout.tab_y + layout.tab_h + 2.0 * layout.scale_y;
-        let mana_bar_h = 6.0 * layout.scale_y;
-        hud.draw_rect(
-            mana_bar_x,
-            mana_bar_top,
-            mana_bar_w,
-            mana_bar_h,
-            [0.15, 0.05, 0.05, 0.8],
-        );
-        hud.draw_rect(
-            mana_bar_x,
-            mana_bar_top,
-            mana_bar_w * mana_frac,
-            mana_bar_h,
-            [0.8, 0.15, 0.15, 0.9],
-        );
+        // === Sidebar mid-section (faithful element slots) ===
+        {
+            let sw = layout.screen_w as i32;
+            let sh = layout.screen_h as i32;
+            // Shaman button (element e01: (33,114,30,35), sprite param 664).
+            let e = &hl::SIDEBAR_ELEMENTS[1];
+            let r = hl::element_rect(&hl::PANEL_SIDEBAR, e, sw, sh);
+            if let Some((iw, ih)) = hud.hspr_size(hl::hspr::SHAMAN_BUTTON) {
+                let ix = r.x as f32 + (r.w as f32 - iw * layout.scale_x) / 2.0;
+                let iy = r.y as f32 + (r.h as f32 - ih * layout.scale_y) / 2.0;
+                hud.draw_hspr(hl::hspr::SHAMAN_BUTTON, ix, iy, layout.scale_x);
+            }
+            // Quick-spell row (elements e14-e18, sprites 666-674).
+            for (k, &icon) in hl::hspr::QUICK_ROW.iter().enumerate() {
+                let e = &hl::SIDEBAR_ELEMENTS[14 + k];
+                let r = hl::element_rect(&hl::PANEL_SIDEBAR, e, sw, sh);
+                if let Some((iw, _)) = hud.hspr_size(icon) {
+                    let ix = r.x as f32 + (r.w as f32 - iw * layout.scale_x) / 2.0;
+                    hud.draw_hspr(icon, ix, r.y as f32, layout.scale_x);
+                }
+            }
+            // Mana gauge in its original slot: the first quick-row column
+            // (element e13: (0,153,15,36)), filling bottom-up.
+            let e = &hl::SIDEBAR_ELEMENTS[13];
+            let r = hl::element_rect(&hl::PANEL_SIDEBAR, e, sw, sh);
+            let (gx, gy) = (r.x as f32 + 2.0, r.y as f32);
+            let (gw, gh) = (r.w as f32 - 4.0, r.h as f32);
+            let mana_frac =
+                compute_mana_fraction(hud_state.player_mana, hud_state.player_max_mana);
+            hud.draw_rect(gx, gy, gw, gh, [0.10, 0.10, 0.12, 0.9]);
+            let fill_h = gh * mana_frac;
+            hud.draw_rect(gx, gy + gh - fill_h, gw, fill_h, [0.2, 0.8, 0.6, 0.95]);
+        }
 
         // === Population (status strip element (4,190,92,13)) ===
         {
@@ -5120,17 +5155,21 @@ impl ApplicationHandler for App {
         self.rebuild_spawn_model();
         self.center_on_tribe0_shaman();
 
-        // Build HUD sprite atlas from plspanel.spr
+        // Build HUD sprite atlas from plspanel.spr + in-game GUI sprites
         {
             let panel_path = base2.join("data").join("plspanel.spr");
             if let Some(panel_container) = ContainerPSFB::from_file(&panel_path) {
                 self.engine.hud_panel_sprite_count = panel_container.len();
+                let hspr_container =
+                    ContainerPSFB::from_file(&base2.join("data").join("HSPR0-0.DAT"));
+                let hspr_ids = crate::render::hud::layout::hspr::atlas_ids();
                 if let Some(ref mut hud) = self.hud {
                     let gpu = self.gpu.as_ref().unwrap();
                     hud.build_atlas(
                         &gpu.device,
                         &gpu.queue,
                         &panel_container,
+                        hspr_container.as_ref().map(|c| (c, hspr_ids.as_slice())),
                         &level_res2.params.palette,
                     );
                 }
