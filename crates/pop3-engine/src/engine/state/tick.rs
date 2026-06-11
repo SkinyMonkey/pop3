@@ -91,6 +91,11 @@ pub struct GameWorld {
     /// Per-level rules from `LEVELHEADERv2.LevelFlags` (`pop.h:945-950`).
     /// Populated from the parsed `.hdr` at level load.
     pub level_config: LevelConfig,
+
+    /// When >0, the next `simulation_tick` call runs exactly this many ticks
+    /// and ignores the wall clock. Deterministic-replay hook for pop3-verify;
+    /// always 0 during normal play.
+    pub force_ticks: u32,
 }
 
 impl GameWorld {
@@ -110,6 +115,7 @@ impl GameWorld {
             tick_interval_ms: (TICK_BASE_MS as u64) / (speed as u64),
             last_tick_time: 0,
             level_config: LevelConfig::default(),
+            force_ticks: 0,
         }
     }
 
@@ -148,6 +154,16 @@ impl GameWorld {
         // Only tick during active gameplay
         if self.state != GameState::InGame {
             return 0;
+        }
+
+        // Deterministic override: run exactly force_ticks ticks, no clock.
+        if self.force_ticks > 0 {
+            let n = self.force_ticks;
+            self.force_ticks = 0;
+            for _ in 0..n {
+                self.run_one_tick(subs);
+            }
+            return n;
         }
 
         // Recompute tick interval each frame (matches original preamble)

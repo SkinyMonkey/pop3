@@ -22,7 +22,11 @@ use crate::engine::campaign::CampaignState;
 use crate::engine::effects::EffectPool;
 use crate::engine::menu::{MenuAction, MenuScreen, MenuSystem};
 use crate::engine::state::state_machine::GameState;
-use crate::engine::state::tick::{GameWorld, StdTimeSource};
+use crate::engine::state::tick::{GameWorld, StdTimeSource, TickSubsystems};
+use crate::engine::state::traits::NoOp;
+use crate::engine::state::mana_tick::ManaTickBridge;
+use crate::engine::effects::spawn::spawn_at as effect_spawn_at;
+use crate::engine::effects::EffectAction;
 use crate::engine::{FrameState, GameCommand};
 
 pub type LandscapeMeshS = LandscapeMesh<128>;
@@ -103,6 +107,196 @@ pub struct GameEngine {
 }
 
 impl GameEngine {
+    /// Sim-side per-frame work: AI bridge update, tick loop, mana generation,
+    /// effect processing, AI command dispatch. Extracted from the render
+    /// loop so a headless harness (pop3-verify) can drive the simulation.
+    /// Returns the number of ticks executed.
+    pub fn run_simulation_frame(&mut self) -> u32 {
+                    // Update AI bridge with current game state BEFORE tick
+                    if let Some(ref mut ai) = self.ai_system {
+                        let tribes = &self.game_world.tribes;
+                        let pops = [
+                            tribes.tribes[0].population,
+                            tribes.tribes[1].population,
+                            tribes.tribes[2].population,
+                            tribes.tribes[3].population,
+                        ];
+                        let manas = [
+                            tribes.tribes[0].mana,
+                            tribes.tribes[1].mana,
+                            tribes.tribes[2].mana,
+                            tribes.tribes[3].mana,
+                        ];
+                        let actives = [
+                            tribes.tribes[0].active,
+                            tribes.tribes[1].active,
+                            tribes.tribes[2].active,
+                            tribes.tribes[3].active,
+                        ];
+                        // Count active buildings per tribe from the object pool.
+                        let mut buildings = [0u32; 4];
+                        for (_handle, header, bdata) in
+                            self.unit_coordinator.pool().buildings()
+                        {
+                            if bdata.state == crate::engine::buildings::BuildingState::Active {
+                                let tribe = header.tribe as usize;
+                                if tribe < 4 {
+                                    buildings[tribe] += 1;
+                                }
+                            }
+                        }
+                        ai.update_bridge(
+                            self.game_world.game_tick,
+                            self.game_world.player_tribe,
+                            pops,
+                            manas,
+                            actives,
+                            buildings,
+                        );
+                    }
+
+                    let (mut a, mut c, mut d, mut e, mut f, mut g, mut h, mut j, mut k) =
+                        (NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp);
+                    let mut noop_ai = NoOp;
+                    let mut subs = TickSubsystems {
+                        terrain: &mut a,
+                        objects: &mut self.unit_coordinator,
+                        water: &mut c,
+                        network: &mut d,
+                        actions: &mut e,
+                        game_time: &mut f,
+                        single_player: &mut g,
+                        tutorial: &mut h,
+                        ai: match self.ai_system {
+                            Some(ref mut ai) => ai as &mut dyn crate::engine::state::traits::AiTick,
+                            None => &mut noop_ai as &mut dyn crate::engine::state::traits::AiTick,
+                        },
+                        population: &mut j,
+                        mana: &mut k,
+                    };
+                    let ticks = self
+                        .game_world
+                        .simulation_tick(&self.game_time, &mut subs);
+                    if ticks > 0 {
+                        // 7d. Mana generation — runs after object ticks complete.
+                        // Uses pool (read-only) from coordinator + tribe data (mutable).
+                        // Iterates persons calling mana_rate_for_person + add_mana per tick,
+                        // plus housing mana from active huts.
+                        {
+                            let mut mana_bridge = ManaTickBridge {
+                                pool: self.unit_coordinator.pool(),
+                                tribes: &mut self.game_world.tribes,
+                            };
+                            use crate::engine::state::traits::ManaTick;
+                            for _ in 0..ticks {
+                                mana_bridge.tick_update_mana();
+                            }
+                        }
+                        // 7e. Process effect actions from combat/death/building events.
+                        // Collect then process to avoid borrow conflicts.
+                        let effect_actions = self.unit_coordinator.drain_effect_actions();
+                        for action in effect_actions {
+                            match action {
+                                EffectAction::SpawnAt {
+                                    effect_type,
+                                    x,
+                                    y,
+                                    z,
+                                    owner,
+                                } => {
+                                    effect_spawn_at(
+                                        &mut self.effect_pool,
+                                        effect_type,
+                                        x,
+                                        y,
+                                        z,
+                                        owner,
+                                    );
+                                }
+                            }
+                        }
+                        // 7f. Update all active effects (velocity, gravity, frame, lifetime).
+                        for _ in 0..ticks {
+                            self.effect_pool.update_all();
+                        }
+
+                        // 7g. AI command dispatch -- read pending commands from bridge and act on them.
+                        // Without this, AI scripts produce commands that are silently discarded each tick.
+                        // AI command dispatch: take() temporarily to avoid borrow
+                        // conflict between ai_system and unit_coordinator.
+                        if let Some(mut ai) = self.ai_system.take() {
+                            let cmds = ai.drain_pending_commands();
+                            let marker_entries = ai.marker_entries();
+                            let player_tribe = self.game_world.player_tribe;
+
+                            // Dispatch commands for each active AI tribe
+                            for tribe_idx in 0..4u8 {
+                                if tribe_idx == player_tribe {
+                                    continue;
+                                }
+                                if !ai.tribe_states[tribe_idx as usize].active {
+                                    continue;
+                                }
+                                crate::engine::ai::dispatch::dispatch_ai_commands(
+                                    &cmds,
+                                    &marker_entries,
+                                    &mut self.unit_coordinator,
+                                    &mut ai,
+                                    tribe_idx,
+                                );
+                            }
+
+                            // Collect flyby commands for later dispatch
+                            // (can't apply_command while ai borrows self.engine)
+                            let flyby_commands = if !cmds.flyby_events.is_empty() {
+                                crate::engine::ai::dispatch::build_flyby_state_from_events(
+                                    &cmds.flyby_events,
+                                    self.game_world.game_tick,
+                                )
+                            } else {
+                                Vec::new()
+                            };
+
+                            // Apply difficulty mana adjustment for AI tribes
+                            for tribe_idx in 0..4u8 {
+                                if tribe_idx == player_tribe {
+                                    continue;
+                                }
+                                let adjust = ai.mana_adjust(tribe_idx as usize);
+                                if adjust != 100 {
+                                    let current = self.game_world.tribes.tribes
+                                        [tribe_idx as usize]
+                                        .mana;
+                                    self.game_world.tribes.tribes[tribe_idx as usize].mana =
+                                        crate::engine::ai::difficulty::apply_mana_adjust(
+                                            current, adjust,
+                                        );
+                                }
+                            }
+
+                            self.ai_system = Some(ai);
+
+                            // Now apply flyby commands after ai_system is restored
+                            for fc in flyby_commands {
+                                self.apply_command(&fc);
+                            }
+                        }
+
+                    }
+        ticks
+    }
+
+    /// Run exactly `n` simulation ticks, ignoring the wall clock.
+    /// Deterministic entry point for the verification harness.
+    pub fn run_ticks_deterministic(&mut self, n: u32) -> u32 {
+        let mut run = 0;
+        for _ in 0..n {
+            self.game_world.force_ticks = 1;
+            run += self.run_simulation_frame();
+        }
+        run
+    }
+
     pub fn reset_camera(&mut self) {
         self.camera.angle_x = -55;
         self.camera.angle_y = 0;
