@@ -148,7 +148,7 @@ fn read_is_shaman_available(b: &AiGameBridge, t: u8) -> i32 {
 fn read_is_shaman_alive(b: &AiGameBridge, t: u8) -> i32 {
     b.tribe_shaman_alive[t as usize] as i32
 }
-fn read_wild_people(b: &AiGameBridge, _t: u8) -> i32 {
+fn read_wild_people(_b: &AiGameBridge, _t: u8) -> i32 {
     0
 } // TODO: bridge field
 
@@ -1500,7 +1500,7 @@ pub fn register_popscript_functions(
 
     // SET_BUCKET_COUNT_FOR_SPELL(spell, count) — stub until bucket system implemented
     {
-        let b = bridge.clone();
+        let _b = bridge.clone();
         globals.set(
             "SET_BUCKET_COUNT_FOR_SPELL",
             lua.create_function(move |_, _args: mlua::MultiValue| Ok(0))?,

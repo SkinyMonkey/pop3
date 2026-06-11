@@ -531,8 +531,8 @@ fn tick_gathering(unit: &mut Unit) -> (TickResult, DeferredAction) {
 
     // state_timer == 1: navigating toward tree
     if let Some(target) = unit.gather_target {
-        let dx = (target.x as i32 - unit.movement.position.x as i32);
-        let dz = (target.z as i32 - unit.movement.position.z as i32);
+        let dx = target.x as i32 - unit.movement.position.x as i32;
+        let dz = target.z as i32 - unit.movement.position.z as i32;
         let dist = dx.abs() + dz.abs();
 
         if dist < 128 {

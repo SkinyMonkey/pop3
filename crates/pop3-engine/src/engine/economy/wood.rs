@@ -3,11 +3,11 @@
 // Tree and building search via CellGrid.
 
 use crate::data::units::ModelType;
-use crate::engine::buildings::{BuildingData, BuildingState};
+use crate::engine::buildings::BuildingState;
 use crate::engine::movement::WorldCoord;
 use crate::engine::objects::cell_grid::CellGrid;
 use crate::engine::objects::pool::ObjectPool;
-use crate::engine::objects::types::{GameObjectData, PoolSlot};
+use crate::engine::objects::types::GameObjectData;
 
 /// Maximum tree subtype value (0-8 are tree variants in original scenery table).
 const MAX_TREE_SUBTYPE: u8 = 8;

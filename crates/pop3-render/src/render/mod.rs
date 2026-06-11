@@ -4,7 +4,7 @@ pub mod tex_model;
 pub mod color_model;
 pub mod envelop;
 pub use crate::engine::camera;
-pub mod picking;
+pub use crate::engine::picking;
 pub mod terrain;
 pub mod buildings;
 pub mod sprites;

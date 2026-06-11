@@ -3,7 +3,7 @@ use crate::render::envelop::{GpuModel, ModelEnvelop, RenderType};
 
 pub use crate::engine::terrain::landscape_mesh::{
     LandscapeModel, LandscapeMesh, LandscapeTriangleIterator,
-    LANDSCAPE_SCALE, LANDSCAPE_OFFSET,
+    LandscapeUniformData, LANDSCAPE_SCALE, LANDSCAPE_OFFSET,
 };
 
 
@@ -50,23 +50,6 @@ impl GpuModel for LandscapeModel {
     }
 }
 
-
-/// Packed landscape uniform data matching the WGSL LandscapeParams struct.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct LandscapeUniformData {
-    pub level_shift: [i32; 4],
-    pub height_scale: f32,
-    pub step: f32,
-    pub width: i32,
-    pub _pad_width: i32,
-    pub sunlight: [f32; 4],
-    pub wat_offset: i32,
-    pub curvature_scale: f32,
-    pub camera_focus: [f32; 2],
-    pub viewport_radius: f32,
-    pub _pad2: [f32; 3],
-}
 
 /// A landscape program variant with its own pipeline and group-1 bind group.
 pub struct LandscapeVariant {

@@ -343,7 +343,7 @@ impl<const N: usize> LandscapeMesh<N> {
         }
     }
 
-    pub fn iter(&self) -> LandscapeTriangleIterator<N> {
+    pub fn iter(&self) -> LandscapeTriangleIterator<'_, N> {
         let iter_internal = (0..).zip(self.vertices.chunks(3));
         LandscapeTriangleIterator {
             landscape: self,
@@ -475,3 +475,21 @@ mod tests {
         assert!(overall_max_delta < 0.1, "curvature drift sanity check");
     }
 }
+
+/// Packed landscape uniform data matching the WGSL LandscapeParams struct.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct LandscapeUniformData {
+    pub level_shift: [i32; 4],
+    pub height_scale: f32,
+    pub step: f32,
+    pub width: i32,
+    pub _pad_width: i32,
+    pub sunlight: [f32; 4],
+    pub wat_offset: i32,
+    pub curvature_scale: f32,
+    pub camera_focus: [f32; 2],
+    pub viewport_radius: f32,
+    pub _pad2: [f32; 3],
+}
+

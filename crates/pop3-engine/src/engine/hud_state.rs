@@ -98,3 +98,26 @@ pub struct SpellCooldown {
     pub cooldown_total: u32,     // total cooldown duration
 }
 
+
+/// Tribe colors for HUD text overlay (RGBA, 0.0-1.0).
+pub const HUD_TRIBE_COLORS: [[f32; 4]; 4] = [
+    [0.3, 0.5, 1.0, 0.9],  // Blue
+    [1.0, 0.3, 0.3, 0.9],  // Red
+    [1.0, 1.0, 0.3, 0.9],  // Yellow
+    [0.3, 1.0, 0.3, 0.9],  // Green
+];
+
+/// Map unit subtype id to display name.
+pub fn unit_subtype_name(subtype: u8) -> &'static str {
+    match subtype {
+        1 => "Wild",
+        2 => "Brave",
+        3 => "Warrior",
+        4 => "Preacher",
+        5 => "Spy",
+        6 => "Super Warrior",
+        7 => "Shaman",
+        _ => "Unknown",
+    }
+}
+

@@ -95,14 +95,6 @@ pub const MINIMAP_TRIBE_COLORS: [[u8; 3]; 4] = [
 /// `MinimapDot.tribe_index` is the 255 sentinel rather than a valid 0..3 slot.
 pub const MINIMAP_NEUTRAL_COLOR: [u8; 3] = [200, 200, 200];
 
-/// Tribe colors for HUD text overlay (RGBA, 0.0-1.0).
-pub const HUD_TRIBE_COLORS: [[f32; 4]; 4] = [
-    [0.3, 0.5, 1.0, 0.9],  // Blue
-    [1.0, 0.3, 0.3, 0.9],  // Red
-    [1.0, 1.0, 0.3, 0.9],  // Yellow
-    [0.3, 1.0, 0.3, 0.9],  // Green
-];
-
 // ---------------------------------------------------------------------------
 // HUD data helpers
 // ---------------------------------------------------------------------------
@@ -133,20 +125,6 @@ pub fn toroidal_delta(from: f32, to: f32) -> f32 {
     if raw > 64.0 { raw - 128.0 }
     else if raw < -64.0 { raw + 128.0 }
     else { raw }
-}
-
-/// Map unit subtype id to display name.
-pub fn unit_subtype_name(subtype: u8) -> &'static str {
-    match subtype {
-        1 => "Wild",
-        2 => "Brave",
-        3 => "Warrior",
-        4 => "Preacher",
-        5 => "Spy",
-        6 => "Super Warrior",
-        7 => "Shaman",
-        _ => "Unknown",
-    }
 }
 
 

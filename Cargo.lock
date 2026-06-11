@@ -1788,9 +1788,12 @@ name = "pop3-engine"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "bytemuck",
  "cgmath",
+ "dirs",
  "log",
  "mlua",
+ "num-traits",
  "pop3-data",
  "serde",
  "winit",
