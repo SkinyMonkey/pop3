@@ -90,3 +90,33 @@ impl GpuModel for TexModel {
         !self.indices.is_empty()
     }
 }
+
+/******************************************************************************/
+
+use crate::data::model::VertexModel;
+use crate::data::objects::{Object3D, Vertex};
+
+pub fn mk_tex_vertex(tex_index: i16, v: &Vertex) -> TexVertex {
+    TexVertex{coord: Vector3::new(v.x, v.y, v.z)
+             , uv: Vector2::new(v.u, v.v)
+             , tex_id: tex_index}
+}
+
+pub fn mk_pop_object(object: &Object3D) -> TexModel {
+    let mut model: TexModel = MeshModel::new();
+    for face in object.iter_face() {
+        if face.vertex_num == 3 {
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[0]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[1]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[2]));
+        } else {
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[0]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[1]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[2]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[2]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[3]));
+            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[0]));
+        }
+    }
+    model
+}

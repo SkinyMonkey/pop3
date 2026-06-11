@@ -1,7 +1,7 @@
 use winit::keyboard::KeyCode;
 
 use crate::engine::ai::flyby::FlybyState;
-use crate::render::hud::HudTab;
+use crate::engine::hud_state::HudTab;
 
 #[derive(Debug, Clone)]
 pub enum MenuTarget {

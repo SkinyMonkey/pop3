@@ -1,4 +1,7 @@
+pub mod camera;
 pub mod command;
+pub mod hud_state;
+pub mod level_objects;
 pub mod economy;
 pub mod frame;
 pub mod state;

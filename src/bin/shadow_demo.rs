@@ -18,7 +18,8 @@ use pop3::render::camera::*;
 use pop3::render::envelop::*;
 
 use pop3::data::level::{LevelPaths, GlobeTextureParams};
-use pop3::data::objects::{Object3D, mk_pop_object};
+use pop3::data::objects::Object3D;
+use pop3::render::tex_model::mk_pop_object;
 use pop3::data::bl320::make_bl320_texture_rgba;
 use pop3::data::psfb::ContainerPSFB;
 use pop3::data::animation::{AnimationsData, AnimationSequence, build_tribe_atlas, UNIT_IDLE_ANIMS};

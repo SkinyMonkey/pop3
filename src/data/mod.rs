@@ -1,4 +1,5 @@
 pub mod constants;
+pub mod model;
 pub mod types;
 pub mod level;
 pub mod landscape;

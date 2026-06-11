@@ -1,9 +1,9 @@
-pub mod model;
+pub use crate::data::model;
 pub mod default_model;
 pub mod tex_model;
 pub mod color_model;
 pub mod envelop;
-pub mod camera;
+pub use crate::engine::camera;
 pub mod picking;
 pub mod terrain;
 pub mod buildings;

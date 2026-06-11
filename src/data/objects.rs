@@ -3,10 +3,7 @@ use std::io::Read;
 use core::mem::size_of;
 use core::slice::Iter;
 
-use cgmath::{Vector2, Vector3};
 
-use crate::render::model::{MeshModel, VertexModel};
-use crate::render::tex_model::{TexModel, TexVertex};
 use crate::data::types::{BinDeserializer, from_reader};
 use crate::data::level::ObjectPaths;
 
@@ -336,29 +333,3 @@ impl<'a, I> Iterator for FaceIter<'a, I> where I: Iterator<Item = &'a FaceRaw> {
     }
 }
 
-/******************************************************************************/
-
-pub fn mk_tex_vertex(tex_index: i16, v: &Vertex) -> TexVertex {
-    TexVertex{coord: Vector3::new(v.x, v.y, v.z)
-             , uv: Vector2::new(v.u, v.v)
-             , tex_id: tex_index}
-}
-
-pub fn mk_pop_object(object: &Object3D) -> TexModel {
-    let mut model: TexModel = MeshModel::new();
-    for face in object.iter_face() {
-        if face.vertex_num == 3 {
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[0]));
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[1]));
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[2]));
-        } else {
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[0]));
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[1]));
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[2]));
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[2]));
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[3]));
-            model.push_vertex(mk_tex_vertex(face.texture_index, &face.vertex[0]));
-        }
-    }
-    model
-}

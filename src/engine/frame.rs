@@ -1,11 +1,11 @@
 use cgmath::Vector4;
 
-use crate::render::hud::HudState;
-use crate::render::terrain::LandscapeMesh;
+use crate::engine::hud_state::HudState;
+use crate::engine::terrain::landscape_mesh::LandscapeMesh;
 use crate::data::objects::{Object3D, Shape};
-use crate::render::sprites::LevelObject;
+use crate::engine::level_objects::LevelObject;
 use crate::engine::units::{UnitCoordinator, DragState};
-use crate::render::camera::{Camera, Screen};
+use crate::engine::camera::{Camera, Screen};
 
 /// Ghost preview state for building placement UI.
 /// Used by the renderer to draw a transparent building mesh at the mouse position.
