@@ -1,13 +1,146 @@
+//! Flyby cinematic camera playback.
+//!
+//! Faithful to the original's event scheduler (popTB.exe 0x4dac00,
+//! `Flyby_TickScheduler` — see re_meta.md → Flyby) and its per-channel handlers:
+//! a flyby is four independent channels (pos_x, pos_y, angle, zoom). Each
+//! script event means "at `start_tick`, begin moving this channel from its
+//! *current* value to `target`, arriving `duration` ticks later".
+//!
+//! - Positions are half-cell coordinates; deltas take the shortest toroidal
+//!   path (binary wraps at half the map, see FUN_004daf50).
+//! - Angles are 2048 units per turn; deltas take the shortest path
+//!   (Math_AngleDifference / Math_GetRotationDirection in FUN_004db200).
+//! - Each segment is eased (the binary builds a trapezoidal velocity
+//!   profile in FUN_004db950; we approximate with smoothstep).
+
 use std::collections::HashSet;
 
-/// Original game stores angles in 1/16th degree units (0-4095 for full circle).
-/// Our Camera uses whole degrees. Divide by this to convert.
-pub const FLYBY_ANGLE_SCALE: f32 = 16.0;
+/// Original game angles: 2048 units per full circle (sin/cos LUTs are
+/// indexed with `& 0x7ff`, see Camera_ApplyRotation / Math_MovePointByAngle).
+pub const FLYBY_ANGLE_MODULUS: i32 = 2048;
 
+/// Flyby positions are half-cell coordinates; a 128-cell map wraps at 256.
+pub const FLYBY_DEFAULT_POS_MODULUS: i32 = 256;
+
+/// One scripted channel event: start moving toward `target` at `start_tick`
+/// (relative to flyby start), arriving `duration` ticks later.
 #[derive(Debug, Clone)]
-pub struct FlybyKeyframe {
-    pub tick: u32,
-    pub value: i16,
+pub struct FlybyChannelEvent {
+    pub start_tick: u32,
+    pub target: i16,
+    pub duration: u32,
+}
+
+/// An in-flight animation segment.
+#[derive(Debug, Clone)]
+struct Segment {
+    start_value: f32,
+    delta: f32,
+    start_tick: f32,
+    duration: f32,
+}
+
+/// One animated camera channel (pos_x / pos_y / angle / zoom).
+#[derive(Debug, Clone)]
+pub struct FlybyChannel {
+    pub events: Vec<FlybyChannelEvent>,
+    next_event: usize,
+    value: f32,
+    seg: Option<Segment>,
+    modulus: Option<i32>,
+}
+
+impl FlybyChannel {
+    fn new(modulus: Option<i32>) -> Self {
+        Self {
+            events: Vec::new(),
+            next_event: 0,
+            value: 0.0,
+            seg: None,
+            modulus,
+        }
+    }
+
+    pub fn push_event(&mut self, start_tick: u32, target: i16, duration: u32) {
+        self.events.push(FlybyChannelEvent {
+            start_tick,
+            target,
+            duration,
+        });
+    }
+
+    fn sort_events(&mut self) {
+        self.events.sort_by_key(|e| e.start_tick);
+    }
+
+    fn set_value(&mut self, v: f32) {
+        self.value = self.wrap(v);
+    }
+
+    pub fn value(&self) -> f32 {
+        self.value
+    }
+
+    fn wrap(&self, v: f32) -> f32 {
+        match self.modulus {
+            Some(m) => v.rem_euclid(m as f32),
+            None => v,
+        }
+    }
+
+    /// Shortest signed path from the current value to `target`
+    /// (toroidal/circular when a modulus is set).
+    fn delta_to(&self, target: f32) -> f32 {
+        match self.modulus {
+            Some(m) => {
+                let mf = m as f32;
+                let mut d = (target - self.value).rem_euclid(mf);
+                if d >= mf / 2.0 {
+                    d -= mf;
+                }
+                d
+            }
+            None => target - self.value,
+        }
+    }
+
+    /// Advance to relative tick `t`, activating due events in order.
+    fn advance(&mut self, t: f32) {
+        while self.next_event < self.events.len()
+            && self.events[self.next_event].start_tick as f32 <= t
+        {
+            let ev = self.events[self.next_event].clone();
+            self.next_event += 1;
+            // Bring the previous segment up to this event's start so the new
+            // segment captures the channel's value at activation time.
+            self.advance_segment(ev.start_tick as f32);
+            self.seg = Some(Segment {
+                start_value: self.value,
+                delta: self.delta_to(ev.target as f32),
+                start_tick: ev.start_tick as f32,
+                duration: (ev.duration.max(1)) as f32,
+            });
+        }
+        self.advance_segment(t);
+    }
+
+    fn advance_segment(&mut self, t: f32) {
+        if let Some(seg) = &self.seg {
+            let p = ((t - seg.start_tick) / seg.duration).clamp(0.0, 1.0);
+            // Smoothstep ease; the original uses a trapezoidal velocity
+            // profile (FUN_004db950) — both accelerate in and decelerate out.
+            let e = p * p * (3.0 - 2.0 * p);
+            self.value = self.wrap(seg.start_value + seg.delta * e);
+            if p >= 1.0 {
+                self.seg = None;
+            }
+        }
+    }
+
+    /// All events consumed and no segment still animating.
+    fn done(&self) -> bool {
+        self.next_event >= self.events.len() && self.seg.is_none()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -25,6 +158,7 @@ pub struct FlybyEndTarget {
     pub zoom: i16,
 }
 
+/// Camera state in flyby script units (half-cells / 2048-angle / zoom units).
 #[derive(Debug, Clone)]
 pub struct FlybyCameraOutput {
     pub angle_z: i16,
@@ -34,12 +168,24 @@ pub struct FlybyCameraOutput {
     pub world_y: i16,
 }
 
+/// Fractional camera output for per-frame evaluation. The original camera
+/// works in world units (512 per cell), so sub-half-cell precision is
+/// needed for smooth motion.
+#[derive(Debug, Clone)]
+pub struct FlybyCameraOutputF {
+    pub angle_z: f32,
+    pub angle_x: f32,
+    pub zoom: f32,
+    pub world_x: f32,
+    pub world_y: f32,
+}
+
 #[derive(Debug, Clone)]
 pub struct FlybyState {
-    pub pos_x_keyframes: Vec<FlybyKeyframe>,
-    pub pos_y_keyframes: Vec<FlybyKeyframe>,
-    pub angle_keyframes: Vec<FlybyKeyframe>,
-    pub zoom_keyframes: Vec<FlybyKeyframe>,
+    pub pos_x: FlybyChannel,
+    pub pos_y: FlybyChannel,
+    pub angle: FlybyChannel,
+    pub zoom: FlybyChannel,
     pub tooltips: Vec<FlybyTooltip>,
     pub end_target: Option<FlybyEndTarget>,
     pub allow_interrupt: bool,
@@ -52,10 +198,10 @@ pub struct FlybyState {
 impl FlybyState {
     pub fn new() -> Self {
         Self {
-            pos_x_keyframes: Vec::new(),
-            pos_y_keyframes: Vec::new(),
-            angle_keyframes: Vec::new(),
-            zoom_keyframes: Vec::new(),
+            pos_x: FlybyChannel::new(Some(FLYBY_DEFAULT_POS_MODULUS)),
+            pos_y: FlybyChannel::new(Some(FLYBY_DEFAULT_POS_MODULUS)),
+            angle: FlybyChannel::new(Some(FLYBY_ANGLE_MODULUS)),
+            zoom: FlybyChannel::new(None),
             tooltips: Vec::new(),
             end_target: None,
             allow_interrupt: false,
@@ -66,26 +212,29 @@ impl FlybyState {
         }
     }
 
+    /// Set the toroidal wrap for the position channels (2 × map width in
+    /// half-cells; 256 for a 128-cell map).
+    pub fn set_pos_modulus(&mut self, m: i32) {
+        self.pos_x.modulus = Some(m);
+        self.pos_y.modulus = Some(m);
+    }
+
+    /// Seed the channels with the camera state at flyby start. Mirrors the
+    /// original: each channel animates from the camera's current value
+    /// (FUN_004daf50 / FUN_004db200 read the live camera struct).
+    pub fn set_initial(&mut self, initial: &FlybyCameraOutput) {
+        self.pos_x.set_value(initial.world_x as f32);
+        self.pos_y.set_value(initial.world_y as f32);
+        self.angle.set_value(initial.angle_z as f32);
+        self.zoom.set_value(initial.zoom as f32);
+    }
+
     pub fn start(&mut self, tick: u32) {
-        self.pos_x_keyframes.sort_by_key(|kf| kf.tick);
-        self.pos_y_keyframes.sort_by_key(|kf| kf.tick);
-        self.angle_keyframes.sort_by_key(|kf| kf.tick);
-        self.zoom_keyframes.sort_by_key(|kf| kf.tick);
-        // Keyframe ticks are relative (0-based from script). Offset by start_tick
-        // so that update(game_tick, ...) works with absolute tick values.
-        for kf in &mut self.pos_x_keyframes {
-            kf.tick += tick;
-        }
-        for kf in &mut self.pos_y_keyframes {
-            kf.tick += tick;
-        }
-        for kf in &mut self.angle_keyframes {
-            kf.tick += tick;
-        }
-        for kf in &mut self.zoom_keyframes {
-            kf.tick += tick;
-        }
-        // Also offset tooltip ticks
+        self.pos_x.sort_events();
+        self.pos_y.sort_events();
+        self.angle.sort_events();
+        self.zoom.sort_events();
+        // Tooltip ticks are relative; offset to absolute for pending_tooltips.
         for t in &mut self.tooltips {
             t.tick += tick;
         }
@@ -93,43 +242,42 @@ impl FlybyState {
         self.active = true;
     }
 
-    pub fn update(&mut self, tick: u32, defaults: &FlybyCameraOutput) -> Option<FlybyCameraOutput> {
+    /// Per-frame evaluation at a fractional absolute game tick. Returns the
+    /// camera state while the flyby plays (including one final output the
+    /// moment all channels complete), then None.
+    pub fn update_f(&mut self, tick: f32) -> Option<FlybyCameraOutputF> {
         if !self.active {
             return None;
         }
 
-        let max_tick = self
-            .angle_keyframes
-            .iter()
-            .chain(self.zoom_keyframes.iter())
-            .chain(self.pos_x_keyframes.iter())
-            .chain(self.pos_y_keyframes.iter())
-            .map(|kf| kf.tick)
-            .max();
-
-        match max_tick {
-            None => {
-                self.active = false;
-                self.finished = true;
-                return None;
-            }
-            Some(mt) if tick > mt => {
-                self.active = false;
-                self.finished = true;
-                return None;
-            }
-            _ => {}
+        let no_events = self.pos_x.events.is_empty()
+            && self.pos_y.events.is_empty()
+            && self.angle.events.is_empty()
+            && self.zoom.events.is_empty();
+        if no_events {
+            self.active = false;
+            self.finished = true;
+            return None;
         }
 
-        Some(FlybyCameraOutput {
-            angle_z: interpolate_keyframes(&self.angle_keyframes, tick, defaults.angle_z),
-            // angle_x (camera tilt) is not set by flyby keyframes — preserve
-            // the camera's current tilt throughout the flyby. The original game's
-            // FLYBY_SET_EVENT_ANGLE only controls Z-rotation (yaw).
-            angle_x: defaults.angle_x,
-            zoom: interpolate_keyframes(&self.zoom_keyframes, tick, defaults.zoom),
-            world_x: interpolate_keyframes(&self.pos_x_keyframes, tick, defaults.world_x),
-            world_y: interpolate_keyframes(&self.pos_y_keyframes, tick, defaults.world_y),
+        let rel = (tick - self.start_tick as f32).max(0.0);
+        self.pos_x.advance(rel);
+        self.pos_y.advance(rel);
+        self.angle.advance(rel);
+        self.zoom.advance(rel);
+
+        if self.pos_x.done() && self.pos_y.done() && self.angle.done() && self.zoom.done() {
+            // Emit the final (exact-target) state once, then deactivate.
+            self.active = false;
+            self.finished = true;
+        }
+
+        Some(FlybyCameraOutputF {
+            angle_z: self.angle.value(),
+            angle_x: 0.0,
+            zoom: self.zoom.value(),
+            world_x: self.pos_x.value(),
+            world_y: self.pos_y.value(),
         })
     }
 
@@ -150,38 +298,6 @@ impl FlybyState {
     }
 }
 
-pub fn interpolate_keyframes(keyframes: &[FlybyKeyframe], tick: u32, default: i16) -> i16 {
-    if keyframes.is_empty() {
-        return default;
-    }
-
-    if tick <= keyframes[0].tick {
-        return keyframes[0].value;
-    }
-
-    if tick >= keyframes[keyframes.len() - 1].tick {
-        return keyframes[keyframes.len() - 1].value;
-    }
-
-    for i in 0..keyframes.len() - 1 {
-        if tick >= keyframes[i].tick && tick <= keyframes[i + 1].tick {
-            return lerp_keyframe(&keyframes[i], &keyframes[i + 1], tick);
-        }
-    }
-
-    default
-}
-
-fn lerp_keyframe(a: &FlybyKeyframe, b: &FlybyKeyframe, tick: u32) -> i16 {
-    let total = (b.tick - a.tick) as f32;
-    if total == 0.0 {
-        return b.value;
-    }
-    let progress = (tick - a.tick) as f32 / total;
-    let result = a.value as f32 + (b.value as f32 - a.value as f32) * progress;
-    result.round() as i16
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,8 +305,14 @@ mod tests {
     use crate::engine::ai::{FlybyEvent, FlybyEventKind};
     use crate::engine::command::GameCommand;
 
-    fn kf(tick: u32, value: i16) -> FlybyKeyframe {
-        FlybyKeyframe { tick, value }
+    fn initial(x: i16, y: i16, angle: i16, zoom: i16) -> FlybyCameraOutput {
+        FlybyCameraOutput {
+            angle_z: angle,
+            angle_x: 0,
+            zoom,
+            world_x: x,
+            world_y: y,
+        }
     }
 
     #[test]
@@ -201,98 +323,151 @@ mod tests {
     }
 
     #[test]
-    fn flyby_state_start_activates() {
+    fn empty_flyby_finishes_immediately() {
         let mut state = FlybyState::new();
-        state.start(100);
-        assert!(state.active);
-        assert_eq!(state.start_tick, 100);
-    }
-
-    #[test]
-    fn flyby_start_sorts_keyframes() {
-        let mut state = FlybyState::new();
-        state.angle_keyframes = vec![kf(20, 90), kf(5, 45), kf(15, 60)];
-        state.start(0);
-        assert_eq!(state.angle_keyframes[0].tick, 5);
-        assert_eq!(state.angle_keyframes[1].tick, 15);
-        assert_eq!(state.angle_keyframes[2].tick, 20);
-    }
-
-    #[test]
-    fn interpolate_before_first_keyframe_uses_first_value() {
-        let keyframes = vec![kf(100, 200)];
-        assert_eq!(interpolate_keyframes(&keyframes, 50, 0), 200);
-    }
-
-    #[test]
-    fn interpolate_at_keyframe_uses_exact_value() {
-        let keyframes = vec![kf(100, 200)];
-        assert_eq!(interpolate_keyframes(&keyframes, 100, 0), 200);
-    }
-
-    #[test]
-    fn interpolate_between_keyframes_lerps() {
-        let keyframes = vec![kf(100, 100), kf(200, 200)];
-        assert_eq!(interpolate_keyframes(&keyframes, 150, 0), 150);
-    }
-
-    #[test]
-    fn interpolate_after_last_keyframe_uses_last_value() {
-        let keyframes = vec![kf(100, 200)];
-        assert_eq!(interpolate_keyframes(&keyframes, 300, 0), 200);
-    }
-
-    #[test]
-    fn flyby_update_interpolates_all_channels() {
-        let mut state = FlybyState::new();
-        state.pos_x_keyframes = vec![kf(0, 8), kf(100, 28)];
-        state.pos_y_keyframes = vec![kf(0, 10), kf(100, 30)];
-        state.angle_keyframes = vec![kf(0, 0), kf(100, 1072)];
-        state.zoom_keyframes = vec![kf(0, 0), kf(100, -500)];
-        state.start(0);
-
-        let defaults = FlybyCameraOutput {
-            angle_z: 0,
-            angle_x: 0,
-            zoom: 0,
-            world_x: 0,
-            world_y: 0,
-        };
-
-        let out = state.update(50, &defaults).unwrap();
-        assert_eq!(out.world_x, 18);
-        assert_eq!(out.world_y, 20);
-        assert_eq!(out.angle_z, 536);
-        assert_eq!(out.zoom, -250);
-    }
-
-    #[test]
-    fn flyby_update_returns_none_when_past_all_keyframes() {
-        let mut state = FlybyState::new();
-        state.angle_keyframes = vec![kf(100, 45), kf(200, 90)];
-        state.start(0);
-
-        let defaults = FlybyCameraOutput {
-            angle_z: 0,
-            angle_x: 0,
-            zoom: 0,
-            world_x: 0,
-            world_y: 0,
-        };
-
-        assert!(state.update(100, &defaults).is_some());
-        assert!(state.update(200, &defaults).is_some());
-        assert!(state.update(300, &defaults).is_none());
+        state.start(10);
+        assert!(state.update_f(10.0).is_none());
         assert!(state.finished);
+    }
+
+    #[test]
+    fn channel_holds_initial_value_before_first_event() {
+        // Level 1: first pos event fires at relative tick 4 — before that
+        // the camera must hold where it was (the village), not snap.
+        let mut state = FlybyState::new();
+        state.pos_x.push_event(4, 8, 80);
+        state.set_initial(&initial(36, 215, 0, 0));
+        state.start(73);
+
+        let out = state.update_f(73.0).unwrap();
+        assert!((out.world_x - 36.0).abs() < 1e-4);
+        let out = state.update_f(76.9).unwrap();
+        assert!((out.world_x - 36.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn channel_eases_from_current_to_target_over_duration() {
+        // FLYBY_SET_EVENT_POS(8, 28, 4, 80): START moving at tick 4, arrive
+        // at tick 84 — not "be at (8,28) at tick 4".
+        let mut state = FlybyState::new();
+        state.pos_x.push_event(4, 8, 80);
+        state.set_initial(&initial(36, 0, 0, 0));
+        state.start(0);
+
+        let out = state.update_f(4.0).unwrap();
+        assert!((out.world_x - 36.0).abs() < 1e-4, "still at start when firing");
+
+        let out = state.update_f(44.0).unwrap();
+        assert!(
+            out.world_x < 36.0 && out.world_x > 8.0,
+            "midway between, got {}",
+            out.world_x
+        );
+
+        let out = state.update_f(84.0).unwrap();
+        assert!((out.world_x - 8.0).abs() < 1e-4, "exactly at target at end");
+    }
+
+    #[test]
+    fn ease_is_smooth_not_linear() {
+        // Smoothstep: slower near the endpoints than in the middle.
+        let mut state = FlybyState::new();
+        state.zoom.push_event(0, 100, 100);
+        state.set_initial(&initial(0, 0, 0, 0));
+        state.start(0);
+
+        let v10 = state.update_f(10.0).unwrap().zoom;
+        let v50 = state.update_f(50.0).unwrap().zoom;
+        assert!(v10 < 10.0, "ease-in slower than linear, got {v10}");
+        assert!((v50 - 50.0).abs() < 1e-3, "midpoint is half, got {v50}");
+    }
+
+    #[test]
+    fn angle_takes_shortest_wrapped_path() {
+        // 2000 → 100 (mod 2048): +148 across the seam, not -1900.
+        let mut state = FlybyState::new();
+        state.angle.push_event(0, 100, 10);
+        state.set_initial(&initial(0, 0, 2000, 0));
+        state.start(0);
+
+        let v = state.update_f(5.0).unwrap().angle_z;
+        assert!(
+            (2000.0..2048.0).contains(&v) || (0.0..=100.0).contains(&v),
+            "midway across the seam, got {v}"
+        );
+        let v = state.update_f(10.0).unwrap().angle_z;
+        assert!((v - 100.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn position_wraps_across_map_seam() {
+        // Level 1: from x≈2 to x=252 crosses the toroidal seam (-6, not +250).
+        let mut state = FlybyState::new();
+        state.pos_x.push_event(0, 252, 10);
+        state.set_initial(&initial(2, 0, 0, 0));
+        state.start(0);
+
+        let v = state.update_f(5.0).unwrap().world_x;
+        assert!(
+            v > 252.0 || v < 2.0,
+            "must travel through the seam, got {v}"
+        );
+        let v = state.update_f(10.0).unwrap().world_x;
+        assert!((v - 252.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn retarget_mid_flight_captures_current_value() {
+        // Level 1 pos events overlap: (…,4,80) runs to 84 but the next event
+        // fires at 81. The new segment starts from wherever the camera is.
+        let mut state = FlybyState::new();
+        state.zoom.push_event(0, 100, 80);
+        state.zoom.push_event(40, 0, 40);
+        state.set_initial(&initial(0, 0, 0, 0));
+        state.start(0);
+
+        // At tick 40 the first segment is halfway (value 50); the second
+        // event retargets to 0 from there.
+        let v = state.update_f(60.0).unwrap().zoom;
+        assert!(v > 0.0 && v < 50.0, "easing back down from ~50, got {v}");
+        let v = state.update_f(80.0).unwrap().zoom;
+        assert!(v.abs() < 1e-3, "arrived at retarget, got {v}");
+    }
+
+    #[test]
+    fn update_emits_final_state_then_none() {
+        let mut state = FlybyState::new();
+        state.angle.push_event(0, 512, 10);
+        state.set_initial(&initial(0, 0, 0, 0));
+        state.start(0);
+
+        let out = state.update_f(15.0).unwrap();
+        assert!((out.angle_z - 512.0).abs() < 1e-3);
+        assert!(state.finished);
+        assert!(state.update_f(16.0).is_none());
+    }
+
+    #[test]
+    fn fractional_ticks_move_between_integer_ticks() {
+        let mut state = FlybyState::new();
+        state.zoom.push_event(0, 100, 10);
+        state.set_initial(&initial(0, 0, 0, 0));
+        state.start(0);
+
+        let a = state.update_f(5.0).unwrap().zoom;
+        let b = state.update_f(5.5).unwrap().zoom;
+        assert!(b > a, "value advances within a tick: {a} → {b}");
     }
 
     #[test]
     fn flyby_interrupt_stops_and_marks_finished() {
         let mut state = FlybyState::new();
+        state.zoom.push_event(0, 100, 10);
         state.start(0);
         state.interrupt();
         assert!(!state.active);
         assert!(state.finished);
+        assert!(state.update_f(5.0).is_none());
     }
 
     #[test]
@@ -321,154 +496,114 @@ mod tests {
         assert_eq!(state.pending_tooltips(50), Vec::<i32>::new());
     }
 
-    // ---- Phase 7: Integration tests for full flyby pipeline ----
+    // ---- Integration: full level-1 flyby through the dispatch builder ----
 
-    #[test]
-    fn integration_level1_flyby_produces_correct_camera_at_each_tick() {
-        let events = vec![
+    fn level1_events() -> Vec<FlybyEvent> {
+        // Exact values from cpscr010.dat (with the duration args the binary
+        // reads — AI_ExecuteScriptCommand cases 0x4b9-0x4be).
+        let mut ev = vec![
             FlybyEvent {
                 kind: FlybyEventKind::CreateNew,
             },
             FlybyEvent {
-                kind: FlybyEventKind::SetEventPos {
-                    x: 8,
-                    y: 28,
-                    tick: 4,
-                },
-            },
-            FlybyEvent {
-                kind: FlybyEventKind::SetEventPos {
-                    x: 2,
-                    y: 28,
-                    tick: 81,
-                },
-            },
-            FlybyEvent {
-                kind: FlybyEventKind::SetEventPos {
-                    x: 252,
-                    y: 254,
-                    tick: 126,
-                },
-            },
-            FlybyEvent {
-                kind: FlybyEventKind::SetEventPos {
-                    x: 12,
-                    y: 238,
-                    tick: 181,
-                },
-            },
-            FlybyEvent {
-                kind: FlybyEventKind::SetEventPos {
-                    x: 20,
-                    y: 216,
-                    tick: 221,
-                },
-            },
-            FlybyEvent {
-                kind: FlybyEventKind::SetEventAngle { angle: 0, tick: 5 },
-            },
-            FlybyEvent {
-                kind: FlybyEventKind::SetEventAngle {
-                    angle: 1072,
-                    tick: 46,
-                },
-            },
-            FlybyEvent {
-                kind: FlybyEventKind::SetEventAngle {
-                    angle: 681,
-                    tick: 87,
-                },
-            },
-            FlybyEvent {
-                kind: FlybyEventKind::SetEventAngle {
-                    angle: 744,
-                    tick: 134,
-                },
-            },
-            FlybyEvent {
-                kind: FlybyEventKind::SetEventAngle {
-                    angle: 54,
-                    tick: 170,
-                },
-            },
-            FlybyEvent {
-                kind: FlybyEventKind::SetEventAngle {
-                    angle: 1438,
-                    tick: 219,
-                },
-            },
-            FlybyEvent {
-                kind: FlybyEventKind::SetEventZoom {
-                    zoom: -100,
-                    tick: 10,
-                },
-            },
-            FlybyEvent {
-                kind: FlybyEventKind::SetEventZoom { zoom: 10, tick: 67 },
-            },
-            FlybyEvent {
-                kind: FlybyEventKind::SetEventZoom {
-                    zoom: 80,
-                    tick: 165,
-                },
-            },
-            FlybyEvent {
-                kind: FlybyEventKind::SetEventZoom { zoom: 0, tick: 202 },
-            },
-            FlybyEvent {
                 kind: FlybyEventKind::AllowInterrupt,
             },
-            FlybyEvent {
-                kind: FlybyEventKind::SetEndTarget {
-                    world_x: 20,
-                    world_y: 216,
-                    angle_z: 1438,
-                },
-            },
-            FlybyEvent {
-                kind: FlybyEventKind::Start,
-            },
         ];
+        for (x, y, tick, dur) in [
+            (8, 28, 4, 80),
+            (2, 28, 81, 44),
+            (252, 254, 126, 45),
+            (12, 238, 181, 30),
+            (20, 216, 221, 45),
+        ] {
+            ev.push(FlybyEvent {
+                kind: FlybyEventKind::SetEventPos {
+                    x,
+                    y,
+                    tick,
+                    duration: dur,
+                },
+            });
+        }
+        for (angle, tick, dur) in [
+            (0, 5, 35),
+            (1072, 46, 40),
+            (681, 87, 45),
+            (744, 134, 35),
+            (54, 170, 48),
+            (1438, 219, 45),
+        ] {
+            ev.push(FlybyEvent {
+                kind: FlybyEventKind::SetEventAngle {
+                    angle,
+                    tick,
+                    duration: dur,
+                },
+            });
+        }
+        for (zoom, tick, dur) in [(-100, 10, 35), (10, 67, 25), (80, 165, 36), (0, 202, 63)] {
+            ev.push(FlybyEvent {
+                kind: FlybyEventKind::SetEventZoom {
+                    zoom,
+                    tick,
+                    duration: dur,
+                },
+            });
+        }
+        ev.push(FlybyEvent {
+            kind: FlybyEventKind::SetEndTarget {
+                world_x: 20,
+                world_y: 216,
+                angle_z: 1438,
+            },
+        });
+        ev.push(FlybyEvent {
+            kind: FlybyEventKind::Start,
+        });
+        ev
+    }
 
-        // Build from events starting at game_tick=73 (matching actual game)
-        let commands = build_flyby_state_from_events(&events, 73);
+    #[test]
+    fn integration_level1_flyby_trajectory() {
+        let commands = build_flyby_state_from_events(&level1_events(), 73);
         assert_eq!(commands.len(), 1);
-
         let mut state = match &commands[0] {
             GameCommand::StartFlyby(s) => s.clone(),
             other => panic!("expected StartFlyby, got {:?}", other),
         };
+        // Camera starts on the village (shaman at half-cells (17, 215)-ish).
+        state.set_initial(&initial(17, 215, 1536, 0));
 
-        let defaults = FlybyCameraOutput {
-            angle_z: 0,
-            angle_x: 0,
-            zoom: 0,
-            world_x: 0,
-            world_y: 0,
-        };
+        // Before the first pos event fires (abs 73+4=77): still on village.
+        let out = state.update_f(75.0).unwrap();
+        assert!((out.world_x - 17.0).abs() < 1e-3);
+        assert!((out.world_y - 215.0).abs() < 1e-3);
 
-        // Keyframe ticks are relative (5, 46, ...) but start() offsets them by 73.
-        // So angle keyframe at relative tick 5 becomes absolute tick 78.
-        // At absolute tick 78 (= 73 + 5), angle should be 0 (exact keyframe)
-        let out = state.update(78, &defaults).unwrap();
-        assert_eq!(out.angle_z, 0);
+        // Approach runs ticks 4..84: at rel 44 (abs 117) we're in transit.
+        let out = state.update_f(117.0).unwrap();
+        assert!(
+            (out.world_x - 8.0).abs() > 0.5 || (out.world_y - 28.0).abs() > 0.5,
+            "still approaching the camp at rel 44"
+        );
 
-        // At absolute tick 119 (= 73 + 46), angle should be 1072
-        let out = state.update(119, &defaults).unwrap();
-        assert_eq!(out.angle_z, 1072);
+        // First pos segment lands at rel 84 (abs 157)… but the second pos
+        // event already fired at rel 81 retargeting toward (2,28) — snapped
+        // to cell center (3,29). By rel 125 (81+44, abs 198) it arrives.
+        let out = state.update_f(198.0).unwrap();
+        assert!((out.world_x - 3.0).abs() < 1.0, "got {}", out.world_x);
+        assert!((out.world_y - 29.0).abs() < 1.0, "got {}", out.world_y);
 
-        // At absolute tick 300 (past all keyframes), flyby should be finished
-        let result = state.update(300, &defaults);
-        assert!(result.is_none());
+        // Final pos event: start rel 221, duration 45 → rel 266 (abs 339).
+        // Target (20,216) snaps to cell center (21,217).
+        let out = state.update_f(339.0).unwrap();
+        assert!((out.world_x - 21.0).abs() < 1e-3);
+        assert!((out.world_y - 217.0).abs() < 1e-3);
+        assert!((out.angle_z - 1438.0).abs() < 1e-3);
+        assert!(out.zoom.abs() < 1e-3);
+
+        // All channels complete shortly after; flyby ends.
+        assert!(state.finished || state.update_f(340.0).is_none());
         assert!(state.finished);
-    }
-
-    #[test]
-    fn integration_angle_conversion_to_degrees() {
-        assert_eq!((1072.0_f32 / FLYBY_ANGLE_SCALE).round() as i16, 67);
-        assert_eq!((1438.0_f32 / FLYBY_ANGLE_SCALE).round() as i16, 90);
-        assert_eq!((0.0_f32 / FLYBY_ANGLE_SCALE).round() as i16, 0);
-        assert_eq!((681.0_f32 / FLYBY_ANGLE_SCALE).round() as i16, 43);
     }
 
     #[test]
@@ -481,6 +616,7 @@ mod tests {
                 kind: FlybyEventKind::SetEventAngle {
                     angle: 500,
                     tick: 10,
+                    duration: 20,
                 },
             },
             FlybyEvent {
@@ -498,280 +634,5 @@ mod tests {
         let stop_cmds = build_flyby_state_from_events(&stop_events, 0);
         assert_eq!(stop_cmds.len(), 1);
         assert!(matches!(&stop_cmds[0], GameCommand::StopFlyby));
-    }
-
-    #[test]
-    fn integration_interrupt_allows_early_exit() {
-        let mut state = FlybyState::new();
-        state.angle_keyframes = vec![
-            FlybyKeyframe { tick: 0, value: 0 },
-            FlybyKeyframe {
-                tick: 200,
-                value: 1600,
-            },
-        ];
-        state.allow_interrupt = true;
-        state.start(0);
-
-        let defaults = FlybyCameraOutput {
-            angle_z: 0,
-            angle_x: 0,
-            zoom: 0,
-            world_x: 0,
-            world_y: 0,
-        };
-
-        let out = state.update(100, &defaults).unwrap();
-        assert!(out.angle_z > 0);
-        assert!(out.angle_z < 1600);
-
-        state.interrupt();
-        assert!(!state.active);
-        assert!(state.finished);
-        assert!(state.update(150, &defaults).is_none());
-    }
-
-    #[test]
-    fn integration_position_interpolation_matches_original_game() {
-        let mut state = FlybyState::new();
-        state.pos_x_keyframes = vec![
-            FlybyKeyframe { tick: 4, value: 8 },
-            FlybyKeyframe { tick: 81, value: 2 },
-        ];
-        state.pos_y_keyframes = vec![
-            FlybyKeyframe { tick: 4, value: 28 },
-            FlybyKeyframe {
-                tick: 81,
-                value: 28,
-            },
-        ];
-        state.start(0);
-
-        let defaults = FlybyCameraOutput {
-            angle_z: 0,
-            angle_x: 0,
-            zoom: 0,
-            world_x: 0,
-            world_y: 0,
-        };
-
-        let out = state.update(4, &defaults).unwrap();
-        assert_eq!(out.world_x, 8);
-        assert_eq!(out.world_y, 28);
-
-        let out = state.update(81, &defaults).unwrap();
-        assert_eq!(out.world_x, 2);
-        assert_eq!(out.world_y, 28);
-
-        let out = state.update(42, &defaults).unwrap();
-        let expected_x = interpolate_keyframes(&state.pos_x_keyframes, 42, 0);
-        assert!((out.world_x - expected_x).abs() <= 1);
-    }
-
-    #[test]
-    fn integration_zoom_interpolation_negative_zoom() {
-        let mut state = FlybyState::new();
-        state.zoom_keyframes = vec![
-            FlybyKeyframe {
-                tick: 10,
-                value: -100,
-            },
-            FlybyKeyframe {
-                tick: 67,
-                value: 10,
-            },
-        ];
-        state.start(0);
-
-        let defaults = FlybyCameraOutput {
-            angle_z: 0,
-            angle_x: 0,
-            zoom: 0,
-            world_x: 0,
-            world_y: 0,
-        };
-
-        let out = state.update(10, &defaults).unwrap();
-        assert_eq!(out.zoom, -100);
-
-        let out = state.update(67, &defaults).unwrap();
-        assert_eq!(out.zoom, 10);
-
-        let out = state.update(38, &defaults).unwrap();
-        assert!(
-            out.zoom < 0 && out.zoom > -100,
-            "zoom at midpoint should be between -100 and 0, got {}",
-            out.zoom
-        );
-    }
-
-    #[test]
-    fn integration_start_tick_offsets_keyframes() {
-        // When flyby starts at game_tick=100, keyframe at relative tick 5
-        // should activate at absolute tick 105, not tick 5.
-        let mut state = FlybyState::new();
-        state.angle_keyframes = vec![
-            FlybyKeyframe {
-                tick: 5,
-                value: 500,
-            },
-            FlybyKeyframe {
-                tick: 50,
-                value: 1000,
-            },
-        ];
-        state.start(100);
-
-        let defaults = FlybyCameraOutput {
-            angle_z: 0,
-            angle_x: 0,
-            zoom: 0,
-            world_x: 0,
-            world_y: 0,
-        };
-
-        // Before keyframe tick (absolute 104 < 105): should use first keyframe value
-        let out = state.update(104, &defaults).unwrap();
-        assert_eq!(out.angle_z, 500);
-
-        // At exact keyframe tick (absolute 105): should use exact value
-        let out = state.update(105, &defaults).unwrap();
-        assert_eq!(out.angle_z, 500);
-
-        // At second keyframe (absolute 150 = 100 + 50): should use 1000
-        let out = state.update(150, &defaults).unwrap();
-        assert_eq!(out.angle_z, 1000);
-
-        // After all keyframes (absolute 200 > 150): finished
-        assert!(state.update(200, &defaults).is_none());
-        assert!(state.finished);
-    }
-
-    // ---- Bug fix tests ----
-
-    #[test]
-    fn half_cell_to_cell_conversion() {
-        // Flyby positions are in half-cell coordinates (0-255 for 128x128 map).
-        // cell = half_cell / 2
-        assert_eq!(8i32 / 2, 4);
-        assert_eq!(28i32 / 2, 14);
-        assert_eq!(252i32 / 2, 126);
-        assert_eq!(254i32 / 2, 127);
-        assert_eq!(2i32 / 2, 1);
-        assert_eq!(12i32 / 2, 6);
-        assert_eq!(20i32 / 2, 10);
-        assert_eq!(216i32 / 2, 108);
-        assert_eq!(238i32 / 2, 119);
-        assert_eq!(0i32 / 2, 0);
-    }
-
-    #[test]
-    fn cell_to_shift_conversion_for_128_map() {
-        // For a 128x128 map, camera_focus_vertex ≈ 63.5, truncate to 63.
-        // shift = (cell - focus_vertex) mod 128
-        let n = 128i32;
-        let v = 63i32; // (127 * step / 2) / step = 63.5, truncated to 63
-
-        // Example from level 1: half-cell (8, 28) → cell (4, 14)
-        let cell_x = 8i32 / 2;
-        let cell_y = 28i32 / 2;
-        let sx = (cell_x - v).rem_euclid(n);
-        let sy = (cell_y - v).rem_euclid(n);
-        assert_eq!(sx, 69); // (4 - 63) % 128 = -59 % 128 = 69
-        assert_eq!(sy, 79); // (14 - 63) % 128 = -49 % 128 = 79
-
-        // Near map edge: half-cell (252, 254) → cell (126, 127)
-        let cell_x = 252i32 / 2;
-        let cell_y = 254i32 / 2;
-        let sx = (cell_x - v).rem_euclid(n);
-        let sy = (cell_y - v).rem_euclid(n);
-        assert_eq!(sx, 63); // (126 - 63) % 128 = 63
-        assert_eq!(sy, 64); // (127 - 63) % 128 = 64
-
-        // Center of map: half-cell (0, 0) → cell (0, 0)
-        let cell_x = 0i32 / 2;
-        let cell_y = 0i32 / 2;
-        let sx = (cell_x - v).rem_euclid(n);
-        let sy = (cell_y - v).rem_euclid(n);
-        assert_eq!(sx, 65); // (0 - 63) % 128 = -63 % 128 = 65
-        assert_eq!(sy, 65);
-    }
-
-    #[test]
-    fn angle_x_preserves_default_during_flyby() {
-        // angle_x (camera tilt) should preserve the current camera tilt
-        // throughout the flyby, not track angle_z keyframes.
-        let mut state = FlybyState::new();
-        state.angle_keyframes = vec![kf(0, 1072), kf(100, 0)];
-        state.start(0);
-
-        let defaults = FlybyCameraOutput {
-            angle_z: 0,
-            angle_x: -880, // -55° * 16 = -880 in 1/16th degree units
-            zoom: 0,
-            world_x: 0,
-            world_y: 0,
-        };
-
-        // At tick 50, angle_z interpolates to 536 (halfway), but angle_x
-        // should preserve the default tilt of -880, not follow angle_z.
-        let out = state.update(50, &defaults).unwrap();
-        assert_eq!(out.angle_z, 536); // interpolated from keyframes
-        assert_eq!(out.angle_x, -880); // preserved from defaults
-    }
-
-    #[test]
-    fn position_zero_zero_is_valid() {
-        // Bug fix: position (0, 0) should not be skipped.
-        // Half-cell (0, 0) → cell (0, 0) → shift (65, 65) on 128x128 map.
-        // Verify that the interpolation can produce world_x=0, world_y=0.
-        let mut state = FlybyState::new();
-        state.pos_x_keyframes = vec![kf(0, 0), kf(100, 50)];
-        state.pos_y_keyframes = vec![kf(0, 0), kf(100, 50)];
-        state.start(0);
-
-        let defaults = FlybyCameraOutput {
-            angle_z: 0,
-            angle_x: 0,
-            zoom: 0,
-            world_x: 99,
-            world_y: 99,
-        };
-
-        // At tick 0, position should be (0, 0) from first keyframe
-        let out = state.update(0, &defaults).unwrap();
-        assert_eq!(out.world_x, 0);
-        assert_eq!(out.world_y, 0);
-
-        // This should NOT be treated as "no position" — cell conversion:
-        // cell = 0/2 = 0, shift = (0 - 63) % 128 = 65
-    }
-
-    #[test]
-    fn flyby_start_with_tick_offset_applies_to_position_keyframes() {
-        // Level 1 flyby starts at game_tick 73. Relative tick 4 becomes 77.
-        let mut state = FlybyState::new();
-        state.pos_x_keyframes = vec![kf(4, 8), kf(81, 2)];
-        state.pos_y_keyframes = vec![kf(4, 28), kf(81, 28)];
-        state.angle_keyframes = vec![kf(5, 0)];
-        state.start(73);
-
-        let defaults = FlybyCameraOutput {
-            angle_z: 0,
-            angle_x: 0,
-            zoom: 0,
-            world_x: 0,
-            world_y: 0,
-        };
-
-        // At game_tick 77 (= 73 + 4), position should be (8, 28)
-        let out = state.update(77, &defaults).unwrap();
-        assert_eq!(out.world_x, 8);
-        assert_eq!(out.world_y, 28);
-
-        // At game_tick 154 (= 73 + 81), position should be (2, 28)
-        let out = state.update(154, &defaults).unwrap();
-        assert_eq!(out.world_x, 2);
-        assert_eq!(out.world_y, 28);
     }
 }

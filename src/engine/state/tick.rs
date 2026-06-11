@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use super::constants::*;
 use super::flags::GameFlags;
+use super::level_config::LevelConfig;
 use super::rng::GameRng;
 use super::state_machine::GameState;
 use super::traits::*;
@@ -86,6 +87,10 @@ pub struct GameWorld {
     /// Last tick timestamp (ms).
     /// Original: g_LastTickTime at 0x0059ac6c
     last_tick_time: u64,
+
+    /// Per-level rules from `LEVELHEADERv2.LevelFlags` (`pop.h:945-950`).
+    /// Populated from the parsed `.hdr` at level load.
+    pub level_config: LevelConfig,
 }
 
 impl GameWorld {
@@ -104,6 +109,7 @@ impl GameWorld {
             tutorial_mode: 0,
             tick_interval_ms: (TICK_BASE_MS as u64) / (speed as u64),
             last_tick_time: 0,
+            level_config: LevelConfig::default(),
         }
     }
 
@@ -112,6 +118,19 @@ impl GameWorld {
     pub fn set_game_speed(&mut self, speed: u32) {
         self.game_speed = speed.max(1);
         self.tick_interval_ms = (TICK_BASE_MS as u64) / (self.game_speed as u64);
+    }
+
+    /// Fractional game tick for per-frame animation: `game_tick` plus the
+    /// progress toward the next tick boundary, clamped to [tick, tick+1].
+    /// (`last_tick_time` is the *next* boundary after the catch-up loop.)
+    pub fn fractional_tick(&self, now_ms: u64) -> f32 {
+        if self.game_tick == 0 || self.tick_interval_ms == 0 {
+            return self.game_tick as f32;
+        }
+        let prev_boundary = self.last_tick_time.saturating_sub(self.tick_interval_ms);
+        let frac = (now_ms.saturating_sub(prev_boundary) as f32 / self.tick_interval_ms as f32)
+            .clamp(0.0, 1.0);
+        self.game_tick as f32 + frac
     }
 
     /// Drive the simulation tick loop. Called once per frame.
@@ -245,6 +264,7 @@ impl GameWorld {
             &mut self.flags,
             &mut self.tribes,
             self.player_tribe,
+            self.level_config.no_reincarnate_timer,
         );
     }
 }
@@ -283,6 +303,25 @@ mod tests {
 
     /// Shared call log for recording subsystem call order.
     type CallLog = Rc<RefCell<Vec<&'static str>>>;
+
+    #[test]
+    fn fractional_tick_interpolates_between_ticks() {
+        let mut w = GameWorld::new(20);
+        w.game_tick = 10;
+        w.tick_interval_ms = 64;
+        w.last_tick_time = 1064; // next tick boundary
+
+        // Halfway between boundaries (1000 → 1064).
+        assert!((w.fractional_tick(1032) - 10.5).abs() < 1e-4);
+        // At the previous boundary: exactly tick 10.
+        assert!((w.fractional_tick(1000) - 10.0).abs() < 1e-4);
+        // Stalled/paused past the boundary: clamps at the next tick.
+        assert!((w.fractional_tick(2000) - 11.0).abs() < 1e-4);
+
+        // First tick: no interpolation.
+        w.game_tick = 0;
+        assert!((w.fractional_tick(500) - 0.0).abs() < 1e-4);
+    }
 
     /// Create a NoOp subsystems bundle for tests that don't care about call order.
     fn noop_subs() -> (NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp, NoOp) {

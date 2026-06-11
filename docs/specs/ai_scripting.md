@@ -543,18 +543,27 @@ Each tribe has 5 query functions (20 total):
 
 ### Flyby/Cinematic Functions
 
+Script2 opcodes `0x4b5`–`0x4be` in `AI_ExecuteScriptCommand`. Arg counts and
+semantics verified against the binary handlers (see `re_meta.md` → Flyby).
+Each `SET_EVENT_*` queues a channel event: at `start_tick` (relative to
+`FLYBY_START`) the channel begins animating from its *current* value to the
+target, arriving `duration` ticks later. Positions are half-cells snapped to
+cell centers (`(v & 0xfe) + 1`) with shortest toroidal-path deltas; angles
+are 2048 units/turn with shortest-path rotation; the zoom handler stores
+`(zoom << 8) / -100`.
+
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `FLYBY_CREATE_NEW` | `() -> i32` | Create new flyby |
-| `FLYBY_SET_EVENT_POS` | `(x: i32, y: i32, z: i32) -> i32` | Set event position |
-| `FLYBY_SET_EVENT_ANGLE` | `(angle: i32) -> i32` | Set event angle |
-| `FLYBY_SET_EVENT_ZOOM` | `(zoom: i32) -> i32` | Set event zoom |
-| `FLYBY_SET_EVENT_INT_POINT` | `(x: i32, y: i32, z: i32) -> i32` | Set interest point |
-| `FLYBY_SET_EVENT_TOOLTIP` | `(text: i32) -> i32` | Set tooltip text |
-| `FLYBY_SET_END_TARGET` | `(target: i32) -> i32` | Set end target |
-| `FLYBY_START` | `() -> i32` | Start flyby |
-| `FLYBY_STOP` | `() -> i32` | Stop flyby |
-| `FLYBY_ALLOW_INTERRUPT` | `(allow: i32) -> i32` | Allow interrupt |
+| `FLYBY_CREATE_NEW` | `() -> i32` | Reset flyby state (clears event queue) |
+| `FLYBY_SET_EVENT_POS` | `(x, y, start_tick, duration)` | Queue camera move to half-cell (x,y) |
+| `FLYBY_SET_EVENT_ANGLE` | `(angle, start_tick, duration)` | Queue yaw rotation (2048 units/turn) |
+| `FLYBY_SET_EVENT_ZOOM` | `(zoom, start_tick, duration)` | Queue zoom change |
+| `FLYBY_SET_EVENT_INT_POINT` | `(a, b, start_tick, duration)` | Queue interest-point event (channel 4) |
+| `FLYBY_SET_EVENT_TOOLTIP` | `(id, tick, flag, x, y)` | Queue tooltip during flyby |
+| `FLYBY_SET_END_TARGET` | `(x, y, angle, flag)` | Final camera pose after playback |
+| `FLYBY_START` | `() -> i32` | Begin playback (camera seeds from current state) |
+| `FLYBY_STOP` | `() -> i32` | Stop playback |
+| `FLYBY_ALLOW_INTERRUPT` | `(allow: i32) -> i32` | Allow user input to skip |
 | `FLYBY_DISALLOW_INTERRUPT` | `() -> i32` | Disallow interrupt |
 
 ### Message/UI System

@@ -15,7 +15,6 @@ use std::rc::Rc;
 use super::state::traits::AiTick;
 use building_ai::AiBuildingPlacement;
 use difficulty::DifficultyScaling;
-use flyby::{FlybyEndTarget, FlybyKeyframe, FlybyTooltip};
 use shaman_cmd::ShamanCommandQueue;
 
 /// Data bridge between Rust game state and Lua PopScript functions.
@@ -245,14 +244,17 @@ pub enum FlybyEventKind {
         x: i16,
         y: i16,
         tick: u32,
+        duration: u32,
     },
     SetEventAngle {
         angle: i16,
         tick: u32,
+        duration: u32,
     },
     SetEventZoom {
         zoom: i16,
         tick: u32,
+        duration: u32,
     },
     SetEventIntPoint {
         int_point: i32,
@@ -414,19 +416,21 @@ impl AiSystem {
         &self.bridge
     }
 
-    /// Clone pending commands from bridge for dispatch.
-    /// Commands remain in bridge and are cleared by update_bridge at start of next tick.
+    /// Take pending commands from the bridge for dispatch. The queues are
+    /// emptied here (not in update_bridge) so that commands queued by
+    /// earlier ticks of a multi-tick catch-up frame aren't lost before the
+    /// once-per-frame dispatch runs.
     pub fn drain_pending_commands(&self) -> AiPendingCommands {
-        let bridge = self.bridge.borrow();
+        let mut bridge = self.bridge.borrow_mut();
         AiPendingCommands {
-            attacks: bridge.pending_attacks.clone(),
-            builds: bridge.pending_builds.clone(),
-            spells: bridge.pending_spells.clone(),
-            trains: bridge.pending_trains.clone(),
-            moves: bridge.pending_moves.clone(),
-            converts: bridge.pending_convert.clone(),
-            shaman_moves: bridge.pending_shaman_move.clone(),
-            flyby_events: bridge.pending_flyby_events.clone(),
+            attacks: std::mem::take(&mut bridge.pending_attacks),
+            builds: std::mem::take(&mut bridge.pending_builds),
+            spells: std::mem::take(&mut bridge.pending_spells),
+            trains: std::mem::take(&mut bridge.pending_trains),
+            moves: std::mem::take(&mut bridge.pending_moves),
+            converts: std::mem::take(&mut bridge.pending_convert),
+            shaman_moves: std::mem::take(&mut bridge.pending_shaman_move),
+            flyby_events: std::mem::take(&mut bridge.pending_flyby_events),
         }
     }
 
@@ -514,6 +518,31 @@ impl AiSystem {
         self.bridge.borrow().marker_entries.clone()
     }
 
+    /// Populate the bridge with markers from the level header (`pop.h:1028`
+    /// `Markers[256]`). Called once at level load — scripts may later add
+    /// additional entries via `SET_MARKER_ENTRY`.
+    ///
+    /// Each filled slot in `level_markers` becomes a `MarkerEntry` whose
+    /// `marker` field is the slot index (matches PopScript marker ids) and
+    /// whose `x`/`y` are the decoded cell coordinates (0..=127). Unset slots
+    /// (raw value 0 in the HDR) are skipped.
+    pub fn set_level_markers(&mut self, level_markers: &[crate::data::level::MarkerCell; 256]) {
+        let mut bridge = self.bridge.borrow_mut();
+        // Drop any leftover HDR markers from the previous level; preserve
+        // script-set markers (which would have ids outside 0..256 typically,
+        // but we can't reliably distinguish — clearing is simpler at level boundary).
+        bridge.marker_entries.clear();
+        for (slot, decoded) in level_markers.iter().enumerate() {
+            if let Some((cx, cy)) = decoded {
+                bridge.marker_entries.push(MarkerEntry {
+                    marker: slot as i32,
+                    x: *cx as i32,
+                    y: *cy as i32,
+                });
+            }
+        }
+    }
+
     /// Populate the AiGameBridge with current game state before AI tick.
     /// Must be called each tick BEFORE tick_update_ai so PopScript functions
     /// read fresh values.
@@ -533,17 +562,12 @@ impl AiSystem {
         bridge.tribe_mana = tribe_mana;
         bridge.tribe_active = tribe_active;
         bridge.tribe_num_buildings = tribe_num_buildings;
-        // Clear pending commands from previous tick
-        bridge.pending_attacks.clear();
-        bridge.pending_builds.clear();
-        bridge.pending_spells.clear();
-        bridge.pending_trains.clear();
-        bridge.pending_moves.clear();
+        // Dispatched command queues are emptied by drain_pending_commands
+        // (once per frame), not here — clearing them per tick would drop
+        // commands queued by earlier ticks of a catch-up frame.
+        // pray/cleanup have no consumer yet; clear them to bound growth.
         bridge.pending_pray.clear();
         bridge.pending_cleanup.clear();
-        bridge.pending_convert.clear();
-        bridge.pending_shaman_move.clear();
-        bridge.pending_flyby_events.clear();
     }
 
     /// How many tribes have scripts loaded.
@@ -666,6 +690,40 @@ mod tests {
         let system = AiSystem::new().unwrap();
         let result: i32 = system.lua.load("return 1+1").eval().unwrap();
         assert_eq!(result, 2);
+    }
+
+    #[test]
+    fn set_level_markers_populates_only_filled_slots() {
+        let mut system = AiSystem::new().unwrap();
+        let mut markers: [crate::data::level::MarkerCell; 256] = [None; 256];
+        markers[3] = Some((42, 17));
+        markers[5] = Some((10, 100));
+        // gap at slot 4 - must not produce an entry
+        system.set_level_markers(&markers);
+
+        let entries = system.marker_entries();
+        assert_eq!(entries.len(), 2, "only filled slots become entries");
+        let m3 = entries.iter().find(|e| e.marker == 3).unwrap();
+        assert_eq!((m3.x, m3.y), (42, 17));
+        let m5 = entries.iter().find(|e| e.marker == 5).unwrap();
+        assert_eq!((m5.x, m5.y), (10, 100));
+    }
+
+    #[test]
+    fn set_level_markers_clears_previous_level_markers() {
+        let mut system = AiSystem::new().unwrap();
+        let mut first: [crate::data::level::MarkerCell; 256] = [None; 256];
+        first[1] = Some((1, 1));
+        system.set_level_markers(&first);
+        assert_eq!(system.marker_entries().len(), 1);
+
+        let mut second: [crate::data::level::MarkerCell; 256] = [None; 256];
+        second[2] = Some((2, 2));
+        system.set_level_markers(&second);
+
+        let entries = system.marker_entries();
+        assert_eq!(entries.len(), 1, "previous level's markers must be dropped");
+        assert_eq!(entries[0].marker, 2);
     }
 
     #[test]
@@ -826,8 +884,19 @@ mod tests {
     }
 
     #[test]
-    fn update_bridge_clears_pending_commands() {
+    fn pending_commands_survive_catchup_ticks_until_drained() {
+        // The app drains commands once per frame, but a catch-up frame can
+        // run several ticks (each calling update_bridge) before the drain.
+        // Commands queued by earlier ticks in the batch must survive, or
+        // one-shot commands like the level-1 intro flyby are silently lost.
         let mut system = AiSystem::new().unwrap();
+        system
+            .bridge
+            .borrow_mut()
+            .pending_flyby_events
+            .push(FlybyEvent {
+                kind: FlybyEventKind::CreateNew,
+            });
         system
             .bridge
             .borrow_mut()
@@ -839,9 +908,19 @@ mod tests {
                 attack_type: 0,
                 marker: None,
             });
-        assert_eq!(system.bridge.borrow().pending_attacks.len(), 1);
-        system.update_bridge(0, 0, [0; 4], [0; 4], [false; 4], [0; 4]);
-        assert_eq!(system.bridge.borrow().pending_attacks.len(), 0);
+
+        // Next tick in the same frame syncs the bridge again…
+        system.update_bridge(74, 0, [0; 4], [0; 4], [false; 4], [0; 4]);
+
+        // …but the undrained commands are still there.
+        let cmds = system.drain_pending_commands();
+        assert_eq!(cmds.flyby_events.len(), 1);
+        assert_eq!(cmds.attacks.len(), 1);
+
+        // Draining consumes them: the next frame sees nothing.
+        let cmds = system.drain_pending_commands();
+        assert!(cmds.flyby_events.is_empty());
+        assert!(cmds.attacks.is_empty());
     }
 
     #[test]
@@ -956,7 +1035,8 @@ mod tests {
             kind: FlybyEventKind::SetEventPos {
                 x: 8,
                 y: 28,
-                tick: 252,
+                tick: 4,
+                duration: 80,
             },
         };
         assert!(
@@ -970,7 +1050,7 @@ mod tests {
     }
 
     #[test]
-    fn bridge_stores_and_clears_flyby_events() {
+    fn bridge_stores_flyby_events_until_drained() {
         let mut system = AiSystem::new().unwrap();
         system
             .bridge
@@ -988,8 +1068,12 @@ mod tests {
             });
         assert_eq!(system.bridge.borrow().pending_flyby_events.len(), 2);
 
-        // update_bridge clears pending commands
+        // update_bridge (next tick) must not clear undrained events;
+        // only drain_pending_commands consumes them.
         system.update_bridge(0, 0, [0; 4], [0; 4], [false; 4], [0; 4]);
+        assert_eq!(system.bridge.borrow().pending_flyby_events.len(), 2);
+        let cmds = system.drain_pending_commands();
+        assert_eq!(cmds.flyby_events.len(), 2);
         assert_eq!(system.bridge.borrow().pending_flyby_events.len(), 0);
     }
 
@@ -1003,7 +1087,8 @@ mod tests {
             .push(FlybyEvent {
                 kind: FlybyEventKind::SetEventAngle {
                     angle: 1072,
-                    tick: 252,
+                    tick: 46,
+                    duration: 40,
                 },
             });
         let cmds = system.drain_pending_commands();

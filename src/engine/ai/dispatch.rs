@@ -3,7 +3,7 @@
 // Replaces the log-only handlers in app.rs with actual unit movement,
 // building placement queuing, training initiation, and spell TODO markers.
 
-use super::flyby::{FlybyEndTarget, FlybyKeyframe, FlybyState, FlybyTooltip};
+use super::flyby::{FlybyEndTarget, FlybyState, FlybyTooltip};
 use super::{
     target::score_person_target, AiPendingCommands, AiSystem, FlybyEvent, FlybyEventKind,
     MarkerEntry,
@@ -229,27 +229,30 @@ pub fn build_flyby_state_from_events(events: &[FlybyEvent], game_tick: u32) -> V
                 state = FlybyState::new();
                 created = true;
             }
-            FlybyEventKind::SetEventPos { x, y, tick } => {
-                state.pos_x_keyframes.push(FlybyKeyframe {
-                    tick: *tick,
-                    value: *x,
-                });
-                state.pos_y_keyframes.push(FlybyKeyframe {
-                    tick: *tick,
-                    value: *y,
-                });
+            FlybyEventKind::SetEventPos {
+                x,
+                y,
+                tick,
+                duration,
+            } => {
+                // The original snaps pos targets to cell centers:
+                // (byte & 0xfe) + 1 half-cells (FUN_004daf50).
+                state.pos_x.push_event(*tick, (x & !1) + 1, *duration);
+                state.pos_y.push_event(*tick, (y & !1) + 1, *duration);
             }
-            FlybyEventKind::SetEventAngle { angle, tick } => {
-                state.angle_keyframes.push(FlybyKeyframe {
-                    tick: *tick,
-                    value: *angle,
-                });
+            FlybyEventKind::SetEventAngle {
+                angle,
+                tick,
+                duration,
+            } => {
+                state.angle.push_event(*tick, *angle, *duration);
             }
-            FlybyEventKind::SetEventZoom { zoom, tick } => {
-                state.zoom_keyframes.push(FlybyKeyframe {
-                    tick: *tick,
-                    value: *zoom,
-                });
+            FlybyEventKind::SetEventZoom {
+                zoom,
+                tick,
+                duration,
+            } => {
+                state.zoom.push_event(*tick, *zoom, *duration);
             }
             FlybyEventKind::SetEventIntPoint { .. } => {}
             FlybyEventKind::SetEventTooltip { tooltip_id, tick } => {
@@ -551,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn build_flyby_state_with_keyframes() {
+    fn build_flyby_state_with_channel_events() {
         let events = vec![
             FlybyEvent {
                 kind: FlybyEventKind::CreateNew,
@@ -561,18 +564,21 @@ mod tests {
                     x: 8,
                     y: 28,
                     tick: 0,
+                    duration: 80,
                 },
             },
             FlybyEvent {
                 kind: FlybyEventKind::SetEventAngle {
                     angle: 1072,
                     tick: 0,
+                    duration: 40,
                 },
             },
             FlybyEvent {
                 kind: FlybyEventKind::SetEventZoom {
                     zoom: -500,
                     tick: 0,
+                    duration: 35,
                 },
             },
             FlybyEvent {
@@ -588,10 +594,44 @@ mod tests {
             GameCommand::StartFlyby(state) => {
                 assert!(state.active);
                 assert!(state.allow_interrupt);
-                assert_eq!(state.pos_x_keyframes.len(), 1);
-                assert_eq!(state.pos_x_keyframes[0].value, 8);
-                assert_eq!(state.angle_keyframes[0].value, 1072);
-                assert_eq!(state.zoom_keyframes[0].value, -500);
+                assert_eq!(state.pos_x.events.len(), 1);
+                // pos targets snap to cell centers: 8 → 9 half-cells
+                assert_eq!(state.pos_x.events[0].target, 9);
+                assert_eq!(state.pos_x.events[0].duration, 80);
+                assert_eq!(state.angle.events[0].target, 1072);
+                assert_eq!(state.zoom.events[0].target, -500);
+            }
+            other => panic!("expected StartFlyby, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn flyby_pos_targets_snap_to_cell_centers() {
+        // The original's pos activation (FUN_004daf50) snaps each coordinate
+        // byte with `& 0xfe` then adds one half-cell: targets are cell
+        // centers. Level 1: POS(8,28) → half-cells (9,29) = orig cell
+        // (4.5,14.5), exactly the tribe-1 shaman the first orbit circles.
+        let events = vec![
+            FlybyEvent {
+                kind: FlybyEventKind::CreateNew,
+            },
+            FlybyEvent {
+                kind: FlybyEventKind::SetEventPos {
+                    x: 8,
+                    y: 28,
+                    tick: 4,
+                    duration: 80,
+                },
+            },
+            FlybyEvent {
+                kind: FlybyEventKind::Start,
+            },
+        ];
+        let commands = build_flyby_state_from_events(&events, 0);
+        match &commands[0] {
+            GameCommand::StartFlyby(state) => {
+                assert_eq!(state.pos_x.events[0].target, 9);
+                assert_eq!(state.pos_y.events[0].target, 29);
             }
             other => panic!("expected StartFlyby, got {:?}", other),
         }

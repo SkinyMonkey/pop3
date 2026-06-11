@@ -185,6 +185,9 @@ pub struct GameEngine {
 
     // Flyby camera (active during intro cinematics)
     flyby: Option<FlybyState>,
+    /// Sub-cell camera focus offset in grid cells, set by the flyby for
+    /// smooth panning (the landscape shift only has whole-cell resolution).
+    focus_frac: (f32, f32),
 
     // Level data
     level_objects: Vec<LevelObject>,
@@ -192,6 +195,12 @@ pub struct GameEngine {
     scenery_objects: Vec<Option<Object3D>>,  // from level-specific OBJS bank (scenery models)
     shapes: Vec<Shape>,
     shape_footprints: ShapeFootprints,
+    /// PLAYERSAVEINFO start positions per tribe (from `.dat`). Used as
+    /// fallback camera centring when no shaman has spawned yet.
+    player_starts: [crate::data::units::PlayerSaveInfo; 4],
+    /// Decoded markers from `.hdr` (`pop.h:1028`), 256 slots indexed by
+    /// PopScript marker id. AI bridge consumer.
+    level_markers: [crate::data::level::MarkerCell; 256],
 
     // Water animation
     wat_offset: i32,
@@ -214,7 +223,21 @@ impl GameEngine {
         self.camera.angle_x = -55;
         self.camera.angle_y = 0;
         self.camera.angle_z = 0;
+        self.camera.angle_z_frac = 0.0;
         self.zoom = 1.0;
+        self.focus_frac = (0.0, 0.0);
+    }
+
+    /// Camera focus point in world space: terrain center plus the sub-cell
+    /// flyby offset.
+    fn world_focus(&self) -> Vector3<f32> {
+        let center = self.world_center();
+        let s = LANDSCAPE_SCALE * self.landscape_mesh.step();
+        Vector3::new(
+            center + self.focus_frac.0 * s,
+            center + self.focus_frac.1 * s,
+            0.0,
+        )
     }
 
     fn build_landscape_params(&self) -> LandscapeUniformData {
@@ -240,7 +263,11 @@ impl GameEngine {
             camera_focus: {
                 let center =
                     (self.landscape_mesh.width() - 1) as f32 * self.landscape_mesh.step() / 2.0;
-                [center, center]
+                let step = self.landscape_mesh.step();
+                [
+                    center + self.focus_frac.0 * step,
+                    center + self.focus_frac.1 * step,
+                ]
             },
             viewport_radius: {
                 let center =
@@ -285,8 +312,7 @@ impl GameEngine {
     }
 
     fn screen_to_cell(&self, mouse_pos: &Point2<f32>) -> Option<(f32, f32)> {
-        let center = self.world_center();
-        let focus = Vector3::new(center, center, 0.0);
+        let focus = self.world_focus();
         let min_z = self.camera_min_z();
         let (v1, v2) = screen_to_scene_zoom(
             &self.screen,
@@ -315,8 +341,7 @@ impl GameEngine {
     }
 
     fn unit_pvm(&self) -> Matrix4<f32> {
-        let center = self.world_center();
-        let focus = Vector3::new(center, center, 0.0);
+        let focus = self.world_focus();
         let min_z = self.camera_min_z();
         let mvp = MVP::with_zoom(&self.screen, &self.camera, self.zoom, focus, min_z);
         let model_transform =
@@ -728,6 +753,18 @@ impl GameEngine {
     /// Process a game command. Returns true if the renderer needs to redraw.
     /// Sets dirty flags for specific rebuilds.
     fn apply_command(&mut self, cmd: &GameCommand) -> bool {
+        // FLYBY_ALLOW_INTERRUPT: user camera input skips the flyby.
+        if command_interrupts_flyby(cmd) {
+            if let Some(flyby) = &mut self.flyby {
+                if flyby.active && flyby.allow_interrupt {
+                    flyby.interrupt();
+                    self.flyby = None;
+                    self.camera.angle_z_frac = 0.0;
+                    self.focus_frac = (0.0, 0.0);
+                    log::info!("Flyby interrupted by user input");
+                }
+            }
+        }
         match cmd {
             GameCommand::RotateCamera { delta_z } => {
                 self.camera.angle_z += delta_z;
@@ -895,12 +932,29 @@ impl GameEngine {
             }
             GameCommand::Quit => true,
             GameCommand::StartFlyby(ref state) => {
-                self.flyby = Some(state.clone());
+                let mut flyby = state.clone();
+                let n = self.landscape_mesh.width() as i32;
+                flyby.set_pos_modulus(2 * n);
+                // Channels animate from the camera's current state, like the
+                // original (FUN_004daf50/FUN_004db200 read the live camera).
+                let focus_vertex = self.camera_focus_vertex();
+                let shift = self.landscape_mesh.get_shift_vector();
+                let (wx, wy) = shift_to_flyby_pos(shift.x as i32, shift.y as i32, n, focus_vertex);
+                flyby.set_initial(&crate::engine::ai::flyby::FlybyCameraOutput {
+                    angle_z: deg_to_flyby_angle(self.camera.angle_z),
+                    angle_x: 0,
+                    zoom: factor_to_flyby_zoom(self.zoom),
+                    world_x: wx,
+                    world_y: wy,
+                });
+                self.flyby = Some(flyby);
                 log::info!("Flyby started at tick {}", state.start_tick);
                 true
             }
             GameCommand::StopFlyby => {
                 self.flyby = None;
+                self.camera.angle_z_frac = 0.0;
+                self.focus_frac = (0.0, 0.0);
                 log::info!("Flyby stopped");
                 true
             }
@@ -1177,6 +1231,104 @@ fn toroidal_delta(from: usize, to: usize, n: usize) -> i32 {
     }
 }
 
+/******************************************************************************/
+// Flyby coordinate mapping.
+//
+// Flyby script positions are half-cells in the *original* game's world axes.
+// The renderer's map is that world rotated 90°: renderer_x = orig_y,
+// renderer_y = (n-1) - orig_x (the same mapping used by
+// sprites::extract_all_unit_cells). Original angles are 2048 units per full
+// turn (sin/cos LUTs indexed `& 0x7ff`); the map rotation adds a constant
+// +90° to the renderer yaw.
+
+/// Renderer yaw offset caused by the 90° map rotation.
+const FLYBY_YAW_OFFSET_DEG: f32 = 90.0;
+
+/// Original flyby zoom accumulator clamps to ±0x2000 before `>>3`,
+/// i.e. ±1024 zoom units around the default.
+const FLYBY_ZOOM_UNITS: f32 = 1024.0;
+
+/// Convert a flyby half-cell position to a landscape shift plus the
+/// sub-cell remainder in grid cells. `focus_vertex` is the renderer's
+/// screen-center vertex (63.5 for a 128 map, see camera_focus_vertex);
+/// shift + frac + focus_vertex ≡ target renderer cell (mod n). The original
+/// camera works in world units (512 per cell), so whole-cell quantization
+/// would be 512× coarser than the original.
+fn flyby_pos_to_shift_frac(
+    world_x: f32,
+    world_y: f32,
+    n: i32,
+    focus_vertex: f32,
+) -> ((usize, usize), (f32, f32)) {
+    let nf = n as f32;
+    let rend_x = world_y / 2.0;
+    let rend_y = (nf - 1.0) - world_x / 2.0;
+    let sx = (rend_x - focus_vertex).rem_euclid(nf);
+    let sy = (rend_y - focus_vertex).rem_euclid(nf);
+    (
+        (sx.floor() as usize % n as usize, sy.floor() as usize % n as usize),
+        (sx.fract(), sy.fract()),
+    )
+}
+
+/// Inverse of `flyby_pos_to_shift_frac` for whole shifts: current shift →
+/// flyby half-cell position of the cell at screen center.
+fn shift_to_flyby_pos(sx: i32, sy: i32, n: i32, focus_vertex: f32) -> (i16, i16) {
+    let nf = n as f32;
+    let rend_x = (sx as f32 + focus_vertex).rem_euclid(nf);
+    let rend_y = (sy as f32 + focus_vertex).rem_euclid(nf);
+    let orig_x = (nf - 1.0) - rend_y;
+    let orig_y = rend_x;
+    ((orig_x * 2.0).round() as i16, (orig_y * 2.0).round() as i16)
+}
+
+/// User camera input skips an interruptible flyby (FLYBY_ALLOW_INTERRUPT).
+fn command_interrupts_flyby(cmd: &GameCommand) -> bool {
+    matches!(
+        cmd,
+        GameCommand::RotateCamera { .. }
+            | GameCommand::TiltCamera { .. }
+            | GameCommand::PanScreen { .. }
+            | GameCommand::PanTerrain { .. }
+            | GameCommand::ResetCamera
+            | GameCommand::TopDownView
+            | GameCommand::CenterOnShaman
+            | GameCommand::SetZoom(_)
+    )
+}
+
+/// Convert a flyby angle (2048 units/turn) to renderer yaw degrees.
+fn flyby_angle_to_deg_f(units: f32) -> f32 {
+    (units * 360.0 / crate::engine::ai::flyby::FLYBY_ANGLE_MODULUS as f32 + FLYBY_YAW_OFFSET_DEG)
+        .rem_euclid(360.0)
+}
+
+/// Whole-degree variant of `flyby_angle_to_deg_f`.
+fn flyby_angle_to_deg(units: i16) -> i16 {
+    flyby_angle_to_deg_f(units as f32).round() as i16
+}
+
+/// Inverse of `flyby_angle_to_deg`: renderer yaw degrees → flyby angle units.
+fn deg_to_flyby_angle(deg: i16) -> i16 {
+    let m = crate::engine::ai::flyby::FLYBY_ANGLE_MODULUS as f32;
+    ((deg as f32 - FLYBY_YAW_OFFSET_DEG) * m / 360.0).rem_euclid(m).round() as i16
+}
+
+/// Convert flyby zoom units (±1024 around 0) to the renderer zoom factor.
+fn flyby_zoom_to_factor_f(units: f32) -> f32 {
+    (1.0 + units / FLYBY_ZOOM_UNITS).clamp(0.3, 5.0)
+}
+
+/// Whole-unit variant of `flyby_zoom_to_factor_f`.
+fn flyby_zoom_to_factor(units: i16) -> f32 {
+    flyby_zoom_to_factor_f(units as f32)
+}
+
+/// Inverse of `flyby_zoom_to_factor`.
+fn factor_to_flyby_zoom(factor: f32) -> i16 {
+    ((factor - 1.0) * FLYBY_ZOOM_UNITS).round() as i16
+}
+
 impl App {
     pub fn new(config: AppConfig) -> Self {
         let camera = Camera::new();
@@ -1252,11 +1404,17 @@ impl App {
                     }
                 },
                 flyby: None,
+                focus_frac: (0.0, 0.0),
                 level_objects: Vec::new(),
                 building_objects: Vec::new(),
                 scenery_objects: Vec::new(),
                 shapes: Vec::new(),
                 shape_footprints: ShapeFootprints::empty(),
+                player_starts: [crate::data::units::PlayerSaveInfo {
+                    start_pos_x: 0, start_pos_y: 0,
+                    _future1: 0, _future2: 0, _future3: 0,
+                }; 4],
+                level_markers: [None; 256],
                 wat_offset: -1,
                 wat_interval: 5000,
                 frame_count: 0,
@@ -1335,12 +1493,19 @@ impl App {
     }
 
     fn center_on_tribe0_shaman(&mut self) {
+        // Center on the *player's* tribe shaman (was hardcoded to tribe 0 before;
+        // player_tribe is now read from the loaded level header).
+        let player_tribe = self.engine.game_world.player_tribe;
         let shaman_cell = self
             .unit_renders
             .iter()
             .find(|ur| ur.subtype == PERSON_SUBTYPE_SHAMAN)
-            .and_then(|ur| ur.cells.iter().find(|c| c.tribe_index == 0));
-        let shaman_pos = shaman_cell.map(|c| (c.cell_x, c.cell_y));
+            .and_then(|ur| ur.cells.iter().find(|c| c.tribe_index == player_tribe));
+        let shaman_pos = shaman_cell.map(|c| (c.cell_x, c.cell_y))
+            // Fallback: PLAYERSAVEINFO start position from the level header
+            // (used when no shaman has been placed yet — e.g. an empty editor level).
+            .or_else(|| self.engine.player_starts.get(player_tribe as usize)
+                .map(|p| (p.start_pos_x as f32, p.start_pos_y as f32)));
         if let Some((cx, cy)) = shaman_pos {
             let n = self.engine.landscape_mesh.width() as i32;
             let v = self.engine.camera_focus_vertex() as i32;
@@ -1402,17 +1567,21 @@ impl App {
         }
     }
 
-    /// Update camera from active flyby state, if any.
-    /// When a flyby is active, camera angle/zoom/position are overridden
-    /// by the interpolated flyby keyframes each tick.
+    /// Update camera from active flyby state, if any. Called once per
+    /// rendered frame: keyframes are evaluated at a fractional game tick and
+    /// applied with sub-cell/sub-degree precision, matching the original's
+    /// world-unit camera resolution (512 units per cell).
     fn tick_flyby_camera(&mut self) {
         let game_tick = self.engine.game_world.game_tick;
-        // Extract engine values before borrowing flyby to avoid borrow conflicts.
-        let camera_angle_z = self.engine.camera.angle_z;
-        let camera_angle_x = self.engine.camera.angle_x;
-        let focus_vertex = self.engine.camera_focus_vertex() as i32;
+        let focus_vertex = self.engine.camera_focus_vertex();
         let map_width = self.engine.landscape_mesh.width() as i32;
         let old_shift = self.engine.landscape_mesh.get_shift_vector();
+        let tick_f = {
+            use crate::engine::state::tick::TimeSource;
+            self.engine
+                .game_world
+                .fractional_tick(self.engine.game_time.now_ms())
+        };
 
         // Take the flyby out of self.engine to avoid borrow conflicts.
         let mut flyby_opt = self.engine.flyby.take();
@@ -1420,26 +1589,7 @@ impl App {
             if !flyby.active {
                 None
             } else {
-                let scale = crate::engine::ai::flyby::FLYBY_ANGLE_SCALE;
-                let defaults = crate::engine::ai::flyby::FlybyCameraOutput {
-                    angle_z: (camera_angle_z as f32 * scale).round() as i16,
-                    angle_x: (camera_angle_x as f32 * scale).round() as i16,
-                    zoom: 0,
-                    world_x: 0,
-                    world_y: 0,
-                };
-                let start_tick = flyby.start_tick;
-                let max_tick = flyby
-                    .angle_keyframes
-                    .iter()
-                    .chain(flyby.zoom_keyframes.iter())
-                    .chain(flyby.pos_x_keyframes.iter())
-                    .chain(flyby.pos_y_keyframes.iter())
-                    .map(|kf| kf.tick)
-                    .max()
-                    .unwrap_or(start_tick);
-                let output = flyby.update(game_tick, &defaults);
-                Some((output, start_tick, max_tick))
+                Some(flyby.update_f(tick_f))
             }
         } else {
             // Put it back and return.
@@ -1448,51 +1598,59 @@ impl App {
         };
 
         match result {
-            Some((Some(output), start_tick, max_tick)) => {
-                let scale = crate::engine::ai::flyby::FLYBY_ANGLE_SCALE;
-                self.engine.camera.angle_z = (output.angle_z as f32 / scale).round() as i16;
-                self.engine.camera.angle_x = (output.angle_x as f32 / scale).round() as i16;
+            Some(Some(output)) => {
+                // angle_x (tilt) is not keyframed by flybys — leave it alone.
+                let deg = flyby_angle_to_deg_f(output.angle_z);
+                self.engine.camera.angle_z = deg.floor() as i16;
+                self.engine.camera.angle_z_frac = deg.fract();
+                self.engine.zoom = flyby_zoom_to_factor_f(output.zoom);
 
-                // Flyby positions are in half-cell coordinates (0-255 for a
-                // 128x128 map). Convert to cell coords, then to landscape
-                // shift using the same formula as center_on_tribe0_shaman():
-                //   shift = (cell - camera_focus_vertex) mod N
-                let cell_x = output.world_x as i32 / 2;
-                let cell_y = output.world_y as i32 / 2;
-                let new_sx = (cell_x - focus_vertex).rem_euclid(map_width) as usize;
-                let new_sy = (cell_y - focus_vertex).rem_euclid(map_width) as usize;
-
+                let ((new_sx, new_sy), frac) = flyby_pos_to_shift_frac(
+                    output.world_x,
+                    output.world_y,
+                    map_width,
+                    focus_vertex,
+                );
                 self.engine.landscape_mesh.set_shift(new_sx, new_sy);
+                self.engine.focus_frac = frac;
 
-                // Log every 10 ticks to trace the camera path
-                if (game_tick - start_tick) % 10 == 0 || game_tick == start_tick + 1 {
-                    let progress =
-                        (game_tick - start_tick) as f32 / (max_tick - start_tick).max(1) as f32;
-                    log::info!(
-                        "[flyby] tick={} progress={:.0}% pos=({},{}) cell=({},{}) \
-                         shift=({},{})→({},{}) angle_z={:.1}° angle_x={:.1}° zoom={}",
-                        game_tick,
-                        progress * 100.0,
-                        output.world_x,
-                        output.world_y,
-                        cell_x,
-                        cell_y,
-                        old_shift.x,
-                        old_shift.y,
-                        new_sx,
-                        new_sy,
-                        output.angle_z as f32 / scale,
-                        output.angle_x as f32 / scale,
-                        output.zoom,
-                    );
+                log::debug!(
+                    "[flyby] tick={:.2} pos=({:.1},{:.1}) shift=({},{})+({:.2},{:.2}) \
+                     angle_z={:.1}° zoom={:.1}",
+                    tick_f,
+                    output.world_x,
+                    output.world_y,
+                    new_sx,
+                    new_sy,
+                    frac.0,
+                    frac.1,
+                    deg,
+                    output.zoom,
+                );
+
+                // Put flyby back if still playing (update_f emits one final
+                // output the moment it finishes).
+                let finished = flyby_opt.as_ref().is_some_and(|f| f.finished);
+                if finished {
+                    log::info!("Flyby finished at tick {}", game_tick);
+                } else {
+                    self.engine.flyby = flyby_opt;
                 }
 
-                // Put flyby back (still active)
-                self.engine.flyby = flyby_opt;
+                // Sprites/buildings bake the integer shift into their vertex
+                // data; rebuild them when the flyby crosses a cell boundary
+                // or they'd lag the terrain (visible flicker).
+                if old_shift.x as usize != new_sx || old_shift.y as usize != new_sy {
+                    self.rebuild_spawn_model();
+                }
                 self.do_render = true;
             }
-            Some((None, ..)) => {
+            Some(None) => {
                 log::info!("Flyby finished at tick {}", game_tick);
+                // Snap the sub-cell/sub-degree remainders; the flyby is done.
+                self.engine.camera.angle_z_frac = 0.0;
+                self.engine.focus_frac = (0.0, 0.0);
+                self.do_render = true;
                 // Don't put flyby back — it's finished.
             }
             None => {
@@ -1543,6 +1701,19 @@ impl App {
 
         // Rebuild unit cells and object markers
         self.engine.level_objects = extract_level_objects(&level_res);
+
+        // Stash level-static data the engine needs after the LevelRes is dropped.
+        self.engine.player_starts = level_res.player_starts;
+        self.engine.level_markers = level_res.header.markers;
+        self.engine.game_world.level_config =
+            crate::engine::state::level_config::LevelConfig::from_flags(level_res.header.level_flags);
+
+        // Hand decoded markers to the AI bridge so PopScript ATTACK_MARKER /
+        // SET_BASE_MARKER / GUARD_AT_MARKER / MOVE_SHAMAN_TO_MARKER commands
+        // can resolve marker ids back to cell coordinates.
+        if let Some(ref mut ai) = self.engine.ai_system {
+            ai.set_level_markers(&level_res.header.markers);
+        }
 
         // Extract person units into the coordinator (they become live entities)
         self.engine.unit_coordinator.load_level(
@@ -2188,7 +2359,8 @@ impl App {
     /// Look up the OBJS footprint index for a level object.
     /// Returns the SHAPES.DAT index from the OBJS entry's fp_idx[rotation].
     fn obj_footprint_idx(&self, obj: &LevelObject) -> Option<usize> {
-        let idx = object_3d_index(&obj.model_type, obj.subtype, obj.tribe_index)?;
+        let owner = if obj.tribe_index < 4 { Some(obj.tribe_index) } else { None };
+        let idx = object_3d_index(&obj.model_type, obj.subtype, owner)?;
         // Use the correct OBJS bank: bank 0 for buildings, level bank for scenery
         let bank = match obj.model_type {
             ModelType::Scenery => &self.engine.scenery_objects,
@@ -3251,8 +3423,7 @@ impl App {
         let gpu = self.gpu.as_ref().unwrap();
 
         // Update uniforms
-        let center = self.engine.world_center();
-        let focus = Vector3::new(center, center, 0.0);
+        let focus = self.engine.world_focus();
         let min_z = self.engine.camera_min_z();
         let mvp = MVP::with_zoom(frame.screen, frame.camera, frame.zoom, focus, min_z);
         let mvp_m = mvp.projection * mvp.view * mvp.transform;
@@ -3386,7 +3557,7 @@ impl App {
                 self.ghost_model = build_ghost_building_mesh(
                     &gpu.device,
                     ghost.building_type,
-                    0, // tribe_index: default to Blue tribe (TODO: use player's tribe)
+                    self.engine.game_world.player_tribe,
                     ghost.cell_x as f32,
                     ghost.cell_y as f32,
                     &self.engine.building_objects,
@@ -4921,6 +5092,10 @@ impl ApplicationHandler for App {
         self.rebuild_unit_atlases(&base2, &level_res2.params.palette);
 
         self.engine.level_objects = extract_level_objects(&level_res2);
+        self.engine.player_starts = level_res2.player_starts;
+        self.engine.level_markers = level_res2.header.markers;
+        self.engine.game_world.level_config =
+            crate::engine::state::level_config::LevelConfig::from_flags(level_res2.header.level_flags);
 
         // Extract person units into the coordinator (they become live entities)
         let shores2 = level_res2.landscape.make_shores();
@@ -5404,9 +5579,6 @@ impl ApplicationHandler for App {
                             }
                         }
 
-                        // Override camera from active flyby
-                        self.tick_flyby_camera();
-
                         self.sync_unit_render_cells();
                         self.rebuild_spawn_model();
                         self.rebuild_unit_models();
@@ -5439,6 +5611,10 @@ impl ApplicationHandler for App {
 
                 // Smooth camera pan to shaman
                 self.tick_shaman_pan();
+
+                // Override camera from active flyby (per frame, at a
+                // fractional game tick, for smooth cinematic motion)
+                self.tick_flyby_camera();
 
                 // Auto-animate water
                 self.engine.frame_count = self.engine.frame_count.wrapping_add(1);
@@ -5503,5 +5679,98 @@ mod tests {
     fn toroidal_delta_half() {
         // Exactly half — prefer forward
         assert_eq!(toroidal_delta(0, 64, 128), 64);
+    }
+
+    // ---- Flyby coordinate mapping (script/world space → renderer space) ----
+
+    #[test]
+    fn flyby_orbit_centers_exactly_on_level1_wild_shaman() {
+        // Level 1's first flyby target POS(8,28) snaps to cell center
+        // (half-cells (9,29) = orig cell (4.5,14.5)) — exactly where the
+        // tribe-1 shaman stands (renderer cell (14.5, 122.5)). The screen
+        // center is shift + focus_vertex where focus_vertex = 63.5 for a
+        // 128 map, so shift+frac must put the shaman dead-center.
+        let ((sx, sy), (fx, fy)) = flyby_pos_to_shift_frac(9.0, 29.0, 128, 63.5);
+        let center_x = (sx as f32 + fx + 63.5).rem_euclid(128.0);
+        let center_y = (sy as f32 + fy + 63.5).rem_euclid(128.0);
+        assert!((center_x - 14.5).abs() < 1e-4, "center_x = {center_x}");
+        assert!((center_y - 122.5).abs() < 1e-4, "center_y = {center_y}");
+    }
+
+    #[test]
+    fn shift_to_flyby_pos_recovers_shaman_half_cells() {
+        // The shaman-centering shift (44,55) views renderer (107.5, 118.5)
+        // = orig cell (8.5, 107.5) = half-cells (17, 215) — the player
+        // shaman's exact position.
+        assert_eq!(shift_to_flyby_pos(44, 55, 128, 63.5), (17, 215));
+    }
+
+    #[test]
+    fn flyby_angle_converts_2048_units_with_renderer_yaw_offset() {
+        // Original angles are 2048 units per turn (sin/cos LUT indexed & 0x7ff).
+        // The renderer map is the original world rotated 90°, so yaw gets a
+        // constant +90° offset.
+        assert_eq!(flyby_angle_to_deg(0), 90);
+        assert_eq!(flyby_angle_to_deg(512), 180);
+        assert_eq!(flyby_angle_to_deg(1024), 270);
+        assert_eq!(flyby_angle_to_deg(1536), 0);
+        assert_eq!(flyby_angle_to_deg(1438), 343); // level-1 end angle (252.8° world)
+    }
+
+    #[test]
+    fn deg_to_flyby_angle_roundtrips() {
+        for units in [0i16, 54, 512, 681, 1024, 1438, 2047] {
+            let deg = flyby_angle_to_deg(units);
+            let back = deg_to_flyby_angle(deg);
+            let diff = (back as i32 - units as i32).rem_euclid(2048);
+            assert!(
+                diff <= 3 || diff >= 2045,
+                "units {units} → {deg}° → {back}"
+            );
+        }
+    }
+
+    #[test]
+    fn flyby_pos_to_shift_frac_splits_integer_and_fraction() {
+        // Cell-center half-cells land exactly on a shift with no fraction…
+        let ((sx, sy), (fx, fy)) = flyby_pos_to_shift_frac(21.0, 217.0, 128, 63.5);
+        assert_eq!((sx, sy), (45, 53));
+        assert!(fx.abs() < 1e-5 && fy.abs() < 1e-5);
+
+        // …and a half-cell offset becomes a 0.5-cell fraction (sub-cell
+        // smoothness; the original camera has 512 units/cell resolution).
+        let ((sx, sy), (fx, fy)) = flyby_pos_to_shift_frac(20.0, 216.0, 128, 63.5);
+        assert_eq!((sx, sy), (44, 53));
+        assert!((fx - 0.5).abs() < 1e-5, "fx = {fx}");
+        assert!((fy - 0.5).abs() < 1e-5, "fy = {fy}");
+    }
+
+    #[test]
+    fn camera_commands_interrupt_flyby_others_dont() {
+        // FLYBY_ALLOW_INTERRUPT(ON): user camera input skips the flyby.
+        use crate::engine::command::GameCommand as GC;
+        assert!(command_interrupts_flyby(&GC::PanScreen {
+            forward: 1.0,
+            right: 0.0
+        }));
+        assert!(command_interrupts_flyby(&GC::PanTerrain { dx: 1, dy: 0 }));
+        assert!(command_interrupts_flyby(&GC::RotateCamera { delta_z: 5 }));
+        assert!(command_interrupts_flyby(&GC::TiltCamera { delta_x: 5 }));
+        assert!(command_interrupts_flyby(&GC::SetZoom(2.0)));
+        assert!(command_interrupts_flyby(&GC::CenterOnShaman));
+        assert!(command_interrupts_flyby(&GC::ResetCamera));
+        assert!(!command_interrupts_flyby(&GC::ToggleHud));
+        assert!(!command_interrupts_flyby(&GC::Quit));
+    }
+
+    #[test]
+    fn flyby_zoom_maps_to_renderer_factor() {
+        // Original zoom is ±1024 units around 0 (flyby accumulator clamps to
+        // ±0x2000 before >>3). Zoom 0 = default renderer factor 1.0.
+        assert!((flyby_zoom_to_factor(0) - 1.0).abs() < 1e-6);
+        assert!(flyby_zoom_to_factor(-100) < 1.0); // negative zooms out
+        assert!(flyby_zoom_to_factor(80) > 1.0); // positive zooms in
+        assert_eq!(factor_to_flyby_zoom(1.0), 0);
+        assert_eq!(factor_to_flyby_zoom(flyby_zoom_to_factor(-100)), -100);
     }
 }

@@ -463,12 +463,14 @@ fn command_param_count(name: &str) -> usize {
         "FLYBY_CREATE_NEW" => 0,
         "FLYBY_START" | "FLYBY_STOP" => 0,
         "FLYBY_ALLOW_INTERRUPT" => 1,
-        "FLYBY_SET_EVENT_POS" => 3,
-        "FLYBY_SET_EVENT_ANGLE" => 2,
-        "FLYBY_SET_EVENT_ZOOM" => 2,
-        "FLYBY_SET_EVENT_INT_POINT" => 3,
-        "FLYBY_SET_EVENT_TOOLTIP" => 2,
-        "FLYBY_SET_END_TARGET" => 3,
+        // Arg counts from popTB.exe (AI_ExecuteScriptCommand 0x4b9-0x4be):
+        // the last arg of POS/ANGLE/ZOOM is the animation duration in ticks.
+        "FLYBY_SET_EVENT_POS" => 4,
+        "FLYBY_SET_EVENT_ANGLE" => 3,
+        "FLYBY_SET_EVENT_ZOOM" => 3,
+        "FLYBY_SET_EVENT_INT_POINT" => 4,
+        "FLYBY_SET_EVENT_TOOLTIP" => 5,
+        "FLYBY_SET_END_TARGET" => 4,
         "FLYBY_SET_MESSAGE" => 2,
         "KILL_TEAM_IN_AREA" => 2,
         "CLEAR_ALL_MSG" => 0,
@@ -1992,6 +1994,21 @@ mod tests {
         assert!(result.contains("DELAY_MAIN_DRUM_TOWER(ON)"), "Got: {}", result);
         assert!(result.contains("EVERY(256, function()"), "Got: {}", result);
         assert!(result.contains("if (MY_NUM_PEOPLE < 79) then"), "Got: {}", result);
+    }
+
+    #[test]
+    fn flyby_commands_consume_all_binary_args() {
+        // Arg counts verified against popTB.exe handlers (AI_ExecuteScriptCommand
+        // cases 0x4b9-0x4be): POS=4 (x, y, start_tick, duration), ANGLE=3,
+        // ZOOM=3, INT_POINT=4, TOOLTIP=5, END_TARGET=4. The last arg of
+        // POS/ANGLE/ZOOM is the animation duration in ticks — dropping it
+        // desynchronizes flyby playback.
+        assert_eq!(command_param_count("FLYBY_SET_EVENT_POS"), 4);
+        assert_eq!(command_param_count("FLYBY_SET_EVENT_ANGLE"), 3);
+        assert_eq!(command_param_count("FLYBY_SET_EVENT_ZOOM"), 3);
+        assert_eq!(command_param_count("FLYBY_SET_EVENT_INT_POINT"), 4);
+        assert_eq!(command_param_count("FLYBY_SET_EVENT_TOOLTIP"), 5);
+        assert_eq!(command_param_count("FLYBY_SET_END_TARGET"), 4);
     }
 
     #[test]

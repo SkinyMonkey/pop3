@@ -94,13 +94,13 @@
 | 004c9ae0 | AI_ScriptCmd_ConfigureDefense | 1 |
 | 004c9c40 | AI_ScriptCmd_CastSpellAtTarget | 1 |
 | 004c9cd0 | AI_ScriptCmd_LookAtShaman | 1 |
-| 004c9d90 | AI_ScriptCmd_CastSpellDirect | 1 |
-| 004c9e80 | AI_ScriptCmd_CastSpellArea | 1 |
-| 004c9f30 | AI_ScriptCmd_CastSpellDirectional | 1 |
-| 004c9ff0 | AI_ScriptCmd_CastSpellTargeted | 1 |
-| 004ca0e0 | AI_ScriptCmd_CastSpellComplex | 1 |
+| 004c9d90 | Flyby_ScriptCmd_SetEventPos | 1 |
+| 004c9e80 | Flyby_ScriptCmd_SetEventAngle | 1 |
+| 004c9f30 | Flyby_ScriptCmd_SetEventZoom | 1 |
+| 004c9ff0 | Flyby_ScriptCmd_SetEventIntPoint | 1 |
+| 004ca0e0 | Flyby_ScriptCmd_SetEventTooltip | 1 |
 | 004ca210 | AI_ScriptCmd_SetGuardArea | 1 |
-| 004ca2b0 | AI_ScriptCmd_SetPatrolTarget | 1 |
+| 004ca2b0 | Flyby_ScriptCmd_SetEndTarget | 1 |
 | 004ca3a0 | AI_ScriptCmd_SetGuardRegion | 1 |
 | 004ca440 | AI_ScriptCmd_CastSpell | 1 |
 | 004ca540 | AI_ScriptCmd_GetTribePersonCount | 1 |
@@ -134,8 +134,46 @@
 | 004cc1c0 | AI_ExecuteMultiParamCommand | 2 |
 | 004cc340 | AI_ScriptSetGuardPoint | 1 |
 | 004cc430 | AI_ScriptSetSpellTarget | 1 |
-| 004da7c0 | AI_ScriptCmd_SetRenderDirty | 1 |
+| 004da7c0 | Flyby_ScriptCmd_Start | 1 |
 | 004ec0e0 | AI_CheckShamanBeforeBuild | 1 |
+
+## Flyby cinematic camera (script2 opcodes 0x4b5-0x4be)
+
+Discovered 2026-06: several of these were previously mislabeled as spell/
+patrol/render functions (old names in parentheses — Ghidra DB still carries
+them; rename on next session). Event semantics: each `SET_EVENT_*` queues
+{channel, target, start_tick, duration}; at start_tick the channel animates
+from its *current* value to the target over duration ticks, with a
+trapezoidal velocity profile. Pos targets snap to cell centers
+(`(byte & 0xfe) + 1` half-cells); pos deltas wrap toroidally at 0x8000 world
+units; angle deltas take the shortest path mod 2048. Zoom values are stored
+as `(zoom << 8) / -100`. Flyby state block at 0x95216a (event records:
+8 bytes {type, flag, value:u16, start:i16, duration:u16}, max 32, sorted by
+tick; per-channel handler table at 0x5a7ba8, internal tick counter at
+0x952178). On start, script ticks are rescaled by measured frame rate
+(clamped 8..24, /10).
+
+| Address | Name | Notes |
+|---------|------|-------|
+| 004c9d90 | Flyby_ScriptCmd_SetEventPos | opcode 0x4b9, 4 args (was AI_ScriptCmd_CastSpellDirect) |
+| 004c9e80 | Flyby_ScriptCmd_SetEventAngle | opcode 0x4ba, 3 args (was AI_ScriptCmd_CastSpellArea) |
+| 004c9f30 | Flyby_ScriptCmd_SetEventZoom | opcode 0x4bb, 3 args (was AI_ScriptCmd_CastSpellDirectional) |
+| 004c9ff0 | Flyby_ScriptCmd_SetEventIntPoint | opcode 0x4bc, 4 args (was AI_ScriptCmd_CastSpellTargeted) |
+| 004ca0e0 | Flyby_ScriptCmd_SetEventTooltip | opcode 0x4bd, 5 args (was AI_ScriptCmd_CastSpellComplex) |
+| 004ca2b0 | Flyby_ScriptCmd_SetEndTarget | opcode 0x4be, 4 args (was AI_ScriptCmd_SetPatrolTarget) |
+| 004da7a0 | Flyby_CreateNew | opcode 0x4b5; clears state block 0x95216a |
+| 004da7c0 | Flyby_ScriptCmd_Start | opcode 0x4b6 (was AI_ScriptCmd_SetRenderDirty) |
+| 004da8e0 | Flyby_Stop | opcode 0x4b7 |
+| 004da940 | Flyby_AllowInterrupt | opcode 0x4b8 |
+| 004dab20 | Flyby_QueueEvent | sorted insert into event queue (was AI_QueueSpellCommand) |
+| 004dac00 | Flyby_TickScheduler | playback ticker (was Frontend_TickEventScheduler) |
+| 004daf50 | Flyby_ActivatePosEvent | channel 1 activation; cell-center snap + toroidal delta |
+| 004db040 | Flyby_UpdatePosChannel | channel 1 per-tick update |
+| 004db200 | Flyby_ActivateAngleEvent | channel 2; Math_AngleDifference + Math_GetRotationDirection |
+| 004db2c0 | Flyby_UpdateAngleChannel | channel 2 per-tick update |
+| 004db3c0 | Flyby_ActivateZoomEvent | channel 3 activation |
+| 004db410 | Flyby_UpdateZoomChannel | channel 3 per-tick update |
+| 004db950 | Flyby_ComputeVelocityProfile | trapezoidal accel/cruise/decel with velocity carry |
 
 ## Animation (5 functions)
 

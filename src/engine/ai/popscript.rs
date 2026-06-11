@@ -1560,7 +1560,9 @@ pub fn register_popscript_functions(
         )?;
     }
 
-    // FLYBY_SET_EVENT_POS(x, y, tick)
+    // FLYBY_SET_EVENT_POS(x, y, start_tick, duration)
+    // Arg layout from popTB.exe AI_ExecuteScriptCommand case 0x4b9: the
+    // channel starts moving at start_tick and arrives duration ticks later.
     {
         let b = bridge.clone();
         globals.set(
@@ -1575,11 +1577,13 @@ pub fn register_popscript_functions(
                 let x = to_i32(iter.next().unwrap_or(LuaValue::Nil));
                 let y = to_i32(iter.next().unwrap_or(LuaValue::Nil));
                 let tick = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                let duration = to_i32(iter.next().unwrap_or(LuaValue::Nil)).max(1);
                 b.borrow_mut().pending_flyby_events.push(super::FlybyEvent {
                     kind: super::FlybyEventKind::SetEventPos {
                         x: x as i16,
                         y: y as i16,
                         tick: tick as u32,
+                        duration: duration as u32,
                     },
                 });
                 Ok(0)
@@ -1587,7 +1591,7 @@ pub fn register_popscript_functions(
         )?;
     }
 
-    // FLYBY_SET_EVENT_ANGLE(angle, tick)
+    // FLYBY_SET_EVENT_ANGLE(angle, start_tick, duration)
     {
         let b = bridge.clone();
         globals.set(
@@ -1601,10 +1605,12 @@ pub fn register_popscript_functions(
                 let mut iter = args.into_iter();
                 let angle = to_i32(iter.next().unwrap_or(LuaValue::Nil));
                 let tick = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                let duration = to_i32(iter.next().unwrap_or(LuaValue::Nil)).max(1);
                 b.borrow_mut().pending_flyby_events.push(super::FlybyEvent {
                     kind: super::FlybyEventKind::SetEventAngle {
                         angle: angle as i16,
                         tick: tick as u32,
+                        duration: duration as u32,
                     },
                 });
                 Ok(0)
@@ -1612,7 +1618,7 @@ pub fn register_popscript_functions(
         )?;
     }
 
-    // FLYBY_SET_EVENT_ZOOM(zoom, tick)
+    // FLYBY_SET_EVENT_ZOOM(zoom, start_tick, duration)
     {
         let b = bridge.clone();
         globals.set(
@@ -1626,10 +1632,12 @@ pub fn register_popscript_functions(
                 let mut iter = args.into_iter();
                 let zoom = to_i32(iter.next().unwrap_or(LuaValue::Nil));
                 let tick = to_i32(iter.next().unwrap_or(LuaValue::Nil));
+                let duration = to_i32(iter.next().unwrap_or(LuaValue::Nil)).max(1);
                 b.borrow_mut().pending_flyby_events.push(super::FlybyEvent {
                     kind: super::FlybyEventKind::SetEventZoom {
                         zoom: zoom as i16,
                         tick: tick as u32,
+                        duration: duration as u32,
                     },
                 });
                 Ok(0)
@@ -2278,15 +2286,21 @@ mod tests {
     #[test]
     fn flyby_set_event_pos_pushes_event() {
         let (lua, bridge) = setup();
-        // FLYBY_SET_EVENT_POS(x, y, tick) — matches level 1 script usage
-        lua.load("FLYBY_SET_EVENT_POS(8, 28, 252)").exec().unwrap();
+        // FLYBY_SET_EVENT_POS(x, y, start_tick, duration) — level 1 usage
+        lua.load("FLYBY_SET_EVENT_POS(8, 28, 4, 80)").exec().unwrap();
         let b = bridge.borrow();
         assert_eq!(b.pending_flyby_events.len(), 1);
         match &b.pending_flyby_events[0].kind {
-            FlybyEventKind::SetEventPos { x, y, tick } => {
+            FlybyEventKind::SetEventPos {
+                x,
+                y,
+                tick,
+                duration,
+            } => {
                 assert_eq!(*x, 8);
                 assert_eq!(*y, 28);
-                assert_eq!(*tick, 252);
+                assert_eq!(*tick, 4);
+                assert_eq!(*duration, 80);
             }
             other => panic!("expected SetEventPos, got {:?}", other),
         }
@@ -2295,14 +2309,19 @@ mod tests {
     #[test]
     fn flyby_set_event_angle_pushes_event() {
         let (lua, bridge) = setup();
-        // FLYBY_SET_EVENT_ANGLE(angle, tick) — matches level 1 script usage
-        lua.load("FLYBY_SET_EVENT_ANGLE(1072, 252)").exec().unwrap();
+        // FLYBY_SET_EVENT_ANGLE(angle, start_tick, duration) — level 1 usage
+        lua.load("FLYBY_SET_EVENT_ANGLE(1072, 46, 40)").exec().unwrap();
         let b = bridge.borrow();
         assert_eq!(b.pending_flyby_events.len(), 1);
         match &b.pending_flyby_events[0].kind {
-            FlybyEventKind::SetEventAngle { angle, tick } => {
+            FlybyEventKind::SetEventAngle {
+                angle,
+                tick,
+                duration,
+            } => {
                 assert_eq!(*angle, 1072);
-                assert_eq!(*tick, 252);
+                assert_eq!(*tick, 46);
+                assert_eq!(*duration, 40);
             }
             other => panic!("expected SetEventAngle, got {:?}", other),
         }
@@ -2311,14 +2330,19 @@ mod tests {
     #[test]
     fn flyby_set_event_zoom_pushes_event() {
         let (lua, bridge) = setup();
-        // FLYBY_SET_EVENT_ZOOM(zoom, tick) — matches level 1 script usage
-        lua.load("FLYBY_SET_EVENT_ZOOM(-500, 100)").exec().unwrap();
+        // FLYBY_SET_EVENT_ZOOM(zoom, start_tick, duration) — level 1 usage
+        lua.load("FLYBY_SET_EVENT_ZOOM(-100, 10, 35)").exec().unwrap();
         let b = bridge.borrow();
         assert_eq!(b.pending_flyby_events.len(), 1);
         match &b.pending_flyby_events[0].kind {
-            FlybyEventKind::SetEventZoom { zoom, tick } => {
-                assert_eq!(*zoom, -500);
-                assert_eq!(*tick, 100);
+            FlybyEventKind::SetEventZoom {
+                zoom,
+                tick,
+                duration,
+            } => {
+                assert_eq!(*zoom, -100);
+                assert_eq!(*tick, 10);
+                assert_eq!(*duration, 35);
             }
             other => panic!("expected SetEventZoom, got {:?}", other),
         }

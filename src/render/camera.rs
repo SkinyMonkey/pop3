@@ -4,6 +4,9 @@ pub struct Camera {
     pub angle_x: i16,
     pub angle_y: i16,
     pub angle_z: i16,
+    /// Sub-degree yaw remainder for smooth animations (flyby). Added to
+    /// `angle_z` when building the view; 0 outside animations.
+    pub angle_z_frac: f32,
     pub pos: Vector3<f32>,
 }
 
@@ -21,7 +24,7 @@ pub struct MVP {
 
 impl Camera {
     pub fn new() -> Self {
-        Self{angle_x: 0, angle_y: 0, angle_z: 0, pos: Vector3{x: 0.0, y: 0.0, z: 0.0}}
+        Self{angle_x: 0, angle_y: 0, angle_z: 0, angle_z_frac: 0.0, pos: Vector3{x: 0.0, y: 0.0, z: 0.0}}
     }
 }
 
@@ -37,7 +40,7 @@ impl MVP {
     }
 
     pub fn with_zoom(screen: &Screen, camera: &Camera, zoom: f32, focus: Vector3<f32>, min_z: f32) -> MVP {
-        let az = Rad::from(Deg(camera.angle_z as f32));
+        let az = Rad::from(Deg(camera.angle_z as f32 + camera.angle_z_frac));
         let ax = Rad::from(Deg(camera.angle_x as f32));
         let radius = 1.5 / zoom;
 
@@ -67,6 +70,38 @@ impl MVP {
     fn make_fov(screen: &Screen) -> PerspectiveFov<f32> {
         let aspect = screen.width as f32 / screen.height as f32;
         PerspectiveFov{fovy: Rad(1.0), aspect, near: 1.0, far: 10000.0}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mvp_applies_fractional_yaw() {
+        // angle_z_frac adds sub-degree yaw so smooth animations (flyby)
+        // aren't quantized to whole degrees.
+        let screen = Screen {
+            width: 800,
+            height: 600,
+        };
+        let focus = Vector3::new(0.0, 0.0, 0.0);
+
+        let mut cam = Camera::new();
+        let eye0 = MVP::with_zoom(&screen, &cam, 1.0, focus, 0.0).eye;
+        cam.angle_z_frac = 0.5;
+        let eye_half = MVP::with_zoom(&screen, &cam, 1.0, focus, 0.0).eye;
+        cam.angle_z_frac = 0.0;
+        cam.angle_z = 1;
+        let eye1 = MVP::with_zoom(&screen, &cam, 1.0, focus, 0.0).eye;
+
+        assert!(
+            eye_half.x > eye0.x && eye_half.x < eye1.x,
+            "eye.x: {} < {} < {} expected",
+            eye0.x,
+            eye_half.x,
+            eye1.x
+        );
     }
 }
 
