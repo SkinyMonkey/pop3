@@ -35,7 +35,7 @@ ordinary bugs, not faithfulness work.
 
 | # | Subsystem | Status | Notes |
 |---|-----------|--------|-------|
-| 0 | Workspace conversion (M0) | in progress | this branch |
+| 0 | Workspace conversion (M0) | done | reboot/workspace; 947 tests green, level 1 runs (code-identical move) |
 | 1 | Verification harness (`pop3-verify`) | todo | Phase 2 — before any engine work |
 | 2 | RNG + tick loop | unverified | first rewrite target; pipeline shakedown |
 | 3 | Core object system / pool | unverified | two-tier free list this time |
