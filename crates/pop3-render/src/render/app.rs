@@ -1780,8 +1780,8 @@ impl App {
             let cell_bg = [0.22, 0.18, 0.12, 0.8];
             match hud_state.active_tab {
                 HudTab::Spells => {
-                    // 9 buttons, 2 columns of 46x52 — frame + spell icon
-                    // (sprite = state*18 + icon index).
+                    // Panel 2: 18 buttons, 3 columns of 31x43 — frame +
+                    // spell glyph (building-table block, sprites 354..).
                     let dot_size = 3.0 * layout.scale_x;
                     for (i, e) in hl::SPELLS_PAGE.iter().enumerate() {
                         let r = hl::element_rect(&hl::PANEL_TAB_PAGE, e, sw, sh);
@@ -1808,8 +1808,8 @@ impl App {
                     }
                 }
                 HudTab::Buildings => {
-                    // 18 buttons, 3 columns of 31x43 — frame + building icon
-                    // (building table 0x5a0ec0: sprites 354.. / 390..).
+                    // Panel 3: 9 buttons, 2 columns of 46x52 — frame +
+                    // building icon (bank-direct sprite).
                     for e in hl::BUILDINGS_PAGE.iter() {
                         let r = hl::element_rect(&hl::PANEL_TAB_PAGE, e, sw, sh);
                         let (cx, cy) = (r.x as f32, r.y as f32);

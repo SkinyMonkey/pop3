@@ -128,8 +128,14 @@ pub fn minimap_element() -> ElementDef {
     SIDEBAR_ELEMENTS[24]
 }
 
-/// Spells page (panel 3 @ 0x576c20): 9 buttons, 2 columns.
-pub const SPELLS_PAGE: [ElementDef; 9] = [
+// Tab→page link verified from the binary's element group ids (.data
+// 0x575668+): the x=0 hut tab (e04, group 30) opens panel 3, the x=32
+// star tab (e03, group 31) opens panel 2. So panel 3 = BUILDINGS and
+// panel 2 = SPELLS (panel-2 icons render through sprites 354.. which the
+// contact sheet confirms are spell glyphs).
+
+/// Buildings page (panel 3 @ 0x576c20, group 30): 9 buttons, 2 columns.
+pub const BUILDINGS_PAGE: [ElementDef; 9] = [
     btn(2, 3, 3, 46, 52, 1),
     btn(3, 49, 3, 46, 52, 4),
     btn(6, 3, 57, 46, 52, 7),
@@ -141,8 +147,9 @@ pub const SPELLS_PAGE: [ElementDef; 9] = [
     btn(10, 3, 219, 46, 52, 17),
 ];
 
-/// Buildings page (panel 2, 16bpp variant @ 0x5764a0): 18 buttons, 3 columns.
-pub const BUILDINGS_PAGE: [ElementDef; 18] = [
+/// Spells page (panel 2, 16bpp variant @ 0x5764a0, group 31): 18 buttons,
+/// 3 columns. Icons 0..17 render through sprites 354.. (spell glyphs).
+pub const SPELLS_PAGE: [ElementDef; 18] = [
     btn(31, 66, 8, 31, 43, 17),
     btn(28, 34, 8, 31, 43, 16),
     btn(29, 2, 8, 31, 43, 15),
@@ -225,10 +232,10 @@ pub mod hspr {
     /// Tab frame tiles (FUN_00405b10 → 0x575328 / 0x575340).
     pub const TAB_FRAME: [u16; 9] = [740, 744, 741, 746, 748, 747, 742, 745, 743];
     pub const TAB_FRAME_SELECTED: [u16; 9] = [758, 762, 759, 764, 766, 765, 760, 763, 761];
-    /// Spell button frame (FUN_004018a0 → 0x575448).
-    pub const SPELL_FRAME: [u16; 9] = [794, 798, 795, 800, 802, 801, 796, 799, 797];
-    /// Building button frame (0x401d10 → 0x575490).
-    pub const BUILDING_FRAME: [u16; 9] = [821, 825, 822, 827, 829, 828, 823, 826, 824];
+    /// Buildings page button frame (panel 3 cb FUN_004018a0 → 0x575448).
+    pub const BUILDING_FRAME: [u16; 9] = [794, 798, 795, 800, 802, 801, 796, 799, 797];
+    /// Spells page button frame (panel 2 cb 0x401d10 → 0x575490).
+    pub const SPELL_FRAME: [u16; 9] = [821, 825, 822, 827, 829, 828, 823, 826, 824];
     /// Minimap border (0x5752f8); center is open for the minimap canvas.
     pub const MINIMAP_FRAME: [u16; 9] = [690, 694, 691, 696, 0, 697, 692, 695, 693];
     /// Tab icons in screen order buildings/spells/units (element param
@@ -239,15 +246,17 @@ pub mod hspr {
     pub const SHAMAN_BUTTON: u16 = 664;
     pub const QUICK_ROW: [u16; 5] = [666, 668, 670, 672, 674];
 
-    /// Spell button icon: sprite = state*18 + icon_index (FUN_004018a0).
+    /// Spell button icon (panel 2 cb 0x401d10): building table at 0x5a0ec0
+    /// maps the element icon field to sprites 354.. (normal) / 390..
+    /// (highlighted); the contact sheet confirms 354+ are spell glyphs.
     pub fn spell_icon_sprite(icon_index: u16, highlighted: bool) -> u16 {
-        icon_index + if highlighted { 18 } else { 0 }
+        icon_index + if highlighted { 390 } else { 354 }
     }
 
-    /// Building button icon: building table at 0x5a0ec0 maps icons to
-    /// sprites 354.. (normal) / 390.. (highlighted).
+    /// Building button icon (panel 3 cb FUN_004018a0): sprite =
+    /// state*18 + icon_index.
     pub fn building_icon_sprite(icon_index: u16, highlighted: bool) -> u16 {
-        icon_index + if highlighted { 390 } else { 354 }
+        icon_index + if highlighted { 18 } else { 0 }
     }
 
     /// All HSPR sprite ids the HUD atlas needs.
@@ -269,9 +278,11 @@ pub mod hspr {
         ids.push(SHAMAN_BUTTON);
         ids.push(SHAMAN_BUTTON + 1);
         ids.extend(QUICK_ROW);
-        ids.extend((0..36).map(|i| spell_icon_sprite(i, false))); // 0..17 + 18..35
-        ids.extend((0..18).map(|i| building_icon_sprite(i, false)));
-        ids.extend((0..18).map(|i| building_icon_sprite(i, true)));
+        // Spell glyphs: the building-table block, normal 354.. + highlight 390..
+        ids.extend((0..18).map(|i| spell_icon_sprite(i, false)));
+        ids.extend((0..18).map(|i| spell_icon_sprite(i, true)));
+        // Building icons: bank-direct sprites (state*18 + icon).
+        ids.extend((0..36).map(|i| building_icon_sprite(i, false)));
         ids.sort_unstable();
         ids.dedup();
         ids
@@ -402,12 +413,12 @@ mod tests {
     }
 
     #[test]
-    fn spells_button_rect_replicates_double_truncation() {
-        // Spells page e01: draw (49,3) 46x52 in panel (0,204).
+    fn page_button_rect_replicates_double_truncation() {
+        // Buildings page e01: draw (49,3) 46x52 in panel (0,204).
         // frac(49)=5017 → x0 = 5017*640>>16 = 48; fy = 27852+409 = 28261 →
         // y0 = (28261*480+240)>>16 = 206 (the original's own truncating
         // math loses a pixel at native res for values not divisible by 5).
-        let e = SPELLS_PAGE[1];
+        let e = BUILDINGS_PAGE[1];
         assert_eq!(e.cmd, 3);
         let r = element_rect(&PANEL_TAB_PAGE, &e, 640, 480);
         assert_eq!(r, Rect { x: 48, y: 206, w: 46, h: 52 });
@@ -424,8 +435,8 @@ mod tests {
     #[test]
     fn element_tables_match_binary_counts() {
         assert_eq!(SIDEBAR_ELEMENTS.len(), 25);
-        assert_eq!(SPELLS_PAGE.len(), 9);
-        assert_eq!(BUILDINGS_PAGE.len(), 18); // 16bpp variant
+        assert_eq!(BUILDINGS_PAGE.len(), 9); // panel 3
+        assert_eq!(SPELLS_PAGE.len(), 18); // panel 2 (16bpp variant)
         assert_eq!(UNITS_PAGE.len(), 36);
         assert_eq!(BOTTOM_BAR.len(), 10);
         assert_eq!(SIDEBAR_TABS.len(), 3);
@@ -447,15 +458,27 @@ mod tests {
     }
 
     #[test]
+    fn tab_pages_match_binary_group_links() {
+        // Element group ids (.data 0x575668+) couple the x=0 hut tab
+        // (group 30) to panel 3 (cmd 2-10) and the x=32 star tab
+        // (group 31) to panel 2 (cmd 13-31). So Buildings = panel 3,
+        // Spells = panel 2.
+        assert_eq!(BUILDINGS_PAGE.len(), 9);
+        assert!(BUILDINGS_PAGE.iter().all(|e| (2..=10).contains(&e.cmd)));
+        assert_eq!(SPELLS_PAGE.len(), 18);
+        assert!(SPELLS_PAGE.iter().all(|e| (13..=31).contains(&e.cmd)));
+    }
+
+    #[test]
     fn hspr_icon_mappings_match_binary_tables() {
-        // Spell icons: sprite = state*18 + icon (FUN_004018a0); level-1
-        // spells page icons are 1,4,7,5,6,8,13,15,17.
-        assert_eq!(hspr::spell_icon_sprite(1, false), 1);
-        assert_eq!(hspr::spell_icon_sprite(1, true), 19);
-        // Building icons: table 0x5a0ec0 → 354.. / 390.. blocks.
-        assert_eq!(hspr::building_icon_sprite(0, false), 354);
-        assert_eq!(hspr::building_icon_sprite(16, false), 370);
-        assert_eq!(hspr::building_icon_sprite(0, true), 390);
+        // Spell glyphs come from the building-table block (354.. / 390..);
+        // the contact sheet confirms 354-371 are spell line-art.
+        assert_eq!(hspr::spell_icon_sprite(0, false), 354);
+        assert_eq!(hspr::spell_icon_sprite(17, false), 371);
+        assert_eq!(hspr::spell_icon_sprite(0, true), 390);
+        // Building icons index the bank directly (state*18 + icon).
+        assert_eq!(hspr::building_icon_sprite(1, false), 1);
+        assert_eq!(hspr::building_icon_sprite(1, true), 19);
     }
 
     #[test]
@@ -471,12 +494,12 @@ mod tests {
     }
 
     #[test]
-    fn spells_page_grid_positions() {
-        // 2 columns x=3/49, rows y=3+54k — all 9 cells.
-        for (i, e) in SPELLS_PAGE.iter().enumerate() {
+    fn buildings_page_grid_positions() {
+        // Panel 3 (buildings): 2 columns x=3/49, rows y=3+54k — 9 cells.
+        for (i, e) in BUILDINGS_PAGE.iter().enumerate() {
             let col = [3, 49][i % 2];
             let row = 3 + 54 * (i as i16 / 2);
-            assert_eq!((e.x, e.y), (col, row), "spell cell {i}");
+            assert_eq!((e.x, e.y), (col, row), "building cell {i}");
             assert_eq!((e.w, e.h), (46, 52));
         }
     }
