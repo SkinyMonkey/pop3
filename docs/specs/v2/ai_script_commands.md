@@ -7,12 +7,15 @@
 > **Trust level — read this first:** the opcode → handler-address **routing** (§3)
 > and per-opcode operand counts (§2.2) are ground truth — Ghidra reconstructs them
 > from the binary's jump table (level 2–3). Handler **behaviour** is derived from
-> decompilation (level 2–3) for the 52 formerly-unnamed handlers in §6, but **has no
-> capture-fixture confirmation yet** — treat exact bit/field meanings there as strong
-> hypotheses. The remaining ~45 `AI_Script*` handlers carry only **Ghidra-label
-> names** (level 4, hints) and are not behaviourally specified. Do not implement a
-> command from a bare Ghidra name; §6 entries are implementable but should be
-> fixture-checked first.
+> decompilation (level 2–3) for the 59 formerly-unnamed `FUN_` handlers in §6, but
+> **has no capture-fixture confirmation yet** — treat exact bit/field meanings there as
+> strong hypotheses. The 44 non-flyby Ghidra-named handlers are checked against
+> decompilation in §7 (all names confirmed accurate); their effects and operand counts
+> are listed, but **arg meanings and fixtures are still outstanding.** Of the 49
+> functions that carry an `AI_Script*` label, 42 are real and 7 are the mislabeled
+> flyby block (§6.9). Net: every one of the 168 opcodes now has a verified route +
+> operand count; behaviour is decompilation-level for the whole command set; no command
+> is capture-confirmed yet.
 
 ## 1. Scope
 
@@ -30,10 +33,11 @@ command's operand count equals the number of `AI_EvaluateScriptValue` calls in i
 `case` block, and every handler signature is visible in the dispatcher. This is why
 the handlers themselves never call the evaluator.
 
-This catalog enumerates the routing (§3), the per-opcode operand counts (§2.2), and —
-for the 53 handlers that were unnamed in the first draft — their **derived behaviour**
-(§6: 52 derived, 1 undetermined), each re-read from its decompilation/disassembly. The ~45 `AI_Script*`-labelled
-handlers still carry only Ghidra-hint names and are not yet behaviourally specified.
+This catalog enumerates the routing (§3), the per-opcode operand counts (§2.2), and the
+**derived behaviour** of every handler: §6 covers the 60 formerly-unnamed `FUN_`
+handlers (59 derived, 1 undetermined export), §7 the 44 non-flyby Ghidra-named ones
+(names confirmed) with operand counts and effects, each re-read from its
+decompilation/disassembly. The 10 flyby handlers are corrected in §3.1/§6.9.
 
 ## 2. Dispatcher shape (verified)
 
@@ -52,7 +56,7 @@ past it, and dispatches. Confirmed structure (decompilation at `0x004c6460`):
    if (next == 0x3ff) tribe[0x59a] &= ~(1 << (command_offset & 0x1f));
    ```
 2. **`0x40e` and `0x423`–`0x4c7` — handler dispatch (146 opcodes).** Each routes to
-   one of **107 distinct handler functions** (§3). Several opcodes share a handler
+   one of **114 distinct handler functions** (§3.1). Several opcodes share a handler
    (the handler switches internally on a resolved argument, not the opcode — e.g.
    `0x42a`/`0x42b` pass their evaluated operand to `FUN_004b7140`/`FUN_004b7160`).
 3. Opcodes outside the listed cases fall through (no-op / return).
@@ -201,10 +205,14 @@ Routing (opcode → entry address) is **verified**. Names are per the legend.
 | Total command opcodes (`0x404`–`0x4c7`) | 168 | routing verified |
 | Inline flag set/clear (`0x404`–`0x41b` ∖ `0x40e`) | 22 | mechanism verified, bit semantics `[UNVERIFIED]` |
 | Routed to a handler function | 146 | routing verified |
-| Distinct handler functions | 107 | — |
-| ↳ with `AI_Script*` Ghidra label (level-4 hint) | ~45 | name unverified, **behaviour not yet derived** |
-| ↳ formerly unnamed (`FUN_`) — **now behaviourally derived** | 52 | §6 (decompilation-level; 1 undetermined) |
-| ↳ flyby (corrected from wrong DB name) | 10 | corrected via `re_meta.md` |
+| **Distinct handler functions** | **114** | — |
+| ↳ **flyby** (cinematic camera; DB names wrong) | 10 | corrected via `re_meta.md`; 7 carry `AI_ScriptCmd_CastSpell*`/`SetPatrolTarget`/`SetRenderDirty` names, 3 carry `FUN_` |
+| ↳ **non-flyby, Ghidra-named** (`AI_*`) | 44 | behaviour + operand counts derived in §7 (42 `AI_Script*` + `AI_ExecuteMultiParamCommand` + `AI_KillTribeUnits`) |
+| ↳ **non-flyby, formerly unnamed** (`FUN_`) | 60 | behaviour derived in §6 (59 derived across §6.1–§6.10; 1 undetermined export, §6.11) — includes the 7 two-operand late-comers in §6.10 |
+
+(10 + 44 + 60 = 114. The 7 flyby handlers that carry `AI_ScriptCmd_*` *names* are
+counted under "flyby", not under "Ghidra-named" — so the 49 `AI_Script*`-labelled
+functions = 42 real + 7 flyby.)
 
 ## 4. Notable findings
 
@@ -220,22 +228,38 @@ Routing (opcode → entry address) is **verified**. Names are per the legend.
   variable slot; the dispatcher's `case` body (not the evaluator) does the store.
 * **The formerly-unnamed handlers split into clear families** (§6): per-tribe
   AI-flag bit-ops on `tribe+0x596`, shaman-command issuers, person-list query
-  counters, area-effect appliers, and global/UI toggles. The command layer is now
-  characterized at decompilation level; what remains is fixture confirmation and the
-  ~45 still-only-Ghidra-labelled handlers.
+  counters, area-effect appliers, and global/UI toggles.
+* **The whole command set is now characterized at decompilation level.** All 168
+  opcodes have a verified route + operand count; §6 derives the 60 formerly-unnamed
+  `FUN_` handlers and §7 verifies the 44 non-flyby Ghidra-named ones (names accurate;
+  a further 7 `AI_Script*`-named functions are the mislabeled flyby block). The only
+  remaining static gap is one empty export
+  (`FUN_004b4380`, §6.10). What remains is **capture-fixture confirmation** and
+  pinning the exact *meaning* of each command's arguments (e.g. which property/state a
+  "SetProperty"/"SetPersonState" opcode selects).
+* **Two reusable idioms** (§7.1): the `0x45e..0x461` immediate-tribe-selector operand
+  (= BLUE/RED/YELLOW/GREEN constants), and the query-result store into variable slot
+  `ctx[0x3000 + dst*4]` (the script's function-return mechanism — the VM has no value
+  stack).
 
-## 5. How to extend this into a behavioural spec
+## 5. How to pin a command's exact argument meanings
 
-For an `AI_Script*`-labelled opcode not yet covered in §6, the re-derivation recipe is:
+Routing, operand counts, and effects are done (§6, §7). The remaining per-command work
+is interpreting *what each argument means* and confirming against the running game. The
+recipe:
 
-1. `ghidra-bridge dump-asm <handler-address>` (from §3).
-2. Read the opcode's `case` body in the dispatcher (`0x004c6460`) for **operand
-   count and signature** — the dispatcher resolves operands and passes them in (§2).
-3. Identify the game-state effect (which tribe/person/object field it writes).
-4. Confirm against a capture fixture before relying on it.
+1. `ghidra-bridge dump-asm <handler-address>` (from §3) — or read its `.c` in
+   `~/decomp_export/functions/`.
+2. For dispatcher-resolved operands, read the opcode's `case` body at `0x004c6460`; for
+   self-resolving named handlers (§7), read the handler body — operands are evaluated
+   in order via `AI_EvaluateScriptValue`.
+3. Identify the game-state effect (which tribe/person/object field it writes) — §6/§7
+   give the field/helper; map each operand to its role.
+4. Confirm against a capture fixture before relying on it (outstanding for **all**
+   commands — nothing here is capture-verified yet).
 
-§6 below applies steps 1–3 to the 52 formerly-unnamed handlers (step 4 — fixtures —
-is still outstanding for all of them).
+§6 applies steps 1–3 to the 60 formerly-unnamed `FUN_` handlers; §7 to the 44 non-flyby
+named ones. Step 4 is the open frontier for the entire command set.
 
 ## 6. Derived handler behaviour (formerly-unnamed set)
 
@@ -382,13 +406,114 @@ channel uses). They apply a timed effect to persons near that position.
 | `0x4c6` | `FUN_0041c300` | (query, see §6.8) |
 | `0x4a7` | `FUN_004ca6d0` | Reads its own operands from IP (does **not** use the dispatcher's resolution): stores `DAT_0088609d >> 0x1f` (a sign bit) into a variable slot, and conditionally two more values (`DAT_00854198`/`99`) — a **state-capture into script variables**. |
 
-### 6.10 Undetermined
+### 6.10 Two-operand variants and late additions
+
+Seven more `FUN_` handlers (found when the routing was re-extracted precisely — the
+first parse had mis-attributed these opcodes to a neighbouring call). They are
+two-operand variants of the families above, plus one flyby late-comer:
+
+| Opcode | Handler | Behaviour |
+|---|---|---|
+| `0x42d` | `FUN_004b70f0` | On `ai_tribe`: `+0x596 |= 0x20` and store packed (a,b) target into `+0x5a4` — arms a coordinate target (sibling of `0x431`). |
+| `0x43a` | `FUN_004ebab0` | Shaman-command issuer: `AI_SetShamanCommand(tribe, slot, type 0, 4, packed_xy, 1, 0)` — command type 0 with a target. |
+| `0x446` | `FUN_004b5c20` | `tribe+0x5b2 = arg` (1 operand — a config byte). |
+| `0x447` | `FUN_004ecbd0` | Shaman-command issuer (type 6): maps spell-arg `3/4/5/6 → 7/5/6/8`, resolves a spell handle (`FUN_004b5540`), issues if available. Gated on free slot + person count. |
+| `0x448` | `FUN_004ecc70` | Shaman-command issuer (type `0x1a`), 2 operands; copies personality bytes (`tribe*0x30`-stride) into the command like `0x44e`. |
+| `0x493` | `FUN_004b3fc0` | From a marker, walk a cell's object chain to a class-`0x06`/subtype-`0x06` object and `Object_DestroyByType` it (the *destroy* twin of `0x47f`'s flag-set). |
+| `0x4bf` | `FUN_004dab20` | **Flyby** `Flyby_QueueEvent` (sorted insert into the event queue; was `AI_QueueSpellCommand` — per `re_meta.md`). Belongs to the cinematic-camera family, routed just past the `0x4b4`–`0x4be` block. |
+
+### 6.11 Undetermined
 
 | Opcode | Handler | Status |
 |---|---|---|
 | `0x45c` | `FUN_004b4380` | Export is empty in `~/decomp_export` (thunk or export gap). `[UNVERIFIED]` — dump-asm at `0x004b4380` directly to resolve. |
 
-## 7. Evidence index
+## 7. Named handlers — verification & operand counts
+
+**49 handlers carry an `AI_Script*` Ghidra label.** Each was checked against its
+decompilation. **Verdict: 42 names are accurate** (behaviour matches the label — unlike
+the flyby block, these were correctly identified); **7 are the flyby functions** whose
+labels are wrong (corrected in §3 / §6.9, excluded from the table below). Two further
+handlers carry non-`AI_Script*` `AI_*` names — `AI_ExecuteMultiParamCommand` (`0x43b`/
+`0x43c`) and `AI_KillTribeUnits` (`0x4c5`) — also confirmed accurate; with the 42 that
+makes **44 non-flyby named handlers** (the §3.1 figure). Names here are promoted from
+level-4 hint to **decompilation-confirmed** (still no capture fixture; arg *meanings* —
+e.g. which property a "property" opcode sets — remain to be pinned per command).
+
+### 7.1 Shared idioms (verified)
+
+Two patterns recur across these handlers and are worth stating once:
+
+* **Immediate-tribe-selector operand.** Many handlers read an operand token and, *if it
+  lies in `0x45e..0x461`*, treat it as an **immediate tribe index** `token - 0x45e`
+  (= 0..3); otherwise they evaluate it normally via `AI_EvaluateScriptValue`. So
+  `0x45e`/`0x45f`/`0x460`/`0x461` are effectively the constants BLUE/RED/YELLOW/GREEN
+  in operand position. (Seen in `GetAttribute`, `GetTribePersonCount`,
+  `CountTribeBuildings`, `TrainPersons`, `SetBucketUsage`, `SetTribeProperty`, …)
+* **Query result store.** "Getter/counter" handlers finish by writing their result into
+  a **variable slot**: `ctx[0x3000 + dstDesc.value*4]`, where the final operand token is
+  the destination descriptor index. This is the script's function-return mechanism (the
+  VM has no value stack). Marked "→ var" below.
+
+### 7.2 Named-handler table
+
+`ops` = number of `AI_EvaluateScriptValue` resolutions the handler performs itself
+(these handlers receive 0 dispatcher-resolved operands and parse their own). Field
+offsets / helper addresses are the confirmed effect.
+
+| Opcode | Handler | ops | Effect (decompilation-confirmed) |
+|---|---|---|---|
+| `0x40e` | `AI_ScriptSetSpellTarget` | 2 | Sets/clears spell-active flags on `tribe+0x59a`/`+0x596`; stores packed target (x,y) into `tribe+0x46e`. |
+| `0x423` | `AI_ScriptCmd_AttackWithArmy` | 11 | Large attack-config command (11 operands → attack parameters). |
+| `0x428` | `AI_ScriptSetGuardPoint` | 3 | Set a guard point (3 operands). |
+| `0x42c` | `AI_ScriptCountPeopleInArea` | 3 | → var: count people in an area. |
+| `0x434` | `AI_ScriptGetTribeAttribute` | 2 | → var: read `*(byte *)(tribe*0xc65 + 0x886386 + attr)` — per-tribe attribute byte. |
+| `0x435` | `AI_ScriptCountTribeBuildings` | 2 | → var: `Building_GetCount(tribe, type)`. |
+| `0x43d` | `AI_ScriptGetTerrainHeight` | 1 | → var: terrain height at a marker (via `g_terrain_cell_height_lookup`). |
+| `0x444` | `AI_ScriptCmd_CastSpellAtTarget` | 4 | Cast spell at a target (`FUN_004ecad0`); consumes flag `+0x596 & 0x800`. |
+| `0x445` | `AI_ScriptCmd_SetPatrolPoints` | 1 | Set patrol points (`AI_GetTargetPerson`). |
+| `0x449` | `AI_ScriptSetMarkerPosition` | 3 | Set a marker position (`FUN_004ecd40`). |
+| `0x44a` | `AI_ScriptCheckBuildingState` | 1 | → var: `Building_CheckAvailability`. |
+| `0x44d` | `AI_ScriptDefineArea` | 5 | Define a named area; sub-token `0x450`/`0x451` select a mode. |
+| `0x452` | `AI_ScriptCmd_CountObjectsInArea` | 5 | → var: count objects in an area. |
+| `0x453` | `AI_ScriptCmd_SetPersonState` | 4 | Set person state (`FUN_004eba60`). |
+| `0x454` | `AI_ScriptCmd_ConfigureDefense` | 6 | Configure defensive posture (6 operands). |
+| `0x457` | `AI_ScriptCmd_SetViewTarget` | 3 | Set view/camera target. |
+| `0x45b` | `AI_ScriptCmd_SetTribeProperty` | 2 | `FUN_00496c50(value, tribe, 1)` — set a tribe property. |
+| `0x462` | `AI_ScriptCmd_FindTargetObject` | 3 | → var: find a target object (`Building_GetAnchorPosition`, `Tribe_GetShaman`). |
+| `0x46a` | `AI_ScriptCmd_CountPersonsByType` | 3 | → var: count persons by type. |
+| `0x46b` | `AI_ScriptCmd_CountPersonsInRange` | 2 | → var: count persons in range. |
+| `0x46d` | `AI_ScriptCmd_DefendWithSpell` | 1 | Shaman defends with a spell (`Tribe_GetShaman`, `Input_ProcessKeyCommand`). |
+| `0x46e` | `AI_ScriptCmd_AttackWithSpell` | 1 | Shaman attacks with a spell (drives input cmd `0x15`; `FUN_00424890`). |
+| `0x472` | `AI_ScriptCmd_TrainPersons` | 2 | `FUN_00425320(tribe, count)` — train units. |
+| `0x476` | `AI_ScriptCmd_SetActiveSpell` | 1 | Set the active spell (`FUN_0045b060`). |
+| `0x478` | `AI_ScriptCmd_EnableProperty` | 2 | Enable a property (paired with `0x48b`). |
+| `0x480` | `AI_ScriptCmd_LookAtShaman` | 1 | Point view at the shaman (`Input_ProcessKeyCommand`). |
+| `0x48a` | `AI_ScriptCmd_SetBucketUsage` | 1 | `tribe+0x5ba = value` — bucket-usage byte. |
+| `0x48b` | `AI_ScriptCmd_DisableProperty` | 2 | Disable a property. |
+| `0x48e` | `AI_ScriptCmd_SetAttackTarget` | 4 | Set attack target (4 operands). |
+| `0x48f` | `AI_ScriptCmd_GetAttributeCount` | 1 | → var: `FUN_004b4040(tribe)` attribute count. |
+| `0x490` | `AI_ScriptCmd_GetIdlePersonCount` | 1 | → var: `FUN_004b4050(tribe)` idle-person count. |
+| `0x4a6` | `AI_ScriptCmd_KillPersonsInArea` | 3 | Kill persons in an area (3 operands). |
+| `0x4a8` | `AI_ScriptCmd_GetAttribute` | 1 | → var: `*(short *)(0x886197 + tribe*0xc65)`. |
+| `0x4aa` | `AI_ScriptCmd_GetTribePersonCount` | 3 | → var: `FUN_004b7170(tribe, a, b)`. |
+| `0x4ab` | `AI_ScriptCmd_CastSpell` | 4 | Cast spell: packs (x,y), remaps spell index (0→1, 1→2), `FUN_0045cac0(spell, pos, arg)`. |
+| `0x443` | `AI_ScriptCmd_SetAttackParams` | 7 | Set attack parameters (7 operands). |
+| `0x499` | `AI_ScriptCmd_SendPersonToPos` | 4 | Send a person to a position (`Sound_AllocateChannel`). |
+| `0x49a` | `AI_ScriptCmd_SetPersonTarget` | 3 | Set a person's target. |
+| `0x4af` | `AI_ScriptCmd_SetGuardRegion` | 3 | Set a guard region. |
+| `0x4c0` | `AI_ScriptCmd_SetGuardArea` | 3 | Set a guard area. |
+| `0x432` | `AI_ScriptCmd_EnsureShamanSafe` | 1 | Issue shaman-safety command (`AI_SetShamanCommand`, `AI_CheckShamanSafety`). |
+| `0x433` | `AI_ScriptCmd_CheckShamanSafe` | 0 | Check/issue shaman-safety command. |
+
+> The `Cast*`/spell handlers were **explicitly confirmed** to cast spells (not flyby):
+> `CastSpell` (`0x4ab`) and `CastSpellAtTarget` (`0x444`) call the cast helpers
+> `0x45cac0`/`0x4ecad0`; `AttackWithSpell`/`DefendWithSpell` drive the shaman through
+> `Input_ProcessKeyCommand`. This is the boundary that the **mislabeled** flyby block
+> (`0x4b9`–`0x4be`, the `CastSpellDirect/Area/Directional/Targeted/Complex` *names*)
+> sits just past — do not confuse the two (§6.9, §3 legend).
+
+## 8. Evidence index
 
 | Item | Address | Note |
 |---|---|---|
