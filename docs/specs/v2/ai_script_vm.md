@@ -60,15 +60,17 @@ but the disassembly shows it is the **tribe/player struct base pointer**
 `0x004c8bc6: MOVSX ECX,[ESI+0xc22]`). Treat `param_1` as `tribe_ptr` in the rewrite;
 the "person" name is misleading.
 
-`param_2` is the **script context** — a separate, larger allocation (offsets reach
+`param_2` is the **script context** — a separate, larger region (offsets reach
 `+0x3104`, far beyond the `0xc65` tribe stride, so it is **not** inside the tribe
 struct, contrary to the legacy claim; see §9). Called from `AI_UpdateTribe`
 `0x0041a93d`: `PUSH EDX` (context) / `PUSH EDI` (tribe_ptr) / `CALL 0x4c5eb0`.
 
-> `[UNVERIFIED]` The allocation/source of the context pointer (`EDX` at
-> `0x0041a93d`) was not traced to its origin in this pass — confirm whether it is a
-> per-tribe field or a shared scratch buffer. Its *layout and usage* (§3) are fully
-> confirmed.
+The context's origin is now **confirmed** (see `ai_brain.md` §3): it is a **fixed global
+array at `0x945d4a`, stride `0x3108`**, indexed by tribe id — `EDX` at `0x0041a93d` is
+computed as `0x945d4a + tribeId*0x3108` (tribes 0–3 ⇒ `0x945d4a / 0x948e52 / 0x94bf5a /
+0x94f062`). It is **not** heap-allocated and **not** a field inside the `0xc65` tribe
+struct; it is a parallel per-tribe table. The `0x3108` stride leaves `4` bytes of slack
+above the `+0x3104` IP field.
 
 ## 3. Script-context memory map
 
