@@ -103,6 +103,7 @@ fabricated "base `0x404`" table (§9). Verified from the `switch` structure of
 |---|---|---|---|---|
 | `0x3e8` | 1000 | **IF** | next token = a comparison/condition opcode | Evaluate condition; run the following block if true, else skip to matching `0x3ec`; optional `ELSE` block (`0x3e9`). |
 | `0x3e9` | 1001 | **ELSE** | — | Marks the else-block; consumed during IF handling. |
+| `0x3ea` | 1002 | **ENDIF** | — | End-of-IF-construct marker. **Found by bytecode survey, not in the original §4 draft** — see §4.0. Always immediately follows a `0x3ec` (BLOCK-END); 0 operands. |
 | `0x3eb` | 1003 | **BLOCK-BEGIN** | — | Opens a block; used for `{}`-style nesting and depth counting when skipping. |
 | `0x3ec` | 1004 | **BLOCK-END** | — | Closes a block; inner dispatch loop terminates here. |
 | `0x3ed` | 1005 | **GUARDED-BLOCK** | `descA_index`, `[descB_index]` | Run the following block iff `descA.value & (tribeId + B + tickCounter) == 0` (see §6.3). |
@@ -121,6 +122,24 @@ fabricated "base `0x404`" table (§9). Verified from the `switch` structure of
 | `0x3fd` | 1021 | **OR** | two nested conditions | Logical OR of two conditions. |
 | `0x401` | 1025 | **MUL** (`*=`) | `dstDesc_index`, `srcDesc_index` | `dst *= value` (`AI_ProcessSubroutineCall`; §6.4). |
 | `0x402` | 1026 | **DIV** (`/=`) | `dstDesc_index`, `srcDesc_index` | `dst /= value`, **div-by-zero ⇒ 0**. |
+
+### 4.0 Corpus validation (bytecode survey)
+
+This table was cross-checked against the real bytecode by disassembling all 59 shipped
+scripts (`data/original_game/levels/cpscr*.dat`; tool `tmp/disasm_cpscr.py`). The opcode
+model decodes the corpus **99.36% clean** (28585 bytecode statements, 184 strays), which
+both confirms the statement model and surfaced three corrections:
+
+1. **`0x3ea` (ENDIF) was missing** (added above). It occurs **2252×** and *always* directly
+   follows a `0x3ec`; without it the disassembler desyncs after every IF/ELSE construct.
+2. **`0x3ed` GUARDED-BLOCK is variable-arity** (1 *or* 2 operands, as the `[descB_index]`
+   already hinted): the optional `descB` is present iff the next token is **not** `0x3eb`
+   (`{`). A fixed-1 reading leaves a stray token before each guarded block.
+3. **File layout:** each `cpscr*.dat` is a **dumped script-context image** — exactly
+   `0x3108` bytes (the per-tribe context stride, §2.1). Bytecode runs from token 1 to the
+   first `0x3fb` (`SCRIPT-END`, ~1500–1840 tokens in); the bytes from `0x2000` on are the
+   operand-descriptor table (§5) that the operand *indices* point into, not code. A decoder
+   must stop at `0x3fb` or it disassembles the descriptor table as garbage.
 
 ### 4.1 The `0` → `0x3ec` self-patching sentinel
 

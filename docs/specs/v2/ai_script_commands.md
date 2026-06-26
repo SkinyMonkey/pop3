@@ -74,6 +74,22 @@ the opcode's `case` block at `0x004c6460`. (The inline flag-ops `0x404`–`0x41b
 no descriptor operand but consume one extra literal token — the `0x3fe`/`0x3ff`
 set/clear selector — which is not an evaluated operand.)
 
+> **Operand count ≠ stream-token count — important for any decoder.** The numbers above
+> count *evaluated* operands (`AI_EvaluateScriptValue` calls). A bytecode decoder must
+> instead track **stream arity** = evaluated operands **+ inline literal tokens** the
+> handler reads directly from the IP (the `0x3fe`/`0x3ff` selector above, plus mode
+> sub-tokens like `0x44d`'s `0x450`/`0x451`). The two differ for many opcodes — measured
+> from the corpus (`tmp/disasm_cpscr.py`, unanimous across all 59 scripts): e.g. `0x40e`
+> evaluates 2 but consumes **3** (2 + selector); `0x423` consumes **13**, not 11; the
+> inline flag-ops consume 1 (the selector), not 0. The full corpus-measured stream-arity
+> table lives in the disassembler; resolved gap opcodes include `0x495`=2 (the most common
+> command, 1502×), `0x494`/`0x48c`=1, `0x4ac`=1, `0x43c`=7, `0x4c5`=1, and the flyby block
+> `0x4b8`=1, `0x4b9`=4, `0x4ba`=3, `0x4bb`=3, `0x4bd`=5, `0x4be`=4 (`0x4bc` not emitted by
+> any shipped script). **Note:** the §6.3/§6.8 "1 operand" opcodes `0x49c`/`0x4a3`/`0x4ae`
+> consume **0 stream tokens** (unanimous in the corpus) — their operand is dispatcher-
+> resolved, *not* a separate bytecode token. With these and ENDIF in place the decoder
+> reaches **99.87% clean** across all 59 scripts (36 stray tokens total, no dominant opcode).
+
 ## 3. Opcode → handler routing map
 
 **Legend** — handler-name trust:
