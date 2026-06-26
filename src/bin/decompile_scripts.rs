@@ -16,6 +16,8 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use pop3::data::cpscr;
+
 const MAX_CODES: usize = 4096;
 const MAX_FIELDS: usize = 512;
 const TOKEN_OFFSET: u16 = 1000;
@@ -717,7 +719,13 @@ impl Decompiler {
             .unwrap_or("UNKNOWN_CMD");
         self.advance();
 
-        let param_count = command_param_count(cmd_name);
+        // Operand count = corpus-validated stream arity (decodes all 59 shipped scripts
+        // by construction), which corrected the hand-written name table for commands it
+        // got wrong (e.g. SET_ATTACK_VARIABLE 0x439: listed 2, actually 1 — it ate the
+        // following DO token and desynced cpscr013). For sub-opcodes no shipped script
+        // uses (unmeasured), fall back to the name table.
+        let param_count = cpscr::command_arity_opt(cmd_code)
+            .unwrap_or_else(|| command_param_count(cmd_name));
 
         self.write_indent();
         self.output.push_str(cmd_name);
@@ -1530,12 +1538,12 @@ mod tests {
 
     #[test]
     fn decompile_do_one_param_constant() {
-        // BEGIN, DO, BUILD_DRUM_TOWER, field0, END
+        // BEGIN, DO, SET_DEFENCE_RADIUS (arity 1, corpus-measured), field0, END
         let codes = vec![
             SCRIPT_VERSION,
             TOKEN_OFFSET + 3, // BEGIN
             TOKEN_OFFSET + 6, // DO
-            TOKEN_OFFSET + NO_COMMANDS + 55, // BUILD_DRUM_TOWER
+            TOKEN_OFFSET + NO_COMMANDS + 169, // SET_DEFENCE_RADIUS
             0,                // field
             TOKEN_OFFSET + 4, // END
         ];
@@ -1545,7 +1553,7 @@ mod tests {
         let mut decompiler = Decompiler::new(script);
 
         let result = decompiler.decompile().unwrap();
-        assert!(result.contains("BUILD_DRUM_TOWER(1)"));
+        assert!(result.contains("SET_DEFENCE_RADIUS(1)"));
     }
 
     #[test]
@@ -1874,7 +1882,7 @@ mod tests {
             2,                // rhs (0)
             TOKEN_OFFSET + 3, // BEGIN (if body)
             TOKEN_OFFSET + 6, // DO
-            TOKEN_OFFSET + NO_COMMANDS + 68, // TRAIN_PEOPLE_NOW
+            TOKEN_OFFSET + NO_COMMANDS + 169, // SET_DEFENCE_RADIUS (arity 1, corpus-measured)
             3,                // param
             TOKEN_OFFSET + 4, // END (if body)
             TOKEN_OFFSET + 2, // ENDIF
@@ -1894,7 +1902,7 @@ mod tests {
         let result = decompiler.decompile().unwrap();
         assert!(result.contains("EVERY(128, function()"), "Got: {}", result);
         assert!(result.contains("if (_var2 > 0) then"), "Got: {}", result);
-        assert!(result.contains("TRAIN_PEOPLE_NOW(1)"), "Got: {}", result);
+        assert!(result.contains("SET_DEFENCE_RADIUS(1)"), "Got: {}", result);
     }
 
     #[test]
@@ -1953,8 +1961,7 @@ mod tests {
             TOKEN_OFFSET + NO_COMMANDS + 137, // SET_REINCARNATION
             TOKEN_OFFSET + 23, // OFF
             TOKEN_OFFSET + 6, // DO
-            TOKEN_OFFSET + NO_COMMANDS + 82, // DELAY_MAIN_DRUM_TOWER
-            TOKEN_OFFSET + 22, // ON
+            TOKEN_OFFSET + NO_COMMANDS + 82, // DELAY_MAIN_DRUM_TOWER (arity 0, corpus-measured)
             TOKEN_OFFSET + 4, // END (if body)
             TOKEN_OFFSET + 2, // ENDIF
             TOKEN_OFFSET + 1, // ELSE
@@ -1991,7 +1998,7 @@ mod tests {
         let result = decompiler.decompile().unwrap();
         assert!(result.contains("if (GAME_TURN == 0) then"), "Got: {}", result);
         assert!(result.contains("SET_REINCARNATION(OFF)"), "Got: {}", result);
-        assert!(result.contains("DELAY_MAIN_DRUM_TOWER(ON)"), "Got: {}", result);
+        assert!(result.contains("DELAY_MAIN_DRUM_TOWER()"), "Got: {}", result);
         assert!(result.contains("EVERY(256, function()"), "Got: {}", result);
         assert!(result.contains("if (MY_NUM_PEOPLE < 79) then"), "Got: {}", result);
     }

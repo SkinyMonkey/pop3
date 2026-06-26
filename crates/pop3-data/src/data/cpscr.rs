@@ -95,7 +95,14 @@ fn statement_operands(op: Op) -> usize {
 /// shipped scripts (unanimous, no ambiguity); see `ai_script_commands.md` §2.2.
 /// Opcodes never emitted by a shipped script default to 0.
 pub fn command_arity(sub: u16) -> usize {
-    match sub {
+    command_arity_opt(sub).unwrap_or(0)
+}
+
+/// Like [`command_arity`] but `None` for sub-opcodes no shipped script uses (so a
+/// caller can fall back to another source rather than assume 0). All 168 catalog
+/// opcodes exist, but only ~116 appear in the shipped scripts and were measured.
+pub fn command_arity_opt(sub: u16) -> Option<usize> {
+    Some(match sub {
         0x404 | 0x405 | 0x406 | 0x407 | 0x408 | 0x409 | 0x40a | 0x40b | 0x40c | 0x40d => 1,
         0x40f | 0x411 | 0x413 | 0x414 | 0x415 | 0x416 | 0x417 | 0x418 | 0x41a | 0x41b => 1,
         0x40e => 3,
@@ -157,8 +164,15 @@ pub fn command_arity(sub: u16) -> usize {
         0x4be => 4,
         0x4c0 => 3,
         0x4c5 | 0x4c6 | 0x4c7 => 1,
-        _ => 0,
-    }
+        // Arity-0 commands that DO appear in shipped scripts (incl. the §6.3/§6.8
+        // "1 operand" ops whose operand is dispatcher-resolved, not a stream token).
+        // Listed explicitly so `command_arity_opt` returns Some(0) — distinguishing
+        // "measured 0" from "never seen" (which yields None for caller fallback).
+        0x44f | 0x455 | 0x456 | 0x458 | 0x459 | 0x45d | 0x463 | 0x465 | 0x467 | 0x470
+        | 0x475 | 0x491 | 0x492 | 0x49c | 0x4a3 | 0x4a9 | 0x4ad | 0x4ae | 0x4b1 | 0x4b5
+        | 0x4b6 | 0x4c1 => 0,
+        _ => return None,
+    })
 }
 
 /// An operand-descriptor table entry (`ctx+0x2000`, 8 bytes). `kind`: 0=immediate,
