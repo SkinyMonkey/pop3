@@ -1,0 +1,161 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: Milestone complete
+stopped_at: Completed 05-11-PLAN.md (AI command dispatch gap closure)
+last_updated: "2026-03-24T04:04:55.403Z"
+progress:
+  total_phases: 6
+  completed_phases: 4
+  total_plans: 30
+  completed_plans: 29
+---
+
+# Project State
+
+## Project Reference
+
+See: .planning/PROJECT.md (updated 2026-03-17)
+
+**Core value:** Faithful reproduction of the original Populous: The Beginning gameplay on modern platforms
+**Current focus:** Phase 05 — ai-and-campaign
+
+## Current Position
+
+Phase: 05
+Plan: Not started
+
+## Performance Metrics
+
+**Velocity:**
+
+- Total plans completed: 7
+- Average duration: ~4 min
+- Total execution time: ~27 min
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| 01-core-object-system | 3/3 | ~7 min | ~2.3 min |
+| 02-economy-and-combat | 7/7 | ~32 min | ~4.6 min |
+
+**Recent Trend:**
+
+- Last 5 plans: 02-03 (4min), 02-01 (4min), 02-05 (5min), 02-06 (7min), 02-07 (5min)
+- Trend: Fast
+
+*Updated after each plan completion*
+| Phase 02 P06 | 7min | 2 tasks | 8 files |
+| Phase 02 P07 | 5min | 2 tasks | 8 files |
+| Phase 02 P10 | 5min | 2 tasks | 4 files |
+| Phase 02 P09 | 7min | 2 tasks | 5 files |
+| Phase 03 P02 | 3min | 2 tasks | 4 files |
+| Phase 03 P03 | 4min | 2 tasks | 2 files |
+| Phase 03 P01 | 4min | 2 tasks | 4 files |
+| Phase 03 P04 | 4min | 2 tasks | 2 files |
+| Phase 03 P05 | 7min | 2 tasks | 5 files |
+| Phase 05 P03 | 3min | 2 tasks | 6 files |
+| Phase 05 P06 | 3min | 2 tasks | 3 files |
+| Phase 05 P02 | 3min | 2 tasks | 7 files |
+| Phase 05 P01 | 6min | 2 tasks | 4 files |
+| Phase 05 P05 | 4min | 2 tasks | 5 files |
+| Phase 05 P04 | 6min | 2 tasks | 2 files |
+| Phase 05 P07 | 4min | 2 tasks | 3 files |
+| Phase 05 P08 | 7min | 3 tasks | 4 files |
+| Phase 05 P09 | 3min | 2 tasks | 2 files |
+| Phase 05 P10 | 3min | 2 tasks | 2 files |
+| Phase 05 P11 | 5min | 2 tasks | 5 files |
+
+## Accumulated Context
+
+### Decisions
+
+Decisions are logged in PROJECT.md Key Decisions table.
+Recent decisions affecting current work:
+
+- [Roadmap]: Lua scripting for AI instead of bytecode VM (community docs exist for Lua equivalents)
+- [Roadmap]: Coarse 4-phase structure consolidating research's 9 phases into delivery boundaries
+- [Roadmap]: Audio, vehicles, creatures, remaining spells deferred to v2
+- [01-01]: Single LIFO free list instead of original binary's two-tier high/low priority split
+- [01-01]: Box<[PoolSlot]> via Vec for heap allocation without stack overflow
+- [01-02]: CellGrid kept separate from RegionMap to avoid repr(C) layout issues
+- [01-02]: Reused REGION_GRID_SIZE constant from movement module for CELL_GRID_SIZE
+- [01-03]: Kept Vec<Unit> as compatibility shim rebuilt from pool, avoiding risky all-at-once tick() migration
+- [01-03]: Made units field private with pub fn units() accessor for encapsulation
+- [02-03]: Person subtype mapping: Wild(1)=0 mana, Brave(2)=1, Warrior(3)=1, Preacher(4)=2, Spy(5)=1, SuperWarrior(6)=1, Shaman(7)=1
+- [02-03]: u16 for population/wood types, u32 for mana (matching MAX_MANA=1000000 range)
+- [02-01]: BuildingSubtype gaps match original binary (no type 12, jumps 11->13)
+- [02-01]: Behavior flags from BLD.5: 0x20=housing, 0x01=training, 0x40=vehicle, 0x08=fighting, 0x0400=temple
+- [Phase 02]: Normal calculation via cross product of tangent vectors T_z x T_x for correct up-facing normals on flat terrain
+- [Phase 02]: Steep slope threshold at 512 height units between adjacent cells
+- [Phase 02]: CascadeRegion handles toroidal wrapping internally with for_each_cell and contains_tile
+- [02-05]: Reuse construction_progress as spawn timer in Active state (matches original binary pattern)
+- [02-05]: Building combat base damage = 100 per fighter slot per tick
+- [02-05]: Placement checks water (0x04), steep (0x02), occupied in priority order
+- [02-06]: ShotData fields match original binary projectile tracking (type, target, damage, AOE, knockback, lifetime, speed)
+- [02-06]: fight_damage_for_subtype constants cross-verified against person_type_defaults table
+- [02-06]: Drum tower range 768 world units (about 6 cells at 128 units/cell)
+- [02-04]: DeferredAction pattern avoids borrow checker conflicts between Unit tick and building pool data
+- [02-04]: tick_state returns (TickResult, DeferredAction) tuple; existing states return DeferredAction::None
+- [02-04]: Guard behavior uses guard_position field on Unit, managed by coordinator (no Guard enum variant)
+- [02-07]: ManaTickBridge pattern: separate struct holding pool ref + tribe data ref to bridge borrow-checker constraint
+- [02-07]: Mana tick called post-simulation_tick outside TickSubsystems due to borrow conflict with coordinator in objects slot
+- [02-07]: Ghost preview rendering placeholder with alpha/tint logic; full GPU uniform integration deferred to render pipeline refactor
+- [02-10]: Default tribe_index=0 (Blue) for ghost preview; player tribe selection is follow-up
+- [02-10]: Ghost mesh cached by (building_type, cell_x, cell_y) key to avoid per-frame GPU rebuild
+- [02-10]: Ghost pipeline depth_write_enabled=false so transparent ghost doesn't occlude objects
+- [02-08]: BuildingTickActions struct aggregates spawn/convert/combat from single building tick
+- [02-08]: Two-phase collect-then-process in tick_buildings() avoids borrow conflicts
+- [02-08]: spawn_brave_near offsets spawn position by (128, 64) world units from building
+- [02-09]: gather_target field on Unit instead of reusing movement.target_pos (avoids pathfinding conflicts)
+- [02-09]: state_timer as flag (0=need target, 1=navigating) for Gathering state machine
+- [02-09]: AOE radius to cell radius via (radius / 128).max(1) for CellGrid knockback queries
+- [03-01]: Integer scaling of 8x8 base font rather than loading original .fon files (sufficient quality, simpler)
+- [03-01]: draw_text_sized delegates to atlas-based draw_text with computed pixel size (avoids duplicate render path)
+- [03-02]: LIFO free list with Vec<u16> for EffectPool (same pattern as ObjectPool, cache-friendly)
+- [03-02]: Effect state=0xFF as inactive sentinel matching original binary pattern
+- [03-02]: Two-phase entity position sync via EntityPosition struct (matches DeferredAction pattern)
+- [03-03]: Mana displayed in K units (player_mana / 1000) for readability
+- [03-03]: spell_cooldowns as Vec<SpellCooldown> populated empty now, Phase 4 fills from SpellSystem
+- [03-03]: Population display placed below mana bar in sidebar layout
+- [03-04]: Viewport rect size = 20.0/zoom cells wide, aspect-ratio-corrected height
+- [03-04]: Camera center from get_shift_vector().rem_euclid(128) for toroidal cell coords
+- [03-04]: Minimap click uses rebuild_spawn_model() same as keyboard panning for consistency
+- [03-05]: Health bars reuse unit_pvm/unit_screen_pos for world-to-screen projection (no new matrix)
+- [03-05]: EffectAction deferred pattern matches DeferredAction/BuildingTickActions collect-then-process approach
+- [03-05]: pending_effect_actions Vec on UnitCoordinator, drained by app loop via drain_effect_actions()
+- [03-05]: Building fire effect spawns every tick while in Destroying state (continuous visual via LOOP flag)
+- [Phase 05]: MenuSystem uses MenuRenderData contract to decouple engine from HUD renderer
+- [Phase 05]: Linear 25-level campaign, objectives informational only in v1, victory via existing victory.rs
+- [Phase 05-02]: bincode 2 with serde feature for compact binary save format (not original 860KB C-struct format)
+- [Phase 05-02]: Single quicksave slot via QUICKSAVE_FILENAME constant
+- [Phase 05]: Shared Lua VM instance with per-tribe TribeScriptState (per D-10)
+- [Phase 05-05]: Fixed plan test: exposed shaman bonus applies when defenders=0 (<3 threshold)
+- [Phase 05]: EVERY uses sequential ID instead of debug.getinfo due to mlua sandbox; _every_reset_ids() called per tick
+- [Phase 05]: AiGameBridge flat struct with per-tribe arrays, Rc<RefCell> shared between Lua closures and Rust
+- [Phase 05-07]: Script body wrapped in _tribe_N_tick() function at load time for per-tick execution
+- [Phase 05-07]: AiSystem owns Rc<RefCell<AiGameBridge>> and registers PopScript functions internally during new()
+- [Phase 05-07]: Instruction limit 100K via mlua HookTriggers prevents runaway AI scripts
+- [Phase 05]: ToggleSimulation uses pause flag instead of Frontend state; Escape in InGame opens menu; update_bridge clears pending AI commands each tick
+- [Phase 05]: AI commands logged for now; real gameplay effects deferred to subsystem maturity
+- [Phase 05]: EVERY counters stored as single global entry since Lua VM is shared across tribes
+- [Phase 05]: take() pattern for AiSystem ownership during dispatch to avoid borrow conflict
+- [Phase 05]: Two-phase collect-then-mutate for building training dispatch
+
+### Pending Todos
+
+None yet.
+
+### Blockers/Concerns
+
+- Phase 1 (Object Pool): RESOLVED -- UnitCoordinator migration completed, all 289 tests pass.
+- Phase 4 (AI): Lua scripting approach needs validation against community script documentation.
+- app.rs is 3296 lines -- may need decomposition before or during Phase 2/3 render work.
+
+## Session Continuity
+
+Last session: 2026-03-24T04:01:05.983Z
+Stopped at: Completed 05-11-PLAN.md (AI command dispatch gap closure)
+Resume file: None

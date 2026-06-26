@@ -560,9 +560,13 @@ fn main() {
                     println!("  {:?}", unit);
                 }
             }
-            for tribe in &level_res.tribes {
-                println!("  {:?}", tribe);
+            for player_start in &level_res.player_starts {
+                println!("  {:?}", player_start);
             }
+            println!("  header.name={:?} flags={:?} num_players={} markers_used={}",
+                level_res.header.name, level_res.header.config(),
+                level_res.header.num_players,
+                level_res.header.markers.iter().filter(|m| m.is_some()).count());
             println!("  {:?}", level_res.sunlight);
         }
         Some(("anims", sub_matches)) => {

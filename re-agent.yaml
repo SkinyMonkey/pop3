@@ -1,0 +1,58 @@
+# re-agent configuration
+# See: https://github.com/dryxio/auto-re-agent for documentation.
+
+project_profile:
+  # Conventions for the popTB.exe C++ reverse work (see src/re/hooks.hpp):
+  #   RE_FUNC(fn, 0xADDR)     — ties a reimplemented function to its binary address
+  #   RE_VIRTUAL(fn, 0xADDR)  — same, for vtable methods
+  #   RE_CLASS(Name)          — groups functions under an original class
+  #   RE_UNIMPLEMENTED()      — marks a not-yet-reversed stub body
+  hook_patterns:
+    - "RE_FUNC\\s*\\(\\s*(\\w+)\\s*,\\s*(0x[0-9A-Fa-f]+)"
+    - "RE_VIRTUAL\\s*\\(\\s*(\\w+)\\s*,\\s*(0x[0-9A-Fa-f]+)"
+  stub_patterns:
+    - "RE_UNIMPLEMENTED"
+  stub_markers:
+    - "RE_UNIMPLEMENTED"
+  class_macro: "RE_CLASS"
+  source_root: "autopop3"
+  source_extensions:
+    - ".cpp"
+    - ".h"
+    - ".hpp"
+  hooks_csv: "docs/hooks.csv"
+
+llm:
+  provider: "openai-compat"
+  model: "glm-5.1:cloud"
+  base_url: "http://localhost:11434/v1"
+  api_key: "ollama"  # Dummy key; Ollama doesn't validate it
+  max_tokens: 4096
+  temperature: 0.0
+  timeout_s: 1800
+
+backend:
+  type: "ghidra-bridge"
+  cli_path: "ghidra-bridge"
+  timeout_s: 45
+
+parity:
+  enabled: true
+  call_count_warn_diff: 3
+  inline_wrapper_autoskip: false
+  # semantic_rules_file: null
+  # manual_checks_file: null
+  cache_dir: ".cache/re-agent-parity"
+
+orchestrator:
+  max_review_rounds: 4
+  max_functions_per_class: 10
+  objective_verifier_enabled: true
+  objective_call_count_tolerance: 3
+  objective_control_flow_tolerance: 2
+
+output:
+  report_dir: "reports/re-agent"
+  log_dir: "reports/re-agent/logs"
+  session_file: "re-agent-progress.json"
+  format: "json"

@@ -11,3 +11,12 @@ tmp
 .idea
 CLAUDE.md
 settings.local.json
+data/scripts/
+scripts/popscript_docs
+scripts/frida-inject.exe
+
+# RE tooling artifacts (regenerable via `ghidra-bridge export` / re-agent runs)
+.ghidra-exports/
+reports/
+re-agent-progress.json
+.cache/

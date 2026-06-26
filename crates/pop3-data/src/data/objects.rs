@@ -1,0 +1,335 @@
+use std::path::Path;
+use std::io::Read;
+use core::mem::size_of;
+use core::slice::Iter;
+
+
+use crate::data::types::{BinDeserializer, from_reader};
+use crate::data::level::ObjectPaths;
+
+/******************************************************************************/
+
+#[derive(Debug, Copy, Clone)]
+#[repr(C, packed)]
+pub struct ObjectRaw {
+    flags: u16,
+    facs_num: u16,
+    pnts_num: u16,
+    f1: u8,
+    morph_index: u8,
+    f2: u32,
+    coord_scale: u32,
+    facs_ptr: u32,
+    facs_ptr_end: u32,
+    pnts_ptr: u32,
+    pnts_ptr_end: u32,
+    f4: i16,
+    f5: i16,
+    f6: i16,
+    f7: u16,
+    f8: u16,
+    f9: u16,
+    fp_idx: [i8; 4],  // SHAPES.DAT footprint index per rotation (0-3), at OBJS offset 0x2c
+    f11: u16,
+    f12: u16,
+    f13: u16,
+}
+
+impl BinDeserializer for ObjectRaw {
+    fn from_reader<R: Read>(reader: &mut R) -> Option<Self> {
+        from_reader::<ObjectRaw, {size_of::<ObjectRaw>()}, R>(reader)
+    }
+}
+
+/******************************************************************************/
+
+#[derive(Debug, Copy, Clone)]
+#[repr(C, packed)]
+pub struct Shape {
+    pub width: u8,
+    pub height: u8,
+    pub origin_x: u8,
+    pub origin_z: u8,
+    pub cell_mask: [u8; 40],
+    pub shape_ref: u32,
+}
+
+impl BinDeserializer for Shape {
+    fn from_reader<R: Read>(reader: &mut R) -> Option<Self> {
+        from_reader::<Self, {size_of::<Self>()}, R>(reader)
+    }
+}
+
+/******************************************************************************/
+
+/// Parsed building footprint data from SHAPES.DAT.
+/// File layout: [64 entries × 48 bytes] [1532 bytes bitmap data].
+/// Each bitmap byte's bit 0 indicates whether the cell is occupied.
+pub struct ShapeFootprints {
+    shapes: Vec<Shape>,
+    bitmap_data: Vec<u8>,
+}
+
+/// Number of valid shape entries in SHAPES.DAT (entries 64+ have garbage shape_ref).
+const SHAPE_ENTRY_COUNT: usize = 64;
+
+impl ShapeFootprints {
+    pub fn empty() -> Self {
+        ShapeFootprints { shapes: Vec::new(), bitmap_data: Vec::new() }
+    }
+
+    pub fn from_file(path: &Path) -> Self {
+        let data = std::fs::read(path).unwrap();
+        let entry_bytes = SHAPE_ENTRY_COUNT * size_of::<Shape>();
+        let mut shapes = Vec::with_capacity(SHAPE_ENTRY_COUNT);
+        let mut cursor = std::io::Cursor::new(&data[..entry_bytes]);
+        for _ in 0..SHAPE_ENTRY_COUNT {
+            if let Some(s) = Shape::from_reader(&mut cursor) {
+                shapes.push(s);
+            }
+        }
+        let bitmap_data = data[entry_bytes..].to_vec();
+        ShapeFootprints { shapes, bitmap_data }
+    }
+
+    pub fn shapes(&self) -> &[Shape] {
+        &self.shapes
+    }
+
+    /// Check if cell (dx, dy) within a shape's bounding box is actually occupied.
+    /// Returns false for out-of-bounds or empty bitmap cells.
+    pub fn is_cell_occupied(&self, shape_idx: usize, dx: usize, dy: usize) -> bool {
+        if let Some(s) = self.shapes.get(shape_idx) {
+            let w = s.width as usize;
+            let offset = s.shape_ref as usize + dy * w + dx;
+            offset < self.bitmap_data.len() && (self.bitmap_data[offset] & 1) != 0
+        } else {
+            false
+        }
+    }
+}
+
+/******************************************************************************/
+
+#[derive(Debug, Copy, Clone)]
+#[repr(C, packed)]
+pub struct PointRaw {
+    x: i16,
+    y: i16,
+    z: i16,
+}
+
+impl BinDeserializer for PointRaw {
+    fn from_reader<R: Read>(reader: &mut R) -> Option<Self> {
+        from_reader::<Self, {size_of::<Self>()}, R>(reader)
+    }
+}
+
+/******************************************************************************/
+
+#[derive(Debug, Copy, Clone)]
+#[repr(C, packed)]
+pub struct FaceRaw {
+    f0: u16,
+    tex_index: i16,
+    flags1: i16,
+    num_points: u8,
+    f11: u8,
+    point_1_u: u32,
+    point_1_v: u32,
+    point_2_u: u32,
+    point_2_v: u32,
+    point_3_u: u32,
+    point_3_v: u32,
+    point_4_u: u32,
+    point_4_v: u32,
+    point_1: u16,
+    point_2: u16,
+    point_3: u16,
+    point_4: u16,
+    f6: u16,
+    ff1: u16,
+    ff2: u16,
+    ff3: u16,
+    ff4: u16,
+    f8: u8,
+    flags2: u8,
+}
+
+impl BinDeserializer for FaceRaw {
+    fn from_reader<R: Read>(reader: &mut R) -> Option<Self> {
+        from_reader::<Self, {size_of::<Self>()}, R>(reader)
+    }
+}
+
+/******************************************************************************/
+
+const XYZ_SCALE: f32 = 1.0 / 300.0;
+const UV_SCALE: f32 = 4.768372e-7;
+
+#[derive(Debug, Copy, Clone)]
+pub struct Vertex {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub u: f32,
+    pub v: f32,
+}
+
+impl Vertex {
+    pub fn new() -> Self {
+        Vertex{x: 0.0, y: 0.0, z: 0.0, u: 0.0, v: 0.0}
+    }
+
+    pub fn from_point(&mut self, point: &PointRaw, u: u32, v: u32) {
+        self.x = point.x as f32 * XYZ_SCALE;
+        self.y = point.y as f32 * XYZ_SCALE;
+        self.z = point.z as f32 * XYZ_SCALE;
+        self.u = u as f32 * UV_SCALE;
+        self.v = v as f32 * UV_SCALE;
+    }
+}
+
+impl Default for Vertex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct Face {
+    pub texture_index: i16,
+    pub vertex_num: usize,
+    pub vertex: [Vertex; 4],
+}
+
+impl Face {
+    pub fn new(texture_index: i16, vertex_num: usize) -> Self {
+        Face{texture_index, vertex_num, vertex: [Vertex::default(); 4]}
+    }
+}
+
+/******************************************************************************/
+
+#[derive(Debug)]
+pub struct Object3D {
+    object: ObjectRaw,
+    faces: Vec<FaceRaw>,
+    points: Vec<PointRaw>,
+}
+
+impl Object3D {
+    pub fn create(object: &ObjectRaw, faces: &[FaceRaw], points: &[PointRaw]) -> Self {
+        let mut object_3d = Object3D{object: *object, faces: Vec::new(), points: Vec::new()};
+        for i in object.pnts_ptr..object.pnts_ptr_end {
+            object_3d.points.push(points[i as usize-1]);
+        }
+        for i in object.facs_ptr..object.facs_ptr_end {
+            object_3d.faces.push(faces[i as usize-1]);
+        }
+        object_3d
+    }
+
+    pub fn create_objects(objects: &[ObjectRaw], faces: &[FaceRaw], points: &[PointRaw]) -> Vec<Self> {
+        let mut objects_3d = Vec::new();
+        for object in objects {
+            if object.facs_num > 0 {
+                objects_3d.push(Self::create(object, faces, points));
+            }
+        }
+        objects_3d
+    }
+
+    pub fn from_file(base: &Path, bank_num: &str) -> Vec<Self> {
+        let paths = ObjectPaths::from_default_dir(base, bank_num);
+        let objects = ObjectRaw::from_file_vec(&paths.objs0_dat);
+        let points = PointRaw::from_file_vec(&paths.pnts0);
+        let faces = FaceRaw::from_file_vec(&paths.facs0);
+        Self::create_objects(&objects, &faces, &points)
+    }
+
+    /// Like `create_objects` but preserves file indices: returns `None` for
+    /// objects with no faces instead of dropping them.
+    pub fn create_objects_all(objects: &[ObjectRaw], faces: &[FaceRaw], points: &[PointRaw]) -> Vec<Option<Self>> {
+        objects.iter().map(|object| {
+            if object.facs_num > 0 {
+                Some(Self::create(object, faces, points))
+            } else {
+                None
+            }
+        }).collect()
+    }
+
+    pub fn from_file_all(base: &Path, bank_num: &str) -> Vec<Option<Self>> {
+        let paths = ObjectPaths::from_default_dir(base, bank_num);
+        let objects = ObjectRaw::from_file_vec(&paths.objs0_dat);
+        let points = PointRaw::from_file_vec(&paths.pnts0);
+        let faces = FaceRaw::from_file_vec(&paths.facs0);
+        Self::create_objects_all(&objects, &faces, &points)
+    }
+
+    /// Load both OBJS banks needed for a level.
+    /// Bank 0 contains building models (indices 117-193 via building_obj_index).
+    /// Level banks (2-8) contain scenery models at different indices.
+    /// Shape_LoadBank @ 0x49b990 remaps bank 0 → 2.
+    /// Returns (building_bank, scenery_bank).
+    pub fn load_dual_banks(base: &Path, level_bank: u8) -> (Vec<Option<Self>>, Vec<Option<Self>>) {
+        let building_bank = Self::from_file_all(base, "0");
+        let scenery_bank_num = if level_bank == 0 { 2 } else { level_bank };
+        let scenery_bank = Self::from_file_all(base, &scenery_bank_num.to_string());
+        (building_bank, scenery_bank)
+    }
+
+    pub fn iter_face(&self) -> FaceIter<Iter<FaceRaw>> {
+        FaceIter{iter: self.faces.iter(), points: &self.points}
+    }
+
+    pub fn face_count(&self) -> usize {
+        self.faces.len()
+    }
+
+    pub fn point_count(&self) -> usize {
+        self.points.len()
+    }
+
+    pub fn coord_scale(&self) -> f32 {
+        self.object.coord_scale as f32
+    }
+
+    /// Returns the SHAPES.DAT footprint index for the given rotation (0-3).
+    /// Read from the OBJS entry at offset 0x2c (4 signed bytes, one per rotation).
+    /// Returns i8 since negative values mean no footprint.
+    pub fn footprint_index(&self, rotation: usize) -> i8 {
+        self.object.fp_idx[rotation & 3]
+    }
+
+}
+
+/******************************************************************************/
+
+pub struct FaceIter<'a, I> where I: Iterator<Item = &'a FaceRaw> {
+    iter: I,
+    points: &'a [PointRaw],
+}
+
+impl<'a, I> Iterator for FaceIter<'a, I> where I: Iterator<Item = &'a FaceRaw> {
+    type Item = Face;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.iter.next() {
+            Some(f) => {
+                let num_points = std::cmp::min(f.num_points as usize, 4);
+                let mut face_3d = Face::new(f.tex_index, num_points);
+                face_3d.vertex[0].from_point(&self.points[f.point_1 as usize], f.point_1_u, f.point_1_v);
+                face_3d.vertex[1].from_point(&self.points[f.point_2 as usize], f.point_2_u, f.point_2_v);
+                face_3d.vertex[2].from_point(&self.points[f.point_3 as usize], f.point_3_u, f.point_3_v);
+                if num_points == 4 {
+                    face_3d.vertex[3].from_point(&self.points[f.point_4 as usize], f.point_4_u, f.point_4_v);
+                }
+                Some(face_3d)
+            },
+            None => None,
+        }
+    }
+}
+

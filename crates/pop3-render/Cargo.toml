@@ -1,0 +1,18 @@
+[package]
+name = "pop3-render"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pop3-data = { path = "../pop3-data" }
+pop3-engine = { path = "../pop3-engine" }
+wgpu = { workspace = true }
+winit = { workspace = true }
+pollster = { workspace = true }
+bytemuck = { workspace = true }
+cgmath = { workspace = true }
+image = { workspace = true }
+num-traits = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+dirs = { workspace = true }
