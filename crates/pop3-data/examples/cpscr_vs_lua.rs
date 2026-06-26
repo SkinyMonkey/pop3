@@ -77,10 +77,12 @@ fn is_assignment(s: &str) -> bool {
         return false;
     }
     let lhs = s[..eq].trim();
+    // lhs may be an unresolved descriptor the decompiler couldn't name: `0 = 0`,
+    // `?field_18 = 0`. Accept identifier chars plus a leading `?`.
     !lhs.is_empty()
         && lhs
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'?')
 }
 
 fn lua_counts(src: &str) -> Counts {
