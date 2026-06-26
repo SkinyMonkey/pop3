@@ -120,15 +120,20 @@ fabricated "base `0x404`" table (§9). Verified from the `switch` structure of
 | `0x3fb` | 1019 | **SCRIPT-END** | — | Outer-loop terminator; ends `AI_RunScript`. |
 | `0x3fc` | 1020 | **AND** | two nested conditions | Logical AND of two conditions (§6.2). |
 | `0x3fd` | 1021 | **OR** | two nested conditions | Logical OR of two conditions. |
-| `0x401` | 1025 | **MUL** (`*=`) | `dstDesc_index`, `srcDesc_index` | `dst *= value` (`AI_ProcessSubroutineCall`; §6.4). |
-| `0x402` | 1026 | **DIV** (`/=`) | `dstDesc_index`, `srcDesc_index` | `dst /= value`, **div-by-zero ⇒ 0**. |
+| `0x401` | 1025 | **MUL** | **three** operand tokens (corpus-measured, §4.0) | `AI_ProcessSubroutineCall` (`0x4c8590`). Consumes **3** tokens, not the 2 the old `dst *= value` reading implied — likely a ternary `dst = a * b` form. Exact operand roles `[UNVERIFIED]`; re-check `0x4c8590`. |
+| `0x402` | 1026 | **DIV** | **three** operand tokens (corpus-measured, §4.0) | As `0x401` for division; **div-by-zero ⇒ 0**. |
 
 ### 4.0 Corpus validation (bytecode survey)
 
 This table was cross-checked against the real bytecode by disassembling all 59 shipped
-scripts (`data/original_game/levels/cpscr*.dat`; tool `tmp/disasm_cpscr.py`). The opcode
-model decodes the corpus **99.36% clean** (28585 bytecode statements, 184 strays), which
-both confirms the statement model and surfaced three corrections:
+scripts (`data/original_game/levels/cpscr*.dat`; parser `pop3-data::data::cpscr`). With the
+corrections below, **all 59 scripts decode with zero unrecognised tokens**. The survey
+confirmed the statement model and surfaced four corrections:
+
+0. **`0x401`/`0x402` (MUL/DIV) consume 3 operand tokens, not 2** (corpus-measured,
+   unanimous; only ~12 scripts use them, so the error stayed hidden until those files were
+   decoded). The old `dst *= value` two-operand reading is wrong — likely a ternary
+   `dst = a OP b`. Operand roles `[UNVERIFIED]`; re-check the handler `0x4c8590`.
 
 1. **`0x3ea` (ENDIF) was missing** (added above). It occurs **2252×** and *always* directly
    follows a `0x3ec`; without it the disassembler desyncs after every IF/ELSE construct.

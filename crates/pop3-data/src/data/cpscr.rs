@@ -80,7 +80,11 @@ impl Op {
 /// `Guard` is variable (1 or 2) and handled separately in [`decode`].
 fn statement_operands(op: Op) -> usize {
     match op {
-        Op::Set | Op::Add | Op::Sub | Op::Mul | Op::Div => 2,
+        Op::Set | Op::Add | Op::Sub => 2,
+        // MUL/DIV consume 3 stream tokens (corpus-measured, unanimous), not the 2 the
+        // spec's `dst OP= value` implied — likely a ternary `dst = a OP b` form (they
+        // route through AI_ProcessSubroutineCall 0x4c8590, not the SET/ADD/SUB handler).
+        Op::Mul | Op::Div => 3,
         Op::Gt | Op::Lt | Op::Eq | Op::Ne | Op::Ge | Op::Le => 2,
         _ => 0,
     }
@@ -351,9 +355,9 @@ mod tests {
     }
 
     /// Integration: decode a real shipped script if the game data is present.
-    /// `cpscr012` is one of 43/59 scripts that decode fully clean with the current
-    /// arity table; the other 16 still hit one undetermined command arity each and
-    /// (correctly) return `UnexpectedToken` — see `ai_script_commands.md` §2.2.
+    /// All 59 shipped `cpscr*.dat` decode with no unrecognised tokens given the
+    /// corpus-measured arity table (incl. MUL/DIV = 3 operands); see
+    /// `ai_script_vm.md` §4.0.
     #[test]
     fn decodes_real_cpscr012_if_present() {
         let path = "../../data/original_game/levels/cpscr012.dat";
